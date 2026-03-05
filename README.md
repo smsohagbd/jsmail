@@ -200,3 +200,7 @@ api:
   listen_addr: ":8080"
   auth_token: "change-this-secret-token"
 ```
+
+git add .
+git commit -m "fix code "
+git push
