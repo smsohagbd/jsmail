@@ -1,0 +1,35 @@
+smtp:
+  listen_addr: ":587"
+  domain: "mail.example.com"
+  tls:
+    enabled: false
+    cert_file: "certs/cert.pem"
+    key_file: "certs/key.pem"
+  auth:
+    users:
+      - username: "user@example.com"
+        password: "changeme"
+  max_message_size: 26214400  # 25 MB
+
+delivery:
+  workers: 5
+  max_retries: 5
+  retry_interval: "5m"
+  connect_timeout: "30s"
+  send_timeout: "5m"
+  helo_name: "mail.example.com"
+  dkim:
+    enabled: false
+    selector: "default"
+    private_key_file: "dkim/private.key"
+    domain: "example.com"
+
+queue:
+  dir: "queue"
+
+api:
+  listen_addr: ":8080"
+  auth_token: "change-this-secret-token"
+
+logging:
+  level: "info"
