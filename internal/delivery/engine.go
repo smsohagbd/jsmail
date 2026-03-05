@@ -146,6 +146,10 @@ func (e *Engine) deliver(msg *queue.Message) {
 	e.queue.Defer(msg, backoff, lastErr.Error())
 }
 
+// deliveryPorts defines the ports tried in order for outbound delivery.
+// Port 25 is the standard MTA port; 587 is tried as fallback when 25 is blocked.
+var deliveryPorts = []string{"25", "587"}
+
 func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte) error {
 	log.Printf("[DELIVERY]   DNS MX lookup for %q", domain)
 	mxRecords, err := lookupMX(domain)
@@ -160,19 +164,21 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 	}
 
 	for _, mx := range mxRecords {
-		log.Printf("[DELIVERY]   trying MX %s (pref=%d)", mx.Host, mx.Pref)
-		if err := e.sendToMX(from, mx.Host, rcpts, data); err != nil {
-			log.Printf("[DELIVERY] ✗ MX %s failed: %v", mx.Host, err)
-			continue
+		for _, port := range deliveryPorts {
+			log.Printf("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
+			if err := e.sendToMX(from, mx.Host, port, rcpts, data); err != nil {
+				log.Printf("[DELIVERY] ✗ MX %s:%s failed: %v", mx.Host, port, err)
+				continue
+			}
+			log.Printf("[DELIVERY] ✓ delivered via MX %s:%s", mx.Host, port)
+			return nil
 		}
-		log.Printf("[DELIVERY] ✓ delivered via MX %s", mx.Host)
-		return nil
 	}
 	return fmt.Errorf("all MX servers failed for %s", domain)
 }
 
-func (e *Engine) sendToMX(from, mxHost string, rcpts []string, data []byte) error {
-	addr := net.JoinHostPort(mxHost, "25")
+func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte) error {
+	addr := net.JoinHostPort(mxHost, port)
 	log.Printf("[DELIVERY]   connecting to %s …", addr)
 
 	conn, err := net.DialTimeout("tcp", addr, e.connectTO)

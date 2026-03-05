@@ -6,7 +6,7 @@ HOST = "mail.fedcontractingacademy.com"
 PORT = 1025
 
 FROM    = "smsohag@fedcontractingacademy.com"
-TO      = "test-71e81a6a@appmaildev.com"          # <-- change to your test address
+TO      = "test-09427ff4@appmaildev.com"          # <-- change to your test address
 SUBJECT = "Test from my SMTP server"
 BODY    = "Hello! This email was sent from my own SMTP server."
 
