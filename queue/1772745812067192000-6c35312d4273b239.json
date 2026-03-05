@@ -1,0 +1,13 @@
+{
+  "id": "1772745812067192000-6c35312d4273b239",
+  "from": "smsohag@fedcontractingacademy.com",
+  "to": [
+    "sohagbdmt@gmail.com"
+  ],
+  "data": "U3ViamVjdDogVGVzdA0KDQpIZWxsbyBmcm9tIG15IHNlcnZlciENCg==",
+  "status": "deferred",
+  "retry_count": 1,
+  "next_retry": "2026-03-06T03:28:45.1610118+06:00",
+  "created_at": "2026-03-06T03:23:32.067192+06:00",
+  "last_error": "all MX servers failed for gmail.com"
+}

@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
 
 	"smtp-server/internal/config"
@@ -45,15 +46,36 @@ type session struct {
 	to            []string
 }
 
-func (s *session) AuthPlain(username, password string) error {
+// AuthMechanisms tells go-smtp which auth mechanisms to advertise in EHLO.
+func (s *session) AuthMechanisms() []string {
+	return []string{sasl.Plain, sasl.Login}
+}
+
+// Auth returns a SASL server for the requested mechanism.
+func (s *session) Auth(mech string) (sasl.Server, error) {
+	switch mech {
+	case sasl.Plain:
+		return sasl.NewPlainServer(func(identity, username, password string) error {
+			return s.checkCredentials(username, password)
+		}), nil
+	case sasl.Login:
+		return sasl.NewLoginServer(func(username, password string) error {
+			return s.checkCredentials(username, password)
+		}), nil
+	default:
+		return nil, smtp.ErrAuthUnknownMechanism
+	}
+}
+
+func (s *session) checkCredentials(username, password string) error {
 	expected, ok := s.backend.users[username]
 	if !ok || expected != password {
-		log.Printf("[SMTP] ✗ AUTH PLAIN failed  ip=%s user=%q (wrong credentials)", s.remoteIP, username)
+		log.Printf("[SMTP] ✗ AUTH failed       ip=%s user=%q (wrong credentials)", s.remoteIP, username)
 		return errors.New("535 5.7.8 invalid credentials")
 	}
 	s.authenticated = true
 	s.authUser = username
-	log.Printf("[SMTP] ✓ AUTH PLAIN ok       ip=%s user=%q", s.remoteIP, username)
+	log.Printf("[SMTP] ✓ AUTH ok            ip=%s user=%q", s.remoteIP, username)
 	return nil
 }
 

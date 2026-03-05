@@ -1,6 +1,6 @@
 import smtplib, ssl
 
-HOST = "mail.fedcontractingacademy.com"   # e.g. "203.0.113.5"
+HOST = "mail.fedcontractingacademy.com"   # local test — change to your server IP for remote
 PORT = 1025
 
 with smtplib.SMTP(HOST, PORT) as s:
