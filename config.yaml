@@ -1,5 +1,5 @@
 smtp:
-  listen_addr: ":1025"
+  listen_addr: ":1069"
   domain: "mail.fedcontractingacademy.com"
   tls:
     enabled: false
@@ -28,7 +28,7 @@ queue:
   dir: "queue"
 
 api:
-  listen_addr: ":8080"
+  listen_addr: ":8069"
   auth_token: "change-this-secret-token"
 
 logging:
