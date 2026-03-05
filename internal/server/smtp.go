@@ -29,14 +29,18 @@ func newBackend(cfg config.SMTPConfig, q *queue.Queue) *backend {
 	return &backend{cfg: cfg, queue: q, users: users}
 }
 
-func (b *backend) NewSession(_ *smtp.Conn) (smtp.Session, error) {
-	return &session{backend: b}, nil
+func (b *backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
+	remoteIP := c.Conn().RemoteAddr().String()
+	log.Printf("[SMTP] ▶ new connection from %s", remoteIP)
+	return &session{backend: b, remoteIP: remoteIP}, nil
 }
 
 // session handles one SMTP connection.
 type session struct {
 	backend       *backend
+	remoteIP      string
 	authenticated bool
+	authUser      string
 	from          string
 	to            []string
 }
@@ -44,30 +48,40 @@ type session struct {
 func (s *session) AuthPlain(username, password string) error {
 	expected, ok := s.backend.users[username]
 	if !ok || expected != password {
-		return errors.New("invalid credentials")
+		log.Printf("[SMTP] ✗ AUTH PLAIN failed  ip=%s user=%q (wrong credentials)", s.remoteIP, username)
+		return errors.New("535 5.7.8 invalid credentials")
 	}
 	s.authenticated = true
+	s.authUser = username
+	log.Printf("[SMTP] ✓ AUTH PLAIN ok       ip=%s user=%q", s.remoteIP, username)
 	return nil
 }
 
 func (s *session) Mail(from string, _ *smtp.MailOptions) error {
 	if !s.authenticated {
+		log.Printf("[SMTP] ✗ MAIL FROM rejected  ip=%s from=%q (not authenticated)", s.remoteIP, from)
 		return errors.New("530 5.7.0 authentication required")
 	}
 	s.from = from
+	log.Printf("[SMTP]   MAIL FROM            ip=%s from=%q", s.remoteIP, from)
 	return nil
 }
 
 func (s *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	s.to = append(s.to, to)
+	log.Printf("[SMTP]   RCPT TO              ip=%s to=%q", s.remoteIP, to)
 	return nil
 }
 
 func (s *session) Data(r io.Reader) error {
 	data, err := io.ReadAll(io.LimitReader(r, s.backend.cfg.MaxMessageSize))
 	if err != nil {
+		log.Printf("[SMTP] ✗ DATA read error      ip=%s err=%v", s.remoteIP, err)
 		return fmt.Errorf("read data: %w", err)
 	}
+
+	log.Printf("[SMTP]   DATA received        ip=%s size=%d bytes from=%s to=%v",
+		s.remoteIP, len(data), s.from, s.to)
 
 	msg := &queue.Message{
 		From: s.from,
@@ -75,19 +89,22 @@ func (s *session) Data(r io.Reader) error {
 		Data: data,
 	}
 	if err := s.backend.queue.Enqueue(msg); err != nil {
-		log.Printf("server: failed to enqueue message: %v", err)
+		log.Printf("[SMTP] ✗ enqueue failed       ip=%s err=%v", s.remoteIP, err)
 		return errors.New("451 4.3.0 failed to accept message")
 	}
-	log.Printf("server: accepted message %s from=%s to=%v", msg.ID, msg.From, msg.To)
+	log.Printf("[SMTP] ✓ message queued       ip=%s id=%s from=%s to=%v",
+		s.remoteIP, msg.ID, msg.From, msg.To)
 	return nil
 }
 
 func (s *session) Reset() {
+	log.Printf("[SMTP]   RSET                 ip=%s", s.remoteIP)
 	s.from = ""
 	s.to = nil
 }
 
 func (s *session) Logout() error {
+	log.Printf("[SMTP] ◀ disconnected         ip=%s user=%q", s.remoteIP, s.authUser)
 	return nil
 }
 

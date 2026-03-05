@@ -83,16 +83,21 @@ func (e *Engine) worker(id int) {
 }
 
 func (e *Engine) deliver(msg *queue.Message) {
-	log.Printf("delivery: processing message id=%s from=%s to=%v attempt=%d",
-		msg.ID, msg.From, msg.To, msg.RetryCount+1)
+	log.Printf("[DELIVERY] ══════════════════════════════════════════")
+	log.Printf("[DELIVERY]   id      = %s", msg.ID)
+	log.Printf("[DELIVERY]   from    = %s", msg.From)
+	log.Printf("[DELIVERY]   to      = %v", msg.To)
+	log.Printf("[DELIVERY]   attempt = %d / %d", msg.RetryCount+1, e.cfg.MaxRetries+1)
+	log.Printf("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
 	data := msg.Data
 	if e.dkimSigner != nil {
 		signed, err := signDKIM(data, e.dkimSigner)
 		if err != nil {
-			log.Printf("delivery: DKIM sign failed for %s: %v", msg.ID, err)
+			log.Printf("[DELIVERY] ⚠ DKIM sign failed (sending unsigned): %v", err)
 		} else {
 			data = signed
+			log.Printf("[DELIVERY]   DKIM signed ok")
 		}
 	}
 
@@ -101,28 +106,31 @@ func (e *Engine) deliver(msg *queue.Message) {
 	for _, rcpt := range msg.To {
 		parts := strings.SplitN(rcpt, "@", 2)
 		if len(parts) != 2 {
-			log.Printf("delivery: skipping invalid recipient %q", rcpt)
+			log.Printf("[DELIVERY] ⚠ skipping invalid recipient %q", rcpt)
 			continue
 		}
-		byDomain[strings.ToLower(parts[1])] = append(byDomain[strings.ToLower(parts[1])], rcpt)
+		domain := strings.ToLower(parts[1])
+		byDomain[domain] = append(byDomain[domain], rcpt)
 	}
 
 	var lastErr error
 	for domain, rcpts := range byDomain {
+		log.Printf("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
 		if err := e.deliverToDomain(msg.From, domain, rcpts, data); err != nil {
-			log.Printf("delivery: failed for domain=%s msg=%s: %v", domain, msg.ID, err)
+			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
 			lastErr = err
 		}
 	}
 
 	if lastErr == nil {
-		log.Printf("delivery: message %s delivered successfully", msg.ID)
+		log.Printf("[DELIVERY] ✓ message %s DELIVERED SUCCESSFULLY", msg.ID)
 		e.queue.Complete(msg.ID)
 		return
 	}
 
 	if msg.RetryCount >= e.cfg.MaxRetries {
-		log.Printf("delivery: message %s permanently failed after %d retries", msg.ID, msg.RetryCount)
+		log.Printf("[DELIVERY] ✗ message %s PERMANENTLY FAILED (max retries reached)", msg.ID)
+		log.Printf("[DELIVERY]   reason: %v", lastErr)
 		e.queue.Fail(msg, fmt.Sprintf("max retries exceeded: %v", lastErr))
 		return
 	}
@@ -132,21 +140,32 @@ func (e *Engine) deliver(msg *queue.Message) {
 	if backoff > 24*time.Hour {
 		backoff = 24 * time.Hour
 	}
-	log.Printf("delivery: deferring message %s for %v (attempt %d)", msg.ID, backoff, msg.RetryCount+1)
+	log.Printf("[DELIVERY] ⏳ message %s DEFERRED — retry in %v (attempt %d next)",
+		msg.ID, backoff, msg.RetryCount+2)
+	log.Printf("[DELIVERY]   reason: %v", lastErr)
 	e.queue.Defer(msg, backoff, lastErr.Error())
 }
 
 func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte) error {
+	log.Printf("[DELIVERY]   DNS MX lookup for %q", domain)
 	mxRecords, err := lookupMX(domain)
 	if err != nil {
+		log.Printf("[DELIVERY] ✗ MX lookup failed for %q: %v", domain, err)
 		return fmt.Errorf("MX lookup: %w", err)
 	}
 
+	log.Printf("[DELIVERY]   MX records for %q:", domain)
 	for _, mx := range mxRecords {
+		log.Printf("[DELIVERY]     pref=%d  host=%s", mx.Pref, mx.Host)
+	}
+
+	for _, mx := range mxRecords {
+		log.Printf("[DELIVERY]   trying MX %s (pref=%d)", mx.Host, mx.Pref)
 		if err := e.sendToMX(from, mx.Host, rcpts, data); err != nil {
-			log.Printf("delivery: MX %s failed: %v", mx.Host, err)
+			log.Printf("[DELIVERY] ✗ MX %s failed: %v", mx.Host, err)
 			continue
 		}
+		log.Printf("[DELIVERY] ✓ delivered via MX %s", mx.Host)
 		return nil
 	}
 	return fmt.Errorf("all MX servers failed for %s", domain)
@@ -154,10 +173,13 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 
 func (e *Engine) sendToMX(from, mxHost string, rcpts []string, data []byte) error {
 	addr := net.JoinHostPort(mxHost, "25")
+	log.Printf("[DELIVERY]   connecting to %s …", addr)
+
 	conn, err := net.DialTimeout("tcp", addr, e.connectTO)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
+	log.Printf("[DELIVERY]   TCP connected to %s", addr)
 
 	heloName := e.cfg.HeloName
 	if heloName == "" {
@@ -174,38 +196,52 @@ func (e *Engine) sendToMX(from, mxHost string, rcpts []string, data []byte) erro
 	if err := client.Hello(heloName); err != nil {
 		return fmt.Errorf("EHLO: %w", err)
 	}
+	log.Printf("[DELIVERY]   EHLO %s → ok", heloName)
 
 	if ok, _ := client.Extension("STARTTLS"); ok {
+		log.Printf("[DELIVERY]   STARTTLS supported, upgrading …")
 		tlsCfg := &tls.Config{
 			ServerName:         mxHost,
 			InsecureSkipVerify: false,
 		}
 		if err := client.StartTLS(tlsCfg); err != nil {
-			// Non-fatal: continue without TLS if STARTTLS fails.
-			log.Printf("delivery: STARTTLS to %s failed (continuing plain): %v", mxHost, err)
+			log.Printf("[DELIVERY] ⚠ STARTTLS failed (continuing plain): %v", err)
+		} else {
+			log.Printf("[DELIVERY]   STARTTLS ok (TLS active)")
 		}
+	} else {
+		log.Printf("[DELIVERY]   STARTTLS not supported, sending plain")
 	}
 
 	if err := client.Mail(from); err != nil {
-		return fmt.Errorf("MAIL FROM: %w", err)
+		return fmt.Errorf("MAIL FROM <%s>: %w", from, err)
 	}
+	log.Printf("[DELIVERY]   MAIL FROM <%s> → ok", from)
+
 	for _, rcpt := range rcpts {
 		if err := client.Rcpt(rcpt); err != nil {
-			return fmt.Errorf("RCPT TO %s: %w", rcpt, err)
+			return fmt.Errorf("RCPT TO <%s>: %w", rcpt, err)
 		}
+		log.Printf("[DELIVERY]   RCPT TO <%s> → ok", rcpt)
 	}
 
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("DATA: %w", err)
 	}
-	if _, err := w.Write(data); err != nil {
+	n, err := w.Write(data)
+	if err != nil {
 		return fmt.Errorf("write body: %w", err)
 	}
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("DATA close: %w", err)
 	}
-	return client.Quit()
+	log.Printf("[DELIVERY]   DATA sent (%d bytes) → ok", n)
+
+	if err := client.Quit(); err != nil {
+		log.Printf("[DELIVERY] ⚠ QUIT error (message was accepted): %v", err)
+	}
+	return nil
 }
 
 // ---- DKIM helpers ----

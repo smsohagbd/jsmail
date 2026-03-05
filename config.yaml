@@ -1,14 +1,14 @@
 smtp:
-  listen_addr: ":587"
-  domain: "mail.example.com"
+  listen_addr: ":1025"
+  domain: "mail.fedcontractingacademy.com"
   tls:
     enabled: false
     cert_file: "certs/cert.pem"
     key_file: "certs/key.pem"
   auth:
     users:
-      - username: "user@example.com"
-        password: "changeme"
+      - username: "smsohag"
+        password: "sohag999"
   max_message_size: 26214400  # 25 MB
 
 delivery:
@@ -17,7 +17,7 @@ delivery:
   retry_interval: "5m"
   connect_timeout: "30s"
   send_timeout: "5m"
-  helo_name: "mail.example.com"
+  helo_name: "mail.fedcontractingacademy.com"
   dkim:
     enabled: false
     selector: "default"

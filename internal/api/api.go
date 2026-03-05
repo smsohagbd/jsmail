@@ -39,6 +39,7 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		if s.cfg.AuthToken != "" {
 			auth := r.Header.Get("Authorization")
 			if auth != "Bearer "+s.cfg.AuthToken {
+				log.Printf("[API] ✗ unauthorized request from %s (bad/missing token)", r.RemoteAddr)
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
@@ -65,21 +66,28 @@ type SendResponse struct {
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
+	ip := r.RemoteAddr
+	log.Printf("[API] ▶ POST /send from %s", ip)
+
 	if r.Method != http.MethodPost {
+		log.Printf("[API] ✗ wrong method %s from %s", r.Method, ip)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 
 	var req SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[API] ✗ invalid JSON from %s: %v", ip, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
 	if req.From == "" {
+		log.Printf("[API] ✗ missing 'from' field from %s", ip)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from is required"})
 		return
 	}
 	if len(req.To) == 0 {
+		log.Printf("[API] ✗ missing 'to' field from %s", ip)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to is required"})
 		return
 	}
@@ -87,12 +95,15 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var data []byte
 	if req.RawData != "" {
 		data = []byte(req.RawData)
+		log.Printf("[API]   using raw RFC5322 message (%d bytes)", len(data))
 	} else {
 		if req.Subject == "" {
+			log.Printf("[API] ✗ missing 'subject' field from %s", ip)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "subject is required (or provide raw_data)"})
 			return
 		}
 		data = buildRFC5322(req)
+		log.Printf("[API]   built RFC5322 message (%d bytes)", len(data))
 	}
 
 	msg := &queue.Message{
@@ -101,16 +112,17 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		Data: data,
 	}
 	if err := s.queue.Enqueue(msg); err != nil {
-		log.Printf("api: enqueue failed: %v", err)
+		log.Printf("[API] ✗ enqueue failed from %s: %v", ip, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to queue message"})
 		return
 	}
 
-	log.Printf("api: queued message id=%s from=%s to=%v", msg.ID, msg.From, msg.To)
+	log.Printf("[API] ✓ queued  id=%s  from=%s  to=%v  (requested by %s)", msg.ID, msg.From, msg.To, ip)
 	writeJSON(w, http.StatusAccepted, SendResponse{MessageID: msg.ID, Status: "queued"})
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[API]   GET /health from %s", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
