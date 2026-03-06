@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 
 	"smtp-server/internal/api"
@@ -69,24 +68,22 @@ func main() {
 		return "", "", false
 	}
 
-	// IP pool: round-robin outbound IPs from DB setting.
-	eng.IPPoolProvider = func() []string {
+	// IP pool: round-robin with per-IP rate limits from DB table.
+	eng.IPPoolProvider = func() []delivery.IPEntry {
 		if appdb.GetSetting("ip_pool_enabled", "false") != "true" {
 			return nil
 		}
-		raw := appdb.GetSetting("ip_pool_ips", "")
-		var ips []string
-		for _, line := range strings.Split(raw, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			parts := strings.Fields(line)
-			if len(parts) > 0 {
-				ips = append(ips, parts[0])
-			}
+		pool := appdb.GetActiveIPPool()
+		entries := make([]delivery.IPEntry, 0, len(pool))
+		for _, p := range pool {
+			entries = append(entries, delivery.IPEntry{
+				IP:      p.IP,
+				PerMin:  p.PerMin,
+				PerHour: p.PerHour,
+				PerDay:  p.PerDay,
+			})
 		}
-		return ips
+		return entries
 	}
 
 	eng.Start()

@@ -45,6 +45,7 @@ func Init(path, adminUser, adminPass string) error {
 		&Setting{},
 		&BounceList{},
 		&Domain{},
+		&IPPool{},
 	); err != nil {
 		return err
 	}
@@ -219,6 +220,31 @@ func GetDomainByName(name string) (*Domain, bool) {
 // DeleteDomain removes a domain record.
 func DeleteDomain(id uint) {
 	DB.Delete(&Domain{}, id)
+}
+
+// ──────────────────────────── IP Pool ────────────────────────────────────────
+
+func GetActiveIPPool() []IPPool {
+	var entries []IPPool
+	DB.Where("active = ?", true).Order("ip asc").Find(&entries)
+	return entries
+}
+
+func GetAllIPPool() []IPPool {
+	var entries []IPPool
+	DB.Order("ip asc").Find(&entries)
+	return entries
+}
+
+func SaveIPPoolEntry(e *IPPool) error {
+	if e.ID == 0 {
+		return DB.Create(e).Error
+	}
+	return DB.Save(e).Error
+}
+
+func DeleteIPPoolEntry(id uint) {
+	DB.Delete(&IPPool{}, id)
 }
 
 // ──────────────────────────── Settings ───────────────────────────────────────

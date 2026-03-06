@@ -67,6 +67,18 @@ type BounceList struct {
 	LastSeenAt  time.Time
 }
 
+// IPPool holds outbound IP addresses with optional per-IP send rate limits.
+type IPPool struct {
+	gorm.Model
+	IP       string `gorm:"uniqueIndex;not null"`
+	Hostname string // optional label / rDNS name
+	Active   bool   `gorm:"default:true"`
+	PerMin   int    `gorm:"default:0"` // 0 = unlimited
+	PerHour  int    `gorm:"default:0"`
+	PerDay   int    `gorm:"default:0"`
+	Note     string
+}
+
 // Domain represents a verified sending domain with its DKIM keys and DNS records.
 type Domain struct {
 	gorm.Model

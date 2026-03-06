@@ -41,6 +41,24 @@ type domainCooldownEntry struct {
 	streak int // number of consecutive 421s
 }
 
+// IPEntry describes one outbound IP in the pool with optional rate limits.
+type IPEntry struct {
+	IP      string
+	PerMin  int // 0 = unlimited
+	PerHour int
+	PerDay  int
+}
+
+// ipCounter tracks rolling send counts for one outbound IP.
+type ipCounter struct {
+	minCount  int
+	hourCount int
+	dayCount  int
+	minReset  time.Time
+	hourReset time.Time
+	dayReset  time.Time
+}
+
 // Engine delivers queued messages to remote SMTP servers.
 type Engine struct {
 	cfg        config.DeliveryConfig
@@ -51,12 +69,11 @@ type Engine struct {
 	OnEvent    func(DeliveryEvent) // optional hook for DB logging
 
 	// DKIMKeyLoader optionally provides per-domain DKIM keys from the DB.
-	// Returns (privKeyPEM, selector, ok).
 	DKIMKeyLoader func(domain string) (privKeyPEM, selector string, ok bool)
 
-	// IPPoolProvider returns the current list of outbound IPs to rotate through.
+	// IPPoolProvider returns the active IP entries with per-IP rate limits.
 	// Return nil or empty to use the system default IP.
-	IPPoolProvider func() []string
+	IPPoolProvider func() []IPEntry
 
 	// Per-domain 421 cooldown tracking.
 	cooldownMu sync.Mutex
@@ -66,18 +83,20 @@ type Engine struct {
 	semMu sync.Mutex
 	sems  map[string]chan struct{}
 
-	// IP pool rotation index.
-	ipMu  sync.Mutex
-	ipIdx int
+	// IP pool rotation + per-IP rate limiting (all guarded by ipMu).
+	ipMu      sync.Mutex
+	ipIdx     int
+	ipCounters map[string]*ipCounter
 }
 
 // New creates a delivery Engine.
 func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 	e := &Engine{
-		cfg:       cfg,
-		queue:     q,
-		cooldowns: make(map[string]*domainCooldownEntry),
-		sems:      make(map[string]chan struct{}),
+		cfg:        cfg,
+		queue:      q,
+		cooldowns:  make(map[string]*domainCooldownEntry),
+		sems:       make(map[string]chan struct{}),
+		ipCounters: make(map[string]*ipCounter),
 	}
 
 	if d, err := time.ParseDuration(cfg.RetryInterval); err == nil {
@@ -427,21 +446,76 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 	return "", fmt.Errorf("all MX servers failed for %s: %w", domain, lastMXErr)
 }
 
-// nextOutboundIP returns the next IP to use from the pool (round-robin),
-// or empty string to use the system default.
+// nextOutboundIP selects the next available IP from the pool using round-robin,
+// skipping any IP that has hit its per-minute / per-hour / per-day send limit.
+// Returns "" to use the system default if the pool is empty or all IPs are limited.
 func (e *Engine) nextOutboundIP() string {
 	if e.IPPoolProvider == nil {
 		return ""
 	}
-	ips := e.IPPoolProvider()
-	if len(ips) == 0 {
+	entries := e.IPPoolProvider()
+	if len(entries) == 0 {
 		return ""
 	}
+
 	e.ipMu.Lock()
-	ip := ips[e.ipIdx%len(ips)]
-	e.ipIdx++
-	e.ipMu.Unlock()
-	return ip
+	defer e.ipMu.Unlock()
+
+	now := time.Now()
+	n := len(entries)
+
+	// Try each IP in round-robin order; pick the first one under its limits.
+	for i := 0; i < n; i++ {
+		entry := entries[(e.ipIdx+i)%n]
+
+		c, ok := e.ipCounters[entry.IP]
+		if !ok {
+			c = &ipCounter{
+				minReset:  now.Add(time.Minute),
+				hourReset: now.Add(time.Hour),
+				dayReset:  now.Add(24 * time.Hour),
+			}
+			e.ipCounters[entry.IP] = c
+		}
+
+		// Reset expired windows.
+		if now.After(c.minReset) {
+			c.minCount = 0
+			c.minReset = now.Add(time.Minute)
+		}
+		if now.After(c.hourReset) {
+			c.hourCount = 0
+			c.hourReset = now.Add(time.Hour)
+		}
+		if now.After(c.dayReset) {
+			c.dayCount = 0
+			c.dayReset = now.Add(24 * time.Hour)
+		}
+
+		// Check limits (0 = unlimited).
+		if entry.PerMin > 0 && c.minCount >= entry.PerMin {
+			log.Printf("[DELIVERY]   IP %s: per-min limit %d reached, skipping", entry.IP, entry.PerMin)
+			continue
+		}
+		if entry.PerHour > 0 && c.hourCount >= entry.PerHour {
+			log.Printf("[DELIVERY]   IP %s: per-hour limit %d reached, skipping", entry.IP, entry.PerHour)
+			continue
+		}
+		if entry.PerDay > 0 && c.dayCount >= entry.PerDay {
+			log.Printf("[DELIVERY]   IP %s: per-day limit %d reached, skipping", entry.IP, entry.PerDay)
+			continue
+		}
+
+		// This IP is available — consume a slot and return it.
+		c.minCount++
+		c.hourCount++
+		c.dayCount++
+		e.ipIdx = (e.ipIdx + i + 1) % n
+		return entry.IP
+	}
+
+	log.Printf("[DELIVERY] ⚠ all pool IPs are at their rate limits — using system default")
+	return ""
 }
 
 func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte) error {

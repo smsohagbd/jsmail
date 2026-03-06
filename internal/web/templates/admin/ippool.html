@@ -3,55 +3,229 @@
 <div class="page-header">
   <div>
     <div class="page-title">IP Pool</div>
-    <div class="page-sub">Rotate outbound IPs for better deliverability</div>
+    <div class="page-sub">Manage outbound IPs with per-IP rate limits</div>
   </div>
+  <button class="btn btn-primary" onclick="document.getElementById('add-modal').style.display='flex'">
+    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+    Add IP
+  </button>
 </div>
 <div class="page-body">
 
 {{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
 
-<div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
-  <div class="card">
-    <div class="card-header"><span class="card-title">Outbound IP Addresses</span></div>
+<!-- Master toggle -->
+<div class="card" style="margin-bottom:16px;padding:16px 20px;">
+  <form method="POST" action="/admin/ippool/toggle" style="display:flex;align-items:center;gap:16px;">
+    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+      <input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}}
+        style="width:16px;height:16px;accent-color:#818cf8;"
+        onchange="this.form.submit()"/>
+      <span style="font-size:14px;font-weight:600;color:#e4e4e7;">Enable IP Pool Rotation</span>
+    </label>
+    <span style="font-size:12px;color:#52525b;">
+      {{if .Enabled}}<span style="color:#4ade80;">● Active</span> — outbound connections rotate through IPs below{{else}}<span style="color:#71717a;">● Inactive</span> — all mail uses the system default IP{{end}}
+    </span>
+  </form>
+</div>
+
+<!-- IP table -->
+<div class="card" style="margin-bottom:16px;">
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">IP Address</th>
+        <th>Hostname / Label</th>
+        <th style="text-align:center;">Active</th>
+        <th style="text-align:right;">Per Min</th>
+        <th style="text-align:right;">Per Hour</th>
+        <th style="text-align:right;">Per Day</th>
+        <th>Note</th>
+        <th style="padding-right:12px;"></th>
+      </tr></thead>
+      <tbody>
+        {{range .Entries}}
+        <tr>
+          <td style="padding-left:20px;font-family:monospace;font-size:13px;font-weight:600;color:#a78bfa;">{{.IP}}</td>
+          <td style="font-size:12px;color:#71717a;">{{if .Hostname}}{{.Hostname}}{{else}}—{{end}}</td>
+          <td style="text-align:center;">
+            {{if .Active}}<span style="color:#4ade80;font-size:11px;font-weight:600;">● ON</span>
+            {{else}}<span style="color:#52525b;font-size:11px;">● OFF</span>{{end}}
+          </td>
+          <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerMin}}{{.PerMin}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
+          <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerHour}}{{.PerHour}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
+          <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerDay}}{{.PerDay}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
+          <td style="font-size:12px;color:#52525b;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{.Note}}</td>
+          <td style="padding-right:12px;text-align:right;white-space:nowrap;">
+            <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
+              onclick="openEdit({{.ID}},'{{.IP}}','{{.Hostname}}',{{.Active}},{{.PerMin}},{{.PerHour}},{{.PerDay}},'{{.Note}}')">Edit</button>
+            <form method="POST" action="/admin/ippool/delete" style="display:inline;">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#f87171;" onclick="return confirm('Remove IP {{.IP}}?')">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="8" style="text-align:center;color:#52525b;padding:32px;">No IPs added yet — click "Add IP" to start</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- How-it-works card -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">How concurrent users are handled</div>
+    <div style="font-size:12px;color:#a1a1aa;line-height:1.9;">
+      <p style="margin:0 0 8px;">If 10 users each submit 5 emails (50 total):</p>
+      <ol style="padding-left:18px;margin:0;display:flex;flex-direction:column;gap:4px;">
+        <li>All 50 messages land in the queue <strong style="color:#e4e4e7;">instantly</strong></li>
+        <li>Up to 150 workers pick them up <strong style="color:#e4e4e7;">simultaneously</strong></li>
+        <li>All 50 can deliver in <strong style="color:#4ade80;">parallel</strong> — no waiting</li>
+        <li>IP rotation distributes load across pool IPs</li>
+        <li>Each IP respects its own per-min/hour/day limits</li>
+        <li>If all IPs hit limits, falls back to system IP</li>
+      </ol>
+    </div>
+  </div>
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Rate limit guide</div>
+    <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;">
+      <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;">
+        <div style="color:#fbbf24;font-weight:600;margin-bottom:2px;">Yahoo / AOL</div>
+        <div style="color:#71717a;">Per min: <span style="color:#e4e4e7;">10</span> · Per hour: <span style="color:#e4e4e7;">500</span> · Per day: <span style="color:#e4e4e7;">5000</span></div>
+      </div>
+      <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;">
+        <div style="color:#4ade80;font-weight:600;margin-bottom:2px;">Gmail / Outlook</div>
+        <div style="color:#71717a;">Per min: <span style="color:#e4e4e7;">30</span> · Per hour: <span style="color:#e4e4e7;">2000</span> · Per day: <span style="color:#e4e4e7;">∞</span></div>
+      </div>
+      <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;">
+        <div style="color:#a78bfa;font-weight:600;margin-bottom:2px;">New IP (warm-up)</div>
+        <div style="color:#71717a;">Per min: <span style="color:#e4e4e7;">5</span> · Per hour: <span style="color:#e4e4e7;">100</span> · Per day: <span style="color:#e4e4e7;">500</span></div>
+      </div>
+      <p style="margin:4px 0 0;color:#52525b;font-size:11px;">0 = unlimited. Per-domain throttle rules (Throttling page) also apply.</p>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<!-- Add modal -->
+<div id="add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;">
+  <div class="card" style="width:480px;max-width:95vw;">
+    <div class="card-header">
+      <span class="card-title">Add IP Address</span>
+      <button onclick="document.getElementById('add-modal').style.display='none'" class="btn btn-ghost" style="font-size:11px;">✕</button>
+    </div>
     <div class="card-body" style="padding:20px;">
-      <form method="POST" action="/admin/ippool/save">
-        <div class="form-group" style="margin-bottom:16px;">
-          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-            <input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} style="width:16px;height:16px;accent-color:#818cf8;"/>
-            <span class="form-label" style="margin:0;">Enable IP Pool Rotation</span>
-          </label>
-          <p style="font-size:12px;color:#52525b;margin-top:6px;">When enabled, outbound connections will rotate through the IPs listed below (round-robin).</p>
+      <form method="POST" action="/admin/ippool/add">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group" style="grid-column:1/-1;">
+            <label class="form-label">IP Address <span style="color:#f87171;">*</span></label>
+            <input class="form-input" name="ip" placeholder="1.2.3.4" required/>
+          </div>
+          <div class="form-group" style="grid-column:1/-1;">
+            <label class="form-label">Hostname / rDNS Label</label>
+            <input class="form-input" name="hostname" placeholder="mail1.example.com"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Per Minute <span style="color:#52525b;">(0=∞)</span></label>
+            <input class="form-input" name="per_min" type="number" min="0" value="0"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Per Hour <span style="color:#52525b;">(0=∞)</span></label>
+            <input class="form-input" name="per_hour" type="number" min="0" value="0"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Per Day <span style="color:#52525b;">(0=∞)</span></label>
+            <input class="form-input" name="per_day" type="number" min="0" value="0"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Status</label>
+            <select class="form-input" name="active">
+              <option value="on">Active</option>
+              <option value="off">Inactive</option>
+            </select>
+          </div>
+          <div class="form-group" style="grid-column:1/-1;">
+            <label class="form-label">Note</label>
+            <input class="form-input" name="note" placeholder="e.g. Primary, Warm-up, Yahoo-only"/>
+          </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">IP Addresses</label>
-          <textarea class="form-input" name="ips" rows="12" style="font-family:monospace;font-size:13px;resize:vertical;"
-            placeholder="# One IP per line. Optionally add a hostname comment.&#10;1.2.3.4&#10;5.6.7.8  # secondary IP&#10;# 9.10.11.12  (commented out = skipped)">{{.IPs}}</textarea>
-          <p style="font-size:11px;color:#52525b;margin-top:6px;">Lines starting with # are ignored. First word on each line is taken as the IP.</p>
-        </div>
-        <div style="display:flex;justify-content:flex-end;">
-          <button type="submit" class="btn btn-primary">Save IP Pool</button>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
+          <button type="button" class="btn btn-ghost" onclick="document.getElementById('add-modal').style.display='none'">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add IP</button>
         </div>
       </form>
     </div>
   </div>
+</div>
 
-  <div style="display:flex;flex-direction:column;gap:16px;">
-    <div class="card" style="padding:20px;">
-      <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">How it works</div>
-      <ul style="font-size:12px;color:#a1a1aa;line-height:1.8;padding-left:18px;margin:0;">
-        <li>Each outbound connection binds to the next IP in the list</li>
-        <li>Round-robin distributes load evenly</li>
-        <li>If binding fails, system falls back to default IP</li>
-        <li>Each IP should have a PTR/rDNS record pointing to your HELO name</li>
-        <li>Add each IP to your SPF record</li>
-      </ul>
+<!-- Edit modal -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;">
+  <div class="card" style="width:480px;max-width:95vw;">
+    <div class="card-header">
+      <span class="card-title">Edit IP Address</span>
+      <button onclick="document.getElementById('edit-modal').style.display='none'" class="btn btn-ghost" style="font-size:11px;">✕</button>
     </div>
-    <div class="card" style="padding:20px;">
-      <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">SPF with multiple IPs</div>
-      <div style="font-family:monospace;font-size:11px;color:#4ade80;background:#052e16;padding:10px;border-radius:6px;word-break:break-all;">v=spf1 ip4:1.2.3.4 ip4:5.6.7.8 ~all</div>
+    <div class="card-body" style="padding:20px;">
+      <form method="POST" action="/admin/ippool/update">
+        <input type="hidden" name="id" id="edit-id"/>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group" style="grid-column:1/-1;">
+            <label class="form-label">IP Address</label>
+            <input class="form-input" name="ip" id="edit-ip" required/>
+          </div>
+          <div class="form-group" style="grid-column:1/-1;">
+            <label class="form-label">Hostname / rDNS Label</label>
+            <input class="form-input" name="hostname" id="edit-hostname"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Per Minute <span style="color:#52525b;">(0=∞)</span></label>
+            <input class="form-input" name="per_min" id="edit-permin" type="number" min="0"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Per Hour <span style="color:#52525b;">(0=∞)</span></label>
+            <input class="form-input" name="per_hour" id="edit-perhour" type="number" min="0"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Per Day <span style="color:#52525b;">(0=∞)</span></label>
+            <input class="form-input" name="per_day" id="edit-perday" type="number" min="0"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Status</label>
+            <select class="form-input" name="active" id="edit-active">
+              <option value="on">Active</option>
+              <option value="off">Inactive</option>
+            </select>
+          </div>
+          <div class="form-group" style="grid-column:1/-1;">
+            <label class="form-label">Note</label>
+            <input class="form-input" name="note" id="edit-note"/>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
+          <button type="button" class="btn btn-ghost" onclick="document.getElementById('edit-modal').style.display='none'">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
     </div>
   </div>
 </div>
 
-</div>
+<script>
+function openEdit(id, ip, hostname, active, perMin, perHour, perDay, note) {
+  document.getElementById('edit-id').value = id;
+  document.getElementById('edit-ip').value = ip;
+  document.getElementById('edit-hostname').value = hostname;
+  document.getElementById('edit-permin').value = perMin;
+  document.getElementById('edit-perhour').value = perHour;
+  document.getElementById('edit-perday').value = perDay;
+  document.getElementById('edit-active').value = active ? 'on' : 'off';
+  document.getElementById('edit-note').value = note;
+  document.getElementById('edit-modal').style.display = 'flex';
+}
+</script>
 {{end}}

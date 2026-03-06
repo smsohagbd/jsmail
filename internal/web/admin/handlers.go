@@ -504,21 +504,87 @@ func (h *Handler) IPPool(w http.ResponseWriter, r *http.Request) {
 		"Page":       "ippool",
 		"ActiveUser": claims.Username,
 		"Enabled":    appdb.GetSetting("ip_pool_enabled", "false") == "true",
-		"IPs":        appdb.GetSetting("ip_pool_ips", ""),
+		"Entries":    appdb.GetAllIPPool(),
 		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   r.URL.Query().Get("err"),
 	})
 }
 
-func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ToggleIPPool(w http.ResponseWriter, r *http.Request) {
 	enabled := r.FormValue("enabled") == "on"
-	ips := strings.TrimSpace(r.FormValue("ips"))
 	if enabled {
 		appdb.SetSetting("ip_pool_enabled", "true")
 	} else {
 		appdb.SetSetting("ip_pool_enabled", "false")
 	}
-	appdb.SetSetting("ip_pool_ips", ips)
-	http.Redirect(w, r, "/admin/ippool?ok=saved", http.StatusFound)
+	http.Redirect(w, r, "/admin/ippool?ok=updated", http.StatusFound)
+}
+
+func (h *Handler) AddIPPoolEntry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	ip := strings.TrimSpace(r.FormValue("ip"))
+	if ip == "" {
+		http.Redirect(w, r, "/admin/ippool?err=IP+required", http.StatusFound)
+		return
+	}
+	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
+	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
+	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
+	entry := &appdb.IPPool{
+		IP:       ip,
+		Hostname: strings.TrimSpace(r.FormValue("hostname")),
+		Active:   r.FormValue("active") != "off",
+		PerMin:   perMin,
+		PerHour:  perHour,
+		PerDay:   perDay,
+		Note:     strings.TrimSpace(r.FormValue("note")),
+	}
+	if err := appdb.SaveIPPoolEntry(entry); err != nil {
+		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ippool?ok=IP+added", http.StatusFound)
+}
+
+func (h *Handler) UpdateIPPoolEntry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
+	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
+	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
+	entry := &appdb.IPPool{}
+	if err := h.DB.First(entry, id).Error; err != nil {
+		http.Redirect(w, r, "/admin/ippool?err=not+found", http.StatusFound)
+		return
+	}
+	entry.IP = strings.TrimSpace(r.FormValue("ip"))
+	entry.Hostname = strings.TrimSpace(r.FormValue("hostname"))
+	entry.Active = r.FormValue("active") == "on"
+	entry.PerMin = perMin
+	entry.PerHour = perHour
+	entry.PerDay = perDay
+	entry.Note = strings.TrimSpace(r.FormValue("note"))
+	if err := appdb.SaveIPPoolEntry(entry); err != nil {
+		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ippool?ok=updated", http.StatusFound)
+}
+
+func (h *Handler) DeleteIPPoolEntry(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	appdb.DeleteIPPoolEntry(uint(id))
+	http.Redirect(w, r, "/admin/ippool?ok=deleted", http.StatusFound)
+}
+
+func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
+	h.ToggleIPPool(w, r)
 }
 
 // ──────────────────────────── Config Editor ───────────────────────────────────
