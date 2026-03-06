@@ -28,7 +28,7 @@ queue:
   dir: "queue"
 
 api:
-  listen_addr: ":8069"
+  listen_addr: ":8068"
   auth_token: "change-this-secret-token"
 
 admin:
@@ -36,7 +36,7 @@ admin:
   password: "admin123"      # change this!
 
 web:
-  listen_addr: ":8090"
+  listen_addr: ":8069"
   secret_key: "change-this-32-char-secret-key!!"
   db_path: "smtp-server.db"
 
