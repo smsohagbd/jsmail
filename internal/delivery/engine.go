@@ -449,14 +449,14 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 			LocalAddr: &net.TCPAddr{IP: net.ParseIP(outIP)},
 		}
 		log.Printf("[DELIVERY]   using outbound IP %s", outIP)
-		conn, err = dialer.Dial("tcp", addr)
+		conn, err = dialer.Dial("tcp4", addr)
 		if err != nil {
 			// Fall back to default interface if bound IP fails.
 			log.Printf("[DELIVERY] ⚠ outbound IP %s failed (%v), retrying with default", outIP, err)
-			conn, err = net.DialTimeout("tcp", addr, e.connectTO)
+			conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
 		}
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, e.connectTO)
+		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
 	}
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)

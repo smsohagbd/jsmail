@@ -199,10 +199,10 @@ const (
 )
 
 func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, bool) {
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(mxHost, "25"), v.cfg.ConnectTimeout)
+	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(mxHost, "25"), v.cfg.ConnectTimeout)
 	if err != nil {
 		// Fallback to port 587
-		conn, err = net.DialTimeout("tcp", net.JoinHostPort(mxHost, "587"), v.cfg.ConnectTimeout)
+		conn, err = net.DialTimeout("tcp4", net.JoinHostPort(mxHost, "587"), v.cfg.ConnectTimeout)
 		if err != nil {
 			return probeConnectFail, false
 		}
