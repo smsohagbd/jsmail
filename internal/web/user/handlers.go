@@ -41,6 +41,24 @@ type TemplateRenderer interface {
 	Render(w http.ResponseWriter, name string, data map[string]interface{})
 }
 
+// base returns common fields needed by every page (layout sidebar, etc.).
+func (h *Handler) base(username string) map[string]interface{} {
+	mode, rotation := appdb.GetUserSMTPMode(username)
+	return map[string]interface{}{
+		"ActiveUser":   username,
+		"SMTPMode":     mode,
+		"SMTPRotation": rotation,
+	}
+}
+
+// merge combines base data with page-specific data (page data wins on conflict).
+func merge(base, page map[string]interface{}) map[string]interface{} {
+	for k, v := range page {
+		base[k] = v
+	}
+	return base
+}
+
 // ──────────────────────────── Dashboard ──────────────────────────────────────
 
 func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
@@ -63,16 +81,15 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	var user appdb.User
 	h.DB.Where("username = ?", claims.Username).First(&user)
 
-	h.Tmpl.Render(w, "user/dashboard", map[string]interface{}{
+	h.Tmpl.Render(w, "user/dashboard", merge(h.base(claims.Username), map[string]interface{}{
 		"Page":           "dashboard",
-		"ActiveUser":     claims.Username,
 		"User":           user,
 		"TotalToday":     totalToday,
 		"TotalYesterday": totalYesterday,
 		"TotalMonth":     totalMonth,
 		"Pending":        pending,
 		"RecentLogs":     recentLogs,
-	})
+	}))
 }
 
 // ──────────────────────────── Logs ───────────────────────────────────────────
@@ -101,16 +118,15 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	var logs []appdb.EmailLog
 	q.Order("created_at desc").Offset((page - 1) * perPage).Limit(perPage).Find(&logs)
 
-	h.Tmpl.Render(w, "user/logs", map[string]interface{}{
+	h.Tmpl.Render(w, "user/logs", merge(h.base(claims.Username), map[string]interface{}{
 		"Page":      "logs",
-		"ActiveUser": claims.Username,
 		"Logs":      logs,
 		"Total":     total,
 		"PageNum":   page,
 		"PerPage":   perPage,
 		"DateLabel": dateLabel,
 		"Query":     flatQuery(r.URL.Query()),
-	})
+	}))
 }
 
 // ──────────────────────────── Queue ──────────────────────────────────────────
@@ -122,11 +138,10 @@ func (h *Handler) QueuePage(w http.ResponseWriter, r *http.Request) {
 		claims.Username, []string{"queued", "deferred"}).
 		Order("created_at desc").Limit(100).Find(&logs)
 
-	h.Tmpl.Render(w, "user/queue", map[string]interface{}{
-		"Page":       "queue",
-		"ActiveUser": claims.Username,
-		"Logs":       logs,
-	})
+	h.Tmpl.Render(w, "user/queue", merge(h.base(claims.Username), map[string]interface{}{
+		"Page": "queue",
+		"Logs": logs,
+	}))
 }
 
 func (h *Handler) DeleteQueueItem(w http.ResponseWriter, r *http.Request) {
@@ -147,10 +162,9 @@ func (h *Handler) DeleteQueueItem(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Verify(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
-	h.Tmpl.Render(w, "user/verify", map[string]interface{}{
-		"Page":       "verify",
-		"ActiveUser": claims.Username,
-	})
+	h.Tmpl.Render(w, "user/verify", merge(h.base(claims.Username), map[string]interface{}{
+		"Page": "verify",
+	}))
 }
 
 func (h *Handler) VerifySingle(w http.ResponseWriter, r *http.Request) {
@@ -186,15 +200,14 @@ func (h *Handler) VerifyBulk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims, _ := webauth.GetClaims(r)
-	h.Tmpl.Render(w, "user/verify", map[string]interface{}{
+	h.Tmpl.Render(w, "user/verify", merge(h.base(claims.Username), map[string]interface{}{
 		"Page":         "verify",
-		"ActiveUser":   claims.Username,
 		"Results":      results,
 		"ValidCount":   len(valid),
 		"InvalidCount": len(invalid),
 		"ValidList":    joinLines(valid),
 		"InvalidList":  joinLines(invalid),
-	})
+	}))
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -272,14 +285,13 @@ func joinLines(ss []string) string {
 func (h *Handler) Domains(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	serverIP := userOutboundIP()
-	h.Tmpl.Render(w, "user/domains", map[string]interface{}{
-		"Page":       "domains",
-		"ActiveUser": claims.Username,
-		"Domains":    appdb.GetDomainsByOwner(claims.Username),
-		"ServerIP":   serverIP,
-		"FlashOK":    r.URL.Query().Get("ok"),
-		"FlashErr":   r.URL.Query().Get("err"),
-	})
+	h.Tmpl.Render(w, "user/domains", merge(h.base(claims.Username), map[string]interface{}{
+		"Page":     "domains",
+		"Domains":  appdb.GetDomainsByOwner(claims.Username),
+		"ServerIP": serverIP,
+		"FlashOK":  r.URL.Query().Get("ok"),
+		"FlashErr": r.URL.Query().Get("err"),
+	}))
 }
 
 func (h *Handler) AddDomain(w http.ResponseWriter, r *http.Request) {
@@ -329,16 +341,15 @@ func (h *Handler) SMTPPage(w http.ResponseWriter, r *http.Request) {
 	h.DB.Where("username = ?", claims.Username).First(&u)
 
 	smtps := appdb.GetUserSMTPs(claims.Username)
-	h.Tmpl.Render(w, "user/smtp", map[string]interface{}{
+	h.Tmpl.Render(w, "user/smtp", merge(h.base(claims.Username), map[string]interface{}{
 		"Page":          "smtp",
-		"ActiveUser":    claims.Username,
 		"SMTPs":         smtps,
 		"SMTPMode":      u.SMTPMode,
 		"SMTPRotation":  u.SMTPRotation,
 		"MaxCustomSMTP": u.MaxCustomSMTP,
 		"FlashOK":       r.URL.Query().Get("ok"),
 		"FlashErr":      r.URL.Query().Get("err"),
-	})
+	}))
 }
 
 func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
@@ -657,9 +668,8 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 	deliveredJSON, _ := json.Marshal(chartDelivered)
 	bouncedJSON, _ := json.Marshal(chartBounced)
 
-	h.Tmpl.Render(w, "user/reports", map[string]interface{}{
+	h.Tmpl.Render(w, "user/reports", merge(h.base(uname), map[string]interface{}{
 		"Page":           "reports",
-		"ActiveUser":     uname,
 		"TotalSent":      totalSent,
 		"Delivered":      delivered,
 		"HardBounce":     hardBounce,
@@ -672,5 +682,5 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 		"ChartLabels":    string(labelsJSON),
 		"ChartDelivered": string(deliveredJSON),
 		"ChartBounced":   string(bouncedJSON),
-	})
+	}))
 }
