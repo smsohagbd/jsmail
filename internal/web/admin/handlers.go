@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -649,6 +650,110 @@ func loadCertInfo(certPath string) *certInfo {
 	}
 }
 
+type certCandidate struct {
+	Label    string
+	CertFile string
+	KeyFile  string
+}
+
+// panelCertPattern describes where a control panel stores its TLS certificates.
+type panelCertPattern struct {
+	Panel   string // human-readable panel name
+	CertGlob string
+	KeyGlob  string // relative to cert dir if empty
+	KeyName  string // filename of key relative to cert directory
+}
+
+var knownPanelPatterns = []panelCertPattern{
+	// Standard certbot / Let's Encrypt (Webmin, Virtualmin, CyberPanel, ISPConfig, Plesk, cPanel all use this)
+	{"Let's Encrypt (certbot)", "/etc/letsencrypt/live/*/fullchain.pem", "", "privkey.pem"},
+	// acme.sh (alternative ACME client)
+	{"acme.sh", "/root/.acme.sh/*/*.cer", "", "*.key"},
+	// CyberPanel custom path
+	{"CyberPanel", "/home/*/public_html/ssl/ssl.crt", "", "ssl.key"},
+	// Plesk
+	{"Plesk", "/opt/psa/var/certificates/*.pem", "", ""},
+	// DirectAdmin
+	{"DirectAdmin", "/usr/local/directadmin/data/users/*/domains/*.cert", "", "*.key"},
+	// cPanel WHM
+	{"cPanel", "/var/cpanel/ssl/apache_tls/*.crt", "", "*.key"},
+	// Local generated
+	{"Generated (this server)", "certs/server.crt", "", ""},
+}
+
+func findExistingCerts() []certCandidate {
+	var out []certCandidate
+	seen := map[string]bool{}
+
+	addPair := func(label, cert, key string) {
+		if seen[cert] {
+			return
+		}
+		if _, err := tls.LoadX509KeyPair(cert, key); err != nil {
+			return // invalid pair
+		}
+		seen[cert] = true
+		out = append(out, certCandidate{Label: label, CertFile: cert, KeyFile: key})
+	}
+
+	// Let's Encrypt (used by virtually all panels + bare certbot)
+	if matches, _ := filepath.Glob("/etc/letsencrypt/live/*/fullchain.pem"); len(matches) > 0 {
+		for _, cert := range matches {
+			key := filepath.Join(filepath.Dir(cert), "privkey.pem")
+			domain := filepath.Base(filepath.Dir(cert))
+			addPair("Let's Encrypt — "+domain, cert, key)
+		}
+	}
+
+	// acme.sh
+	if matches, _ := filepath.Glob("/root/.acme.sh/*/*.cer"); len(matches) > 0 {
+		for _, cert := range matches {
+			dir := filepath.Dir(cert)
+			// acme.sh key file has same base name as dir
+			domain := filepath.Base(dir)
+			key := filepath.Join(dir, domain+".key")
+			addPair("acme.sh — "+domain, cert, key)
+		}
+	}
+
+	// CyberPanel
+	if matches, _ := filepath.Glob("/etc/cyberpanel/ssl/*/fullchain.pem"); len(matches) > 0 {
+		for _, cert := range matches {
+			key := filepath.Join(filepath.Dir(cert), "privkey.pem")
+			domain := filepath.Base(filepath.Dir(cert))
+			addPair("CyberPanel — "+domain, cert, key)
+		}
+	}
+
+	// cPanel / WHM
+	if matches, _ := filepath.Glob("/etc/letsencrypt/live/*/cert.pem"); len(matches) > 0 {
+		for _, cert := range matches {
+			key := filepath.Join(filepath.Dir(cert), "privkey.pem")
+			domain := filepath.Base(filepath.Dir(cert))
+			addPair("cPanel/WHM — "+domain, cert, key)
+		}
+	}
+
+	// DirectAdmin
+	if matches, _ := filepath.Glob("/usr/local/directadmin/data/users/*/domains/*.cert"); len(matches) > 0 {
+		for _, cert := range matches {
+			base := strings.TrimSuffix(cert, ".cert")
+			key := base + ".key"
+			domain := filepath.Base(base)
+			addPair("DirectAdmin — "+domain, cert, key)
+		}
+	}
+
+	// Our own generated cert
+	if _, err := os.Stat("certs/server.crt"); err == nil {
+		if _, err2 := os.Stat("certs/server.key"); err2 == nil {
+			addPair("Generated (this server) — certs/server.crt", "certs/server.crt", "certs/server.key")
+		}
+	}
+
+	return out
+}
+
 func (h *Handler) SSL(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	certPath := h.ConfigSnapshot["tls_cert_file"]
@@ -666,10 +771,100 @@ func (h *Handler) SSL(w http.ResponseWriter, r *http.Request) {
 		"CertPath":     certPath,
 		"KeyPath":      keyPath,
 		"CertInfo":     loadCertInfo(certPath),
+		"Candidates":   findExistingCerts(),
 		"FlashOK":      r.URL.Query().Get("ok"),
 		"FlashErr":     r.URL.Query().Get("err"),
 		"HeloName":     h.ConfigSnapshot["smtp_domain"],
 	})
+}
+
+// ScanCerts returns JSON of auto-detected cert candidates (called via AJAX on the SSL page).
+func (h *Handler) ScanCerts(w http.ResponseWriter, r *http.Request) {
+	candidates := findExistingCerts()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(candidates)
+}
+
+// SaveTLSConfig validates the cert/key pair, then writes the TLS settings
+// directly into config.yaml without requiring a terminal.
+func (h *Handler) SaveTLSConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ssl", http.StatusFound)
+		return
+	}
+	certFile := strings.TrimSpace(r.FormValue("cert_file"))
+	keyFile := strings.TrimSpace(r.FormValue("key_file"))
+	enabled := r.FormValue("tls_enabled") == "on"
+
+	// Validate cert + key match before touching the config.
+	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape("cert/key validation failed: "+err.Error()), http.StatusFound)
+		return
+	}
+
+	// Update config.yaml in-place (preserves comments and all other settings).
+	if err := patchConfigTLS(h.ConfigPath, enabled, certFile, keyFile); err != nil {
+		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape("failed to save config: "+err.Error()), http.StatusFound)
+		return
+	}
+
+	// Keep snapshot in sync so the page reflects the new values immediately.
+	h.ConfigSnapshot["tls_enabled"] = boolStr(enabled)
+	h.ConfigSnapshot["tls_cert_file"] = certFile
+	h.ConfigSnapshot["tls_key_file"] = keyFile
+
+	http.Redirect(w, r, "/admin/ssl?ok=TLS+config+saved+—+restart+the+server+to+apply", http.StatusFound)
+}
+
+// patchConfigTLS rewrites only the smtp.tls.* lines in config.yaml while
+// preserving every other line, comment, and indentation.
+func patchConfigTLS(configPath string, enabled bool, certFile, keyFile string) error {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(raw), "\n")
+	inSMTP, inTLS := false, false
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+
+		// Section tracking.
+		if trimmed == "smtp:" {
+			inSMTP, inTLS = true, false
+			continue
+		}
+		if inSMTP && trimmed == "tls:" {
+			inTLS = true
+			continue
+		}
+		// Exit tls block when indentation decreases.
+		if inTLS && len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+			inTLS, inSMTP = false, false
+		}
+
+		if inTLS {
+			switch {
+			case strings.HasPrefix(trimmed, "enabled:"):
+				lines[i] = indent + "enabled: " + boolStr(enabled)
+			case strings.HasPrefix(trimmed, "cert_file:"):
+				lines[i] = indent + `cert_file: "` + certFile + `"`
+			case strings.HasPrefix(trimmed, "key_file:"):
+				lines[i] = indent + `key_file: "` + keyFile + `"`
+			}
+		}
+	}
+
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 func (h *Handler) GenerateSelfSigned(w http.ResponseWriter, r *http.Request) {
