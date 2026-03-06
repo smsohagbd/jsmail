@@ -149,7 +149,7 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 
 	if search := r.URL.Query().Get("search"); search != "" {
 		like := "%" + search + "%"
-		q = q.Where("\"from\" LIKE ? OR \"to\" LIKE ? OR username LIKE ?", like, like, like)
+		q = q.Where(`"from" LIKE ? OR recipient LIKE ? OR username LIKE ?`, like, like, like)
 	}
 	if status := r.URL.Query().Get("status"); status != "" {
 		q = q.Where("status = ?", status)

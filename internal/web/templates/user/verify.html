@@ -1,79 +1,75 @@
 {{define "title"}}Verify Email — {{.ActiveUser}}{{end}}
 {{define "content"}}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-white">Email Verification</h1>
-  <p class="text-slate-400 text-sm mt-1">Check if email addresses are valid before sending</p>
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">Email Verification</div>
+  <div class="page-sub">Check if email addresses are valid before sending</div>
 </div>
+<div class="page-body">
 
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-  <!-- Single verify -->
-  <div class="stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">Single Email Check</h3>
-    <div id="single-result"></div>
-    <div class="flex gap-2">
-      <input type="email" id="single-email" placeholder="user@example.com" class="flex-1"/>
-      <button onclick="verifySingle()" class="btn-primary flex-shrink-0">Check</button>
-    </div>
-    <div id="single-output" class="mt-4 hidden">
-      <div id="single-badge" class="text-center py-3 rounded-lg mb-4"></div>
-      <div id="single-details" class="space-y-2 text-sm"></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+  <!-- Single -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Single Check</span></div>
+    <div class="card-body">
+      <div style="display:flex;gap:8px;margin-bottom:16px;">
+        <input class="form-input" type="email" id="single-email" placeholder="user@example.com" style="flex:1;" onkeydown="if(event.key==='Enter')verifySingle()"/>
+        <button class="btn btn-primary" id="single-btn" onclick="verifySingle()">Check</button>
+      </div>
+      <div id="single-output" style="display:none;">
+        <div id="single-badge" style="text-align:center;padding:14px;border-radius:8px;font-weight:600;font-size:14px;margin-bottom:12px;"></div>
+        <div id="single-checks" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;"></div>
+        <div id="single-mx" style="margin-top:10px;"></div>
+      </div>
     </div>
   </div>
 
-  <!-- Bulk verify -->
-  <div class="stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">Bulk Verification</h3>
-    <form method="POST" action="/user/verify/bulk">
-      <textarea name="emails" rows="8" placeholder="Enter emails — one per line or comma-separated&#10;&#10;user1@gmail.com&#10;user2@yahoo.com&#10;..." class="mb-3 font-mono text-xs"></textarea>
-      <button type="submit" class="btn-primary w-full">Verify All</button>
-    </form>
+  <!-- Bulk -->
+  <div class="card">
+    <div class="card-header"><span class="card-title">Bulk Verification</span></div>
+    <div class="card-body">
+      <form method="POST" action="/user/verify/bulk">
+        <textarea class="form-input" name="emails" rows="7" style="font-family:monospace;font-size:12px;resize:vertical;" placeholder="Enter emails — one per line or comma-separated&#10;&#10;user@gmail.com&#10;another@yahoo.com"></textarea>
+        <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:10px;">Verify All</button>
+      </form>
+    </div>
   </div>
 </div>
 
 {{if .Results}}
-<div class="mt-6 stat-card">
-  <div class="flex items-center justify-between mb-4">
-    <h3 class="text-sm font-semibold text-slate-300">Results</h3>
-    <div class="flex gap-3">
-      <span class="bg-green-900 text-green-300 px-3 py-1 rounded-full text-xs font-medium">{{.ValidCount}} valid</span>
-      <span class="bg-red-900 text-red-300 px-3 py-1 rounded-full text-xs font-medium">{{.InvalidCount}} invalid</span>
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header">
+    <span class="card-title">Bulk Results</span>
+    <div style="display:flex;gap:8px;">
+      <span style="background:#052e16;color:#4ade80;border:1px solid #14532d;padding:3px 10px;border-radius:5px;font-size:12px;font-weight:600;">{{.ValidCount}} valid</span>
+      <span style="background:#1c0606;color:#f87171;border:1px solid #450a0a;padding:3px 10px;border-radius:5px;font-size:12px;font-weight:600;">{{.InvalidCount}} invalid</span>
     </div>
   </div>
-
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 20px 0;margin-bottom:16px;">
     <div>
-      <label class="block text-xs text-slate-400 mb-2">Valid Emails (copy-paste ready)</label>
-      <textarea readonly rows="6" class="font-mono text-xs text-green-300 bg-green-950/30 border-green-800">{{.ValidList}}</textarea>
+      <div class="form-label">Valid Emails</div>
+      <textarea readonly class="form-input" rows="5" style="font-family:monospace;font-size:11px;color:#4ade80;background:#052e16;border-color:#14532d;">{{.ValidList}}</textarea>
     </div>
     <div>
-      <label class="block text-xs text-slate-400 mb-2">Invalid Emails</label>
-      <textarea readonly rows="6" class="font-mono text-xs text-red-300 bg-red-950/30 border-red-800">{{.InvalidList}}</textarea>
+      <div class="form-label">Invalid Emails</div>
+      <textarea readonly class="form-input" rows="5" style="font-family:monospace;font-size:11px;color:#f87171;background:#1c0606;border-color:#450a0a;">{{.InvalidList}}</textarea>
     </div>
   </div>
-
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
-        <th class="pb-3 pr-4">Email</th>
-        <th class="pb-3 pr-4">Valid</th>
-        <th class="pb-3 pr-4">Format</th>
-        <th class="pb-3 pr-4">MX</th>
-        <th class="pb-3 pr-4">SMTP</th>
-        <th class="pb-3 pr-4">Disposable</th>
-        <th class="pb-3 pr-4">Catch-All</th>
-        <th class="pb-3">Reason</th>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Email</th><th>Valid</th><th>Format</th><th>MX</th><th>SMTP</th><th>Disposable</th><th>Catch-All</th><th style="padding-right:20px;">Reason</th>
       </tr></thead>
-      <tbody class="divide-y divide-slate-800">
+      <tbody>
         {{range .Results}}
-        <tr class="text-slate-300 {{if not .Valid}}bg-red-950/10{{end}}">
-          <td class="py-2 pr-4 text-xs font-mono">{{.Email}}</td>
-          <td class="py-2 pr-4">{{if .Valid}}<span class="text-green-400">✓</span>{{else}}<span class="text-red-400">✗</span>{{end}}</td>
-          <td class="py-2 pr-4 text-xs">{{if .Checks.Format}}<span class="text-green-400">ok</span>{{else}}<span class="text-red-400">fail</span>{{end}}</td>
-          <td class="py-2 pr-4 text-xs">{{if .Checks.MXExists}}<span class="text-green-400">ok</span>{{else}}<span class="text-red-400">fail</span>{{end}}</td>
-          <td class="py-2 pr-4 text-xs">{{if .Checks.SMTPConnects}}<span class="text-green-400">ok</span>{{else}}<span class="text-yellow-400">skip</span>{{end}}</td>
-          <td class="py-2 pr-4 text-xs">{{if .IsDisposable}}<span class="text-yellow-400">yes</span>{{else}}<span class="text-slate-500">no</span>{{end}}</td>
-          <td class="py-2 pr-4 text-xs">{{if .IsCatchAll}}<span class="text-yellow-400">yes</span>{{else}}<span class="text-slate-500">no</span>{{end}}</td>
-          <td class="py-2 text-xs text-slate-400">{{if .Reason}}{{.Reason}}{{else}}—{{end}}</td>
+        <tr>
+          <td style="padding-left:20px;font-family:monospace;font-size:12px;">{{.Email}}</td>
+          <td>{{if .Valid}}<span style="color:#4ade80;font-weight:600;">✓</span>{{else}}<span style="color:#f87171;font-weight:600;">✗</span>{{end}}</td>
+          <td>{{if .Checks.Format}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#f87171;font-size:12px;">fail</span>{{end}}</td>
+          <td>{{if .Checks.MXExists}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#f87171;font-size:12px;">fail</span>{{end}}</td>
+          <td>{{if .Checks.SMTPConnects}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#52525b;font-size:12px;">—</span>{{end}}</td>
+          <td>{{if .IsDisposable}}<span style="color:#fbbf24;font-size:12px;">yes</span>{{else}}<span style="color:#3f3f46;font-size:12px;">no</span>{{end}}</td>
+          <td>{{if .IsCatchAll}}<span style="color:#fbbf24;font-size:12px;">yes</span>{{else}}<span style="color:#3f3f46;font-size:12px;">no</span>{{end}}</td>
+          <td style="font-size:12px;color:#71717a;padding-right:20px;">{{if .Reason}}{{.Reason}}{{else}}—{{end}}</td>
         </tr>
         {{end}}
       </tbody>
@@ -82,44 +78,40 @@
 </div>
 {{end}}
 
+</div>
+
 <script>
 async function verifySingle() {
   const email = document.getElementById('single-email').value.trim();
   if (!email) return;
-  const btn = event.target;
-  btn.textContent = 'Checking...';
-  btn.disabled = true;
+  const btn = document.getElementById('single-btn');
+  btn.textContent = 'Checking...'; btn.disabled = true;
   try {
     const res = await fetch('/user/verify/single?email=' + encodeURIComponent(email));
-    const data = await res.json();
+    const d = await res.json();
     const out = document.getElementById('single-output');
-    out.classList.remove('hidden');
+    out.style.display = 'block';
     const badge = document.getElementById('single-badge');
-    if (data.valid) {
-      badge.className = 'text-center py-3 rounded-lg mb-4 bg-green-900/50 text-green-300 font-semibold';
+    if (d.valid) {
+      badge.style.cssText = 'text-align:center;padding:14px;border-radius:8px;font-weight:600;font-size:14px;margin-bottom:12px;background:#052e16;color:#4ade80;border:1px solid #14532d;';
       badge.textContent = '✓ Valid Email';
     } else {
-      badge.className = 'text-center py-3 rounded-lg mb-4 bg-red-900/50 text-red-300 font-semibold';
-      badge.textContent = '✗ Invalid — ' + (data.reason || 'unknown reason');
+      badge.style.cssText = 'text-align:center;padding:14px;border-radius:8px;font-weight:600;font-size:14px;margin-bottom:12px;background:#1c0606;color:#f87171;border:1px solid #450a0a;';
+      badge.textContent = '✗ Invalid — ' + (d.reason || 'unknown');
     }
-    const details = document.getElementById('single-details');
-    details.innerHTML = `
-      <div class="grid grid-cols-2 gap-2 text-xs">
-        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Format</span><span class="${data.checks?.format ? 'text-green-400' : 'text-red-400'}">${data.checks?.format ? '✓' : '✗'}</span></div>
-        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">MX Record</span><span class="${data.checks?.mx_exists ? 'text-green-400' : 'text-red-400'}">${data.checks?.mx_exists ? '✓' : '✗'}</span></div>
-        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">SMTP Connect</span><span class="${data.checks?.smtp_connects ? 'text-green-400' : 'text-yellow-400'}">${data.checks?.smtp_connects ? '✓' : '–'}</span></div>
-        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Mailbox</span><span class="${data.checks?.rcpt_accepted ? 'text-green-400' : 'text-yellow-400'}">${data.checks?.rcpt_accepted ? '✓' : '–'}</span></div>
-        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Disposable</span><span class="${data.is_disposable ? 'text-yellow-400' : 'text-slate-400'}">${data.is_disposable ? 'Yes' : 'No'}</span></div>
-        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Catch-All</span><span class="${data.is_catch_all ? 'text-yellow-400' : 'text-slate-400'}">${data.is_catch_all ? 'Yes' : 'No'}</span></div>
-      </div>
-      ${data.mx_host ? `<div class="bg-slate-900 rounded px-3 py-2 text-xs mt-2"><span class="text-slate-400">MX Host:</span> <span class="text-white font-mono">${data.mx_host}</span></div>` : ''}
-    `;
-  } catch(e) {
-    alert('Error: ' + e.message);
-  } finally {
-    btn.textContent = 'Check';
-    btn.disabled = false;
-  }
+    const checks = document.getElementById('single-checks');
+    const row = (label, ok, na) => `<div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:#71717a;">${label}</span><span style="font-size:12px;font-weight:600;color:${na?'#52525b':ok?'#4ade80':'#f87171'}">${na?'—':ok?'✓':'✗'}</span></div>`;
+    checks.innerHTML =
+      row('Format', d.checks?.format) +
+      row('MX Record', d.checks?.mx_exists) +
+      row('SMTP Connect', d.checks?.smtp_connects, !d.checks?.smtp_connects && !d.checks?.mx_exists) +
+      row('Mailbox', d.checks?.rcpt_accepted, !d.checks?.rcpt_accepted && !d.checks?.smtp_connects) +
+      row('Disposable', !d.is_disposable) +
+      row('Catch-All', !d.is_catch_all);
+    const mxDiv = document.getElementById('single-mx');
+    mxDiv.innerHTML = d.mx_host ? `<div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;font-size:12px;"><span style="color:#52525b;">MX Host: </span><code style="color:#e4e4e7;">${d.mx_host}</code></div>` : '';
+  } catch(e) { alert('Error: ' + e.message); }
+  finally { btn.textContent = 'Check'; btn.disabled = false; }
 }
 </script>
 {{end}}

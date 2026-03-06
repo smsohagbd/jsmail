@@ -21,7 +21,7 @@ type EmailLog struct {
 	Username  string
 	MessageID string
 	From      string
-	To        string
+	Recipient string // 'to' renamed to avoid SQL reserved-word conflict
 	Status    string // queued | delivered | failed | deferred
 	Error     string
 	MXHost    string

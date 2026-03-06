@@ -1,100 +1,97 @@
 {{define "title"}}Throttling — Admin{{end}}
 {{define "content"}}
-<div class="flex items-center justify-between mb-6">
-  <div>
-    <h1 class="text-2xl font-bold text-white">Throttling</h1>
-    <p class="text-slate-400 text-sm mt-1">Rate limits per user or domain. 0 = unlimited.</p>
+<div class="page-header" style="padding-bottom:20px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;">
+    <div>
+      <div class="page-title">Throttling</div>
+      <div class="page-sub">Rate limits per user or domain. 0 = unlimited.</div>
+    </div>
+    <button class="btn btn-primary" onclick="openModal()">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+      Add Rule
+    </button>
   </div>
-  <button onclick="document.getElementById('add-modal').classList.remove('hidden')" class="btn-primary">+ Add Rule</button>
 </div>
-
-<div class="stat-card">
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
-        <th class="pb-3 pr-4">User <span class="normal-case text-slate-600">(empty=global)</span></th>
-        <th class="pb-3 pr-4">Domain <span class="normal-case text-slate-600">(empty=all)</span></th>
-        <th class="pb-3 pr-4">Per Sec</th>
-        <th class="pb-3 pr-4">Per Min</th>
-        <th class="pb-3 pr-4">Per Hour</th>
-        <th class="pb-3 pr-4">Per Day</th>
-        <th class="pb-3 pr-4">Per Month</th>
-        <th class="pb-3">Actions</th>
+<div class="page-body">
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">User</th><th>Domain</th><th>/sec</th><th>/min</th><th>/hour</th><th>/day</th><th>/month</th><th style="padding-right:20px;">Actions</th>
       </tr></thead>
-      <tbody class="divide-y divide-slate-800">
+      <tbody>
         {{range .Rules}}
-        <tr class="text-slate-300">
-          <td class="py-2.5 pr-4">{{if .Username}}<span class="text-indigo-400">{{.Username}}</span>{{else}}<span class="text-slate-500 italic">global</span>{{end}}</td>
-          <td class="py-2.5 pr-4">{{if .Domain}}{{.Domain}}{{else}}<span class="text-slate-500 italic">all</span>{{end}}</td>
-          <td class="py-2.5 pr-4">{{if .PerSec}}{{.PerSec}}{{else}}—{{end}}</td>
-          <td class="py-2.5 pr-4">{{if .PerMin}}{{.PerMin}}{{else}}—{{end}}</td>
-          <td class="py-2.5 pr-4">{{if .PerHour}}{{.PerHour}}{{else}}—{{end}}</td>
-          <td class="py-2.5 pr-4">{{if .PerDay}}{{.PerDay}}{{else}}—{{end}}</td>
-          <td class="py-2.5 pr-4">{{if .PerMonth}}{{.PerMonth}}{{else}}—{{end}}</td>
-          <td class="py-2.5 flex gap-2">
-            <button onclick="editRule({{.ID}}, '{{.Username}}', '{{.Domain}}', {{.PerSec}}, {{.PerMin}}, {{.PerHour}}, {{.PerDay}}, {{.PerMonth}})" class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded">Edit</button>
-            <form method="POST" action="/admin/throttle/delete">
-              <input type="hidden" name="id" value="{{.ID}}"/>
-              <button class="btn-danger">Del</button>
-            </form>
+        <tr>
+          <td style="padding-left:20px;">{{if .Username}}<span style="color:#818cf8;">{{.Username}}</span>{{else}}<span style="color:#3f3f46;font-style:italic;font-size:12px;">global</span>{{end}}</td>
+          <td>{{if .Domain}}{{.Domain}}{{else}}<span style="color:#3f3f46;font-style:italic;font-size:12px;">all domains</span>{{end}}</td>
+          <td style="color:#d4d4d8;">{{if .PerSec}}{{.PerSec}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="color:#d4d4d8;">{{if .PerMin}}{{.PerMin}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="color:#d4d4d8;">{{if .PerHour}}{{.PerHour}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="color:#d4d4d8;">{{if .PerDay}}{{.PerDay}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="color:#d4d4d8;">{{if .PerMonth}}{{.PerMonth}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="padding-right:20px;">
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-secondary btn-sm" onclick="editRule({{.ID}},'{{.Username}}','{{.Domain}}',{{.PerSec}},{{.PerMin}},{{.PerHour}},{{.PerDay}},{{.PerMonth}})">Edit</button>
+              <form method="POST" action="/admin/throttle/delete" style="display:inline;">
+                <input type="hidden" name="id" value="{{.ID}}"/>
+                <button type="submit" class="btn btn-danger">Del</button>
+              </form>
+            </div>
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="8" class="py-8 text-center text-slate-600">No rules. All sending is unlimited.</td></tr>
+        <tr><td colspan="8" class="empty-state" style="padding-left:20px;">No rules. All sending is unlimited.</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
 </div>
+</div>
 
-<!-- Add/Edit modal -->
-<div id="add-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-  <div class="bg-slate-800 rounded-2xl p-6 w-full max-w-lg border border-slate-700 shadow-2xl">
-    <h2 class="text-lg font-bold text-white mb-5" id="modal-title">Add Throttle Rule</h2>
-    <form method="POST" action="/admin/throttle/save" class="space-y-4">
+<!-- Modal -->
+<div id="rule-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-title" id="modal-title">Add Throttle Rule</div>
+    <form method="POST" action="/admin/throttle/save">
       <input type="hidden" name="id" id="rule-id" value="0"/>
-      <div class="grid grid-cols-2 gap-4">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
         <div>
-          <label class="block text-sm text-slate-300 mb-1">Username <span class="text-slate-500">(empty = master)</span></label>
-          <input type="text" name="username" id="rule-username" placeholder="leave blank for global"/>
+          <label class="form-label">Username <span style="color:#52525b;">(blank = global)</span></label>
+          <input class="form-input" type="text" name="username" id="r-user" placeholder="leave blank for master rule"/>
         </div>
         <div>
-          <label class="block text-sm text-slate-300 mb-1">Domain <span class="text-slate-500">(empty = all)</span></label>
-          <input type="text" name="domain" id="rule-domain" placeholder="gmail.com"/>
+          <label class="form-label">Domain <span style="color:#52525b;">(blank = all)</span></label>
+          <input class="form-input" type="text" name="domain" id="r-domain" placeholder="gmail.com"/>
         </div>
       </div>
-      <div class="grid grid-cols-3 gap-3">
-        <div><label class="block text-xs text-slate-400 mb-1">Per Second</label><input type="number" name="per_sec" id="rule-per-sec" value="0" min="0"/></div>
-        <div><label class="block text-xs text-slate-400 mb-1">Per Minute</label><input type="number" name="per_min" id="rule-per-min" value="0" min="0"/></div>
-        <div><label class="block text-xs text-slate-400 mb-1">Per Hour</label><input type="number" name="per_hour" id="rule-per-hour" value="0" min="0"/></div>
-        <div><label class="block text-xs text-slate-400 mb-1">Per Day</label><input type="number" name="per_day" id="rule-per-day" value="0" min="0"/></div>
-        <div><label class="block text-xs text-slate-400 mb-1">Per Month</label><input type="number" name="per_month" id="rule-per-month" value="0" min="0"/></div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px;">
+        <div><label class="form-label">Per Sec</label><input class="form-input" type="number" name="per_sec" id="r-sec" value="0" min="0"/></div>
+        <div><label class="form-label">Per Min</label><input class="form-input" type="number" name="per_min" id="r-min" value="0" min="0"/></div>
+        <div><label class="form-label">Per Hour</label><input class="form-input" type="number" name="per_hour" id="r-hour" value="0" min="0"/></div>
+        <div><label class="form-label">Per Day</label><input class="form-input" type="number" name="per_day" id="r-day" value="0" min="0"/></div>
+        <div><label class="form-label">Per Month</label><input class="form-input" type="number" name="per_month" id="r-month" value="0" min="0"/></div>
       </div>
-      <div class="flex gap-3 pt-2">
-        <button type="submit" class="btn-primary flex-1">Save Rule</button>
-        <button type="button" onclick="closeModal()" class="btn-secondary flex-1">Cancel</button>
+      <div style="display:flex;gap:10px;">
+        <button type="submit" class="btn btn-primary" style="flex:1;justify-content:center;">Save Rule</button>
+        <button type="button" class="btn btn-secondary" style="flex:1;justify-content:center;" onclick="closeModal()">Cancel</button>
       </div>
     </form>
   </div>
 </div>
-
 <script>
-function editRule(id, username, domain, ps, pm, ph, pd, pmo) {
-  document.getElementById('modal-title').textContent = 'Edit Throttle Rule';
-  document.getElementById('rule-id').value = id;
-  document.getElementById('rule-username').value = username;
-  document.getElementById('rule-domain').value = domain;
-  document.getElementById('rule-per-sec').value = ps;
-  document.getElementById('rule-per-min').value = pm;
-  document.getElementById('rule-per-hour').value = ph;
-  document.getElementById('rule-per-day').value = pd;
-  document.getElementById('rule-per-month').value = pmo;
-  document.getElementById('add-modal').classList.remove('hidden');
-}
-function closeModal() {
-  document.getElementById('add-modal').classList.add('hidden');
-  document.getElementById('rule-id').value = '0';
-  document.getElementById('modal-title').textContent = 'Add Throttle Rule';
+function openModal(){document.getElementById('rule-modal').style.display='flex';}
+function closeModal(){document.getElementById('rule-modal').style.display='none';document.getElementById('rule-id').value='0';document.getElementById('modal-title').textContent='Add Throttle Rule';}
+function editRule(id,u,d,ps,pm,ph,pd,pmo){
+  document.getElementById('modal-title').textContent='Edit Rule';
+  document.getElementById('rule-id').value=id;
+  document.getElementById('r-user').value=u;
+  document.getElementById('r-domain').value=d;
+  document.getElementById('r-sec').value=ps;
+  document.getElementById('r-min').value=pm;
+  document.getElementById('r-hour').value=ph;
+  document.getElementById('r-day').value=pd;
+  document.getElementById('r-month').value=pmo;
+  openModal();
 }
 </script>
 {{end}}

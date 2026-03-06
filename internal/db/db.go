@@ -22,6 +22,14 @@ func Init(path, adminUser, adminPass string) error {
 		return err
 	}
 
+	// Drop email_logs if it has the old 'to' column (pre-rename migration).
+	var colExists int64
+	DB.Raw("SELECT COUNT(*) FROM pragma_table_info('email_logs') WHERE name='to'").Scan(&colExists)
+	if colExists > 0 {
+		log.Printf("db: migrating email_logs table (renaming 'to' → 'recipient')")
+		DB.Exec("DROP TABLE IF EXISTS email_logs")
+	}
+
 	if err := DB.AutoMigrate(
 		&User{},
 		&EmailLog{},
@@ -59,24 +67,24 @@ func ensureAdmin(username, password string) {
 	}
 }
 
-// LogQueued writes a queued log entry.
+// LogQueued writes a queued log entry for every recipient.
 func LogQueued(username, msgID, from string, recipients []string) {
-	for _, to := range recipients {
+	for _, rcpt := range recipients {
 		DB.Create(&EmailLog{
 			Username:  username,
 			MessageID: msgID,
 			From:      from,
-			To:        to,
+			Recipient: rcpt,
 			Status:    "queued",
 			SentAt:    time.Now(),
 		})
 	}
 }
 
-// LogDelivered updates log entry to delivered.
-func LogDelivered(msgID, to, mxHost string) {
+// LogDelivered updates a log entry to delivered.
+func LogDelivered(msgID, recipient, mxHost string) {
 	DB.Model(&EmailLog{}).
-		Where("message_id = ? AND to = ?", msgID, to).
+		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status":  "delivered",
 			"mx_host": mxHost,
@@ -84,20 +92,20 @@ func LogDelivered(msgID, to, mxHost string) {
 		})
 }
 
-// LogFailed updates log entry to failed.
-func LogFailed(msgID, to, errMsg string) {
+// LogFailed updates a log entry to failed.
+func LogFailed(msgID, recipient, errMsg string) {
 	DB.Model(&EmailLog{}).
-		Where("message_id = ? AND to = ?", msgID, to).
+		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status": "failed",
 			"error":  errMsg,
 		})
 }
 
-// LogDeferred updates log entry to deferred.
-func LogDeferred(msgID, to, errMsg string) {
+// LogDeferred updates a log entry to deferred.
+func LogDeferred(msgID, recipient, errMsg string) {
 	DB.Model(&EmailLog{}).
-		Where("message_id = ? AND to = ?", msgID, to).
+		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status": "deferred",
 			"error":  errMsg,

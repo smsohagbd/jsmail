@@ -1,120 +1,127 @@
 {{define "title"}}Dashboard — Admin{{end}}
 {{define "content"}}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-white">Dashboard</h1>
-  <p class="text-slate-400 text-sm mt-1">Overview of your mail server</p>
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">Dashboard</div>
+  <div class="page-sub">Server overview and recent activity</div>
 </div>
+<div class="page-body">
 
 <!-- Stat cards -->
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Today</p>
-    <p class="text-3xl font-bold text-white">{{.TotalToday}}</p>
-    <p class="text-xs text-slate-500 mt-1">emails sent</p>
+<div class="stat-grid">
+  <div class="stat-card indigo">
+    <div class="stat-icon indigo">
+      <svg width="18" height="18" fill="none" stroke="#818cf8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+    </div>
+    <div class="stat-value">{{.TotalToday}}</div>
+    <div class="stat-label">Sent Today</div>
   </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Yesterday</p>
-    <p class="text-3xl font-bold text-white">{{.TotalYesterday}}</p>
-    <p class="text-xs text-slate-500 mt-1">emails sent</p>
+  <div class="stat-card green">
+    <div class="stat-icon green">
+      <svg width="18" height="18" fill="none" stroke="#4ade80" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+    </div>
+    <div class="stat-value">{{.TotalMonth}}</div>
+    <div class="stat-label">This Month</div>
   </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">This Month</p>
-    <p class="text-3xl font-bold text-white">{{.TotalMonth}}</p>
-    <p class="text-xs text-slate-500 mt-1">emails sent</p>
+  <div class="stat-card amber">
+    <div class="stat-icon amber">
+      <svg width="18" height="18" fill="none" stroke="#fbbf24" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    </div>
+    <div class="stat-value">{{.Pending}}</div>
+    <div class="stat-label">Queued / Deferred</div>
   </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Queue</p>
-    <p class="text-3xl font-bold text-yellow-400">{{.Pending}}</p>
-    <p class="text-xs text-slate-500 mt-1">pending / deferred</p>
+  <div class="stat-card blue">
+    <div class="stat-icon blue">
+      <svg width="18" height="18" fill="none" stroke="#60a5fa" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+    </div>
+    <div class="stat-value">{{.TotalUsers}}</div>
+    <div class="stat-label">Active Users</div>
   </div>
 </div>
 
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-  <!-- Chart -->
-  <div class="lg:col-span-2 stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">Delivered — Last 7 Days</h3>
-    <canvas id="chart" height="100"></canvas>
+<!-- Chart + Queue Status -->
+<div style="display:grid;grid-template-columns:1fr 260px;gap:16px;margin-bottom:24px;">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Delivered — Last 7 Days</span>
+      <span style="font-size:12px;color:#52525b;">{{.TotalYesterday}} yesterday</span>
+    </div>
+    <div class="card-body" style="padding-top:12px;">
+      <canvas id="chart" height="100"></canvas>
+    </div>
   </div>
-  <!-- Quick stats -->
-  <div class="stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">Server Status</h3>
-    <div class="space-y-3">
-      <div class="flex justify-between items-center">
-        <span class="text-sm text-slate-400">Total Users</span>
-        <span class="text-sm font-semibold text-white">{{.TotalUsers}}</span>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Queue Status</span></div>
+    <div class="card-body" style="padding:0;">
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #18181b;">
+        <span style="font-size:13px;color:#a1a1aa;">Pending</span>
+        <span style="font-size:14px;font-weight:600;color:#60a5fa;">{{.QueueStats.Pending}}</span>
       </div>
-      <div class="flex justify-between items-center">
-        <span class="text-sm text-slate-400">Pending</span>
-        <span class="text-sm font-semibold text-blue-400">{{.QueueStats.Pending}}</span>
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #18181b;">
+        <span style="font-size:13px;color:#a1a1aa;">In-flight</span>
+        <span style="font-size:14px;font-weight:600;color:#818cf8;">{{.QueueStats.Inflight}}</span>
       </div>
-      <div class="flex justify-between items-center">
-        <span class="text-sm text-slate-400">Deferred</span>
-        <span class="text-sm font-semibold text-yellow-400">{{.QueueStats.Deferred}}</span>
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #18181b;">
+        <span style="font-size:13px;color:#a1a1aa;">Deferred</span>
+        <span style="font-size:14px;font-weight:600;color:#fbbf24;">{{.QueueStats.Deferred}}</span>
       </div>
-      <div class="flex justify-between items-center">
-        <span class="text-sm text-slate-400">In-flight</span>
-        <span class="text-sm font-semibold text-indigo-400">{{.QueueStats.Inflight}}</span>
-      </div>
-      <div class="flex justify-between items-center">
-        <span class="text-sm text-slate-400">Failed</span>
-        <span class="text-sm font-semibold text-red-400">{{.QueueStats.Failed}}</span>
+      <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:13px;color:#a1a1aa;">Failed</span>
+        <span style="font-size:14px;font-weight:600;color:#f87171;">{{.QueueStats.Failed}}</span>
       </div>
     </div>
   </div>
 </div>
 
 <!-- Recent logs -->
-<div class="stat-card">
-  <div class="flex items-center justify-between mb-4">
-    <h3 class="text-sm font-semibold text-slate-300">Recent Activity</h3>
-    <a href="/admin/logs" class="text-xs text-indigo-400 hover:text-indigo-300">View all →</a>
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Recent Activity</span>
+    <a href="/admin/logs" style="font-size:12px;color:#818cf8;text-decoration:none;">View all →</a>
   </div>
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead><tr class="text-left text-xs text-slate-500 uppercase">
-        <th class="pb-2">User</th><th class="pb-2">From</th><th class="pb-2">To</th><th class="pb-2">Status</th><th class="pb-2">Time</th>
+  <div style="overflow-x:auto;">
+    <table class="data-table" style="padding:0 20px;">
+      <thead><tr>
+        <th>User</th><th>From</th><th>To</th><th>Status</th><th>MX Host</th><th>Time</th>
       </tr></thead>
-      <tbody class="divide-y divide-slate-800">
+      <tbody>
         {{range .RecentLogs}}
-        <tr class="text-slate-300">
-          <td class="py-2 text-xs text-slate-500">{{.Username}}</td>
-          <td class="py-2 truncate max-w-[140px]">{{.From}}</td>
-          <td class="py-2 truncate max-w-[140px]">{{.To}}</td>
-          <td class="py-2"><span class="badge-{{.Status}}">{{.Status}}</span></td>
-          <td class="py-2 text-xs text-slate-500">{{.SentAt.Format "Jan 2 15:04"}}</td>
+        <tr>
+          <td style="padding-left:20px;"><span style="font-size:12px;color:#52525b;">{{.Username}}</span></td>
+          <td class="truncate-cell" title="{{.From}}">{{.From}}</td>
+          <td class="truncate-cell" title="{{.Recipient}}">{{.Recipient}}</td>
+          <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+          <td style="font-size:12px;color:#52525b;" class="truncate-cell">{{if .MXHost}}{{.MXHost}}{{else}}—{{end}}</td>
+          <td style="font-size:12px;color:#52525b;padding-right:20px;">{{.SentAt.Format "Jan 2 15:04"}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="5" class="py-4 text-center text-slate-600 text-sm">No activity yet</td></tr>
+        <tr><td colspan="6" style="padding:32px 20px;" class="empty-state">No activity yet</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
 </div>
 
+</div>
 <script>
-const ctx = document.getElementById('chart').getContext('2d');
-new Chart(ctx, {
-  type: 'line',
-  data: {
-    labels: {{.ChartLabels}},
-    datasets: [{
-      label: 'Delivered',
-      data: {{.ChartCounts}},
-      borderColor: '#6366f1',
-      backgroundColor: 'rgba(99,102,241,0.1)',
-      borderWidth: 2,
-      fill: true,
-      tension: 0.4,
-      pointBackgroundColor: '#6366f1',
-      pointRadius: 4,
+new Chart(document.getElementById('chart').getContext('2d'), {
+  type:'line',
+  data:{
+    labels:{{.ChartLabels}},
+    datasets:[{
+      data:{{.ChartCounts}},
+      borderColor:'#6366f1',
+      backgroundColor:'rgba(99,102,241,0.08)',
+      borderWidth:2,fill:true,tension:0.4,
+      pointBackgroundColor:'#6366f1',pointRadius:3,pointHoverRadius:5
     }]
   },
-  options: {
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
-      y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true }
+  options:{
+    responsive:true,
+    plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>' '+ctx.parsed.y+' delivered'}}},
+    scales:{
+      x:{grid:{color:'#18181b'},ticks:{color:'#52525b',font:{size:11}}},
+      y:{grid:{color:'#18181b'},ticks:{color:'#52525b',font:{size:11}},beginAtZero:true}
     }
   }
 });

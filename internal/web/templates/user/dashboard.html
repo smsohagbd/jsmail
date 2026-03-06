@@ -1,76 +1,85 @@
 {{define "title"}}Dashboard — {{.ActiveUser}}{{end}}
 {{define "content"}}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-white">Welcome, {{.ActiveUser}}</h1>
-  <p class="text-slate-400 text-sm mt-1">Your SMTP sending statistics</p>
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">Welcome, {{.ActiveUser}}</div>
+  <div class="page-sub">Your SMTP sending overview</div>
 </div>
+<div class="page-body">
 
-{{with .User}}
-{{if .QuotaPerDay}}
-<div class="bg-indigo-900/30 border border-indigo-700 rounded-xl p-4 mb-6 flex items-center gap-3">
-  <svg class="w-5 h-5 text-indigo-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-  <span class="text-sm text-indigo-200">Daily quota: <strong>{{.QuotaPerDay}} emails/day</strong></span>
+{{with .User}}{{if .QuotaPerDay}}
+<div style="background:#1e1e47;border:1px solid #3730a3;border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+  <svg width="16" height="16" fill="none" stroke="#818cf8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <span style="font-size:13px;color:#c7d2fe;">Daily quota: <strong>{{.QuotaPerDay}} emails/day</strong></span>
 </div>
-{{end}}
-{{end}}
+{{end}}{{end}}
 
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Today</p>
-    <p class="text-3xl font-bold text-white">{{.TotalToday}}</p>
-    <p class="text-xs text-slate-500 mt-1">sent</p>
+<div class="stat-grid" style="grid-template-columns:repeat(4,1fr);">
+  <div class="stat-card indigo">
+    <div class="stat-value">{{.TotalToday}}</div>
+    <div class="stat-label">Sent Today</div>
   </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Yesterday</p>
-    <p class="text-3xl font-bold text-white">{{.TotalYesterday}}</p>
-    <p class="text-xs text-slate-500 mt-1">sent</p>
+  <div class="stat-card green">
+    <div class="stat-value">{{.TotalYesterday}}</div>
+    <div class="stat-label">Yesterday</div>
   </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">This Month</p>
-    <p class="text-3xl font-bold text-white">{{.TotalMonth}}</p>
-    <p class="text-xs text-slate-500 mt-1">sent</p>
+  <div class="stat-card blue">
+    <div class="stat-value">{{.TotalMonth}}</div>
+    <div class="stat-label">This Month</div>
   </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Queue</p>
-    <p class="text-3xl font-bold text-yellow-400">{{.Pending}}</p>
-    <p class="text-xs text-slate-500 mt-1">pending</p>
+  <div class="stat-card amber">
+    <div class="stat-value">{{.Pending}}</div>
+    <div class="stat-label">Pending</div>
   </div>
 </div>
 
-<div class="stat-card">
-  <div class="flex items-center justify-between mb-4">
-    <h3 class="text-sm font-semibold text-slate-300">Recent Activity</h3>
-    <a href="/user/logs" class="text-xs text-indigo-400 hover:text-indigo-300">View all →</a>
-  </div>
-
-  <div class="mb-4 bg-slate-900 rounded-lg p-4 border border-slate-700">
-    <p class="text-xs text-slate-400 mb-2 font-medium">SMTP Connection Details</p>
-    <div class="grid grid-cols-2 gap-2 text-xs text-slate-300">
-      <div><span class="text-slate-500">Host:</span> <span class="font-mono">your-server-domain</span></div>
-      <div><span class="text-slate-500">Port:</span> <span class="font-mono">1025</span></div>
-      <div><span class="text-slate-500">Username:</span> <span class="font-mono text-indigo-300">{{.ActiveUser}}</span></div>
-      <div><span class="text-slate-500">Auth:</span> <span class="font-mono">PLAIN / LOGIN</span></div>
+<!-- SMTP credentials box -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header"><span class="card-title">SMTP Connection Details</span></div>
+  <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px 14px;">
+      <div style="font-size:11px;color:#52525b;margin-bottom:4px;">HOST</div>
+      <code style="font-size:13px;color:#e4e4e7;">your-server-domain.com</code>
+    </div>
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px 14px;">
+      <div style="font-size:11px;color:#52525b;margin-bottom:4px;">PORT</div>
+      <code style="font-size:13px;color:#e4e4e7;">1025</code>
+    </div>
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px 14px;">
+      <div style="font-size:11px;color:#52525b;margin-bottom:4px;">USERNAME</div>
+      <code style="font-size:13px;color:#818cf8;">{{.ActiveUser}}</code>
+    </div>
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px 14px;">
+      <div style="font-size:11px;color:#52525b;margin-bottom:4px;">AUTH</div>
+      <code style="font-size:13px;color:#e4e4e7;">PLAIN / LOGIN</code>
     </div>
   </div>
+</div>
 
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead><tr class="text-left text-xs text-slate-500 uppercase">
-        <th class="pb-2">From</th><th class="pb-2">To</th><th class="pb-2">Status</th><th class="pb-2">Time</th>
+<!-- Recent logs -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Recent Sends</span>
+    <a href="/user/logs" style="font-size:12px;color:#818cf8;text-decoration:none;">View all →</a>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">From</th><th>To</th><th>Status</th><th style="padding-right:20px;">Time</th>
       </tr></thead>
-      <tbody class="divide-y divide-slate-800">
+      <tbody>
         {{range .RecentLogs}}
-        <tr class="text-slate-300">
-          <td class="py-2 text-xs truncate max-w-[150px]">{{.From}}</td>
-          <td class="py-2 text-xs truncate max-w-[150px]">{{.To}}</td>
-          <td class="py-2"><span class="badge-{{.Status}}">{{.Status}}</span></td>
-          <td class="py-2 text-xs text-slate-500">{{.SentAt.Format "Jan 2 15:04"}}</td>
+        <tr>
+          <td style="padding-left:20px;font-size:12px;" class="truncate-cell" title="{{.From}}">{{.From}}</td>
+          <td style="font-size:12px;" class="truncate-cell" title="{{.Recipient}}">{{.Recipient}}</td>
+          <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+          <td style="font-size:12px;color:#52525b;padding-right:20px;">{{.SentAt.Format "Jan 2 15:04"}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="4" class="py-4 text-center text-slate-600 text-sm">No activity yet</td></tr>
+        <tr><td colspan="4" class="empty-state" style="padding-left:20px;">No sends yet</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
+</div>
 </div>
 {{end}}

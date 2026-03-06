@@ -128,11 +128,19 @@ func (e *Engine) deliver(msg *queue.Message) {
 	}
 
 	var lastErr error
+	// recipientMX tracks which MX host delivered each recipient.
+	recipientMX := make(map[string]string)
+
 	for domain, rcpts := range byDomain {
 		log.Printf("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
-		if err := e.deliverToDomain(msg.From, domain, rcpts, data); err != nil {
+		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data)
+		if err != nil {
 			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
 			lastErr = err
+		} else {
+			for _, rcpt := range rcpts {
+				recipientMX[rcpt] = mxHost
+			}
 		}
 	}
 
@@ -141,7 +149,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 		e.queue.Complete(msg.ID)
 		if e.OnEvent != nil {
 			for _, to := range msg.To {
-				e.OnEvent(DeliveryEvent{MessageID: msg.ID, Username: msg.Username, From: msg.From, To: to, Status: "delivered"})
+				e.OnEvent(DeliveryEvent{
+					MessageID: msg.ID, Username: msg.Username,
+					From: msg.From, To: to, Status: "delivered",
+					MXHost: recipientMX[to],
+				})
 			}
 		}
 		return
@@ -153,7 +165,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 		e.queue.Fail(msg, fmt.Sprintf("max retries exceeded: %v", lastErr))
 		if e.OnEvent != nil {
 			for _, to := range msg.To {
-				e.OnEvent(DeliveryEvent{MessageID: msg.ID, Username: msg.Username, From: msg.From, To: to, Status: "failed", Error: lastErr.Error()})
+				e.OnEvent(DeliveryEvent{
+					MessageID: msg.ID, Username: msg.Username,
+					From: msg.From, To: to, Status: "failed",
+					Error: lastErr.Error(),
+				})
 			}
 		}
 		return
@@ -170,7 +186,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 	e.queue.Defer(msg, backoff, lastErr.Error())
 	if e.OnEvent != nil {
 		for _, to := range msg.To {
-			e.OnEvent(DeliveryEvent{MessageID: msg.ID, Username: msg.Username, From: msg.From, To: to, Status: "deferred", Error: lastErr.Error()})
+			e.OnEvent(DeliveryEvent{
+				MessageID: msg.ID, Username: msg.Username,
+				From: msg.From, To: to, Status: "deferred",
+				Error: lastErr.Error(),
+			})
 		}
 	}
 }
@@ -179,12 +199,13 @@ func (e *Engine) deliver(msg *queue.Message) {
 // Port 25 is the standard MTA port; 587 is tried as fallback when 25 is blocked.
 var deliveryPorts = []string{"25", "587"}
 
-func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte) error {
+// deliverToDomain attempts delivery to a domain, returning the successful MX host on success.
+func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte) (string, error) {
 	log.Printf("[DELIVERY]   DNS MX lookup for %q", domain)
 	mxRecords, err := lookupMX(domain)
 	if err != nil {
 		log.Printf("[DELIVERY] ✗ MX lookup failed for %q: %v", domain, err)
-		return fmt.Errorf("MX lookup: %w", err)
+		return "", fmt.Errorf("MX lookup: %w", err)
 	}
 
 	log.Printf("[DELIVERY]   MX records for %q:", domain)
@@ -200,10 +221,10 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 				continue
 			}
 			log.Printf("[DELIVERY] ✓ delivered via MX %s:%s", mx.Host, port)
-			return nil
+			return mx.Host, nil
 		}
 	}
-	return fmt.Errorf("all MX servers failed for %s", domain)
+	return "", fmt.Errorf("all MX servers failed for %s", domain)
 }
 
 func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte) error {

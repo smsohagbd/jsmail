@@ -1,78 +1,46 @@
 {{define "title"}}Settings — Admin{{end}}
 {{define "content"}}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-white">Settings</h1>
-  <p class="text-slate-400 text-sm mt-1">Server configuration is managed in <code class="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-400 text-xs">config.yaml</code> — restart server to apply changes.</p>
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">Settings</div>
+  <div class="page-sub">Server configuration — edit <code style="background:#111113;border:1px solid #27272a;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:12px;">config.yaml</code> and restart to apply</div>
 </div>
+<div class="page-body">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
 
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-  <div class="stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">SMTP Server</h3>
-    <div class="space-y-3 text-sm">
-      <div class="flex justify-between">
-        <span class="text-slate-400">Listen Address</span>
-        <span class="text-white font-mono">{{index .Settings "smtp_listen"}}</span>
-      </div>
-      <div class="flex justify-between">
-        <span class="text-slate-400">Domain / HELO</span>
-        <span class="text-white font-mono">{{index .Settings "smtp_domain"}}</span>
-      </div>
-      <div class="flex justify-between">
-        <span class="text-slate-400">DKIM Signing</span>
-        <span class="text-white">{{index .Settings "dkim_enabled"}}</span>
-      </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">SMTP Server</span></div>
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid #18181b;"><span style="font-size:13px;color:#71717a;">Listen Address</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "smtp_listen"}}</code></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid #18181b;"><span style="font-size:13px;color:#71717a;">Domain / HELO</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "smtp_domain"}}</code></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;"><span style="font-size:13px;color:#71717a;">DKIM Signing</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "dkim_enabled"}}</code></div>
     </div>
   </div>
 
-  <div class="stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">Delivery Engine</h3>
-    <div class="space-y-3 text-sm">
-      <div class="flex justify-between">
-        <span class="text-slate-400">Max Retries</span>
-        <span class="text-white">{{index .Settings "max_retries"}}</span>
-      </div>
-      <div class="flex justify-between">
-        <span class="text-slate-400">Connect Timeout</span>
-        <span class="text-white">{{index .Settings "connect_timeout"}}</span>
-      </div>
-      <div class="flex justify-between">
-        <span class="text-slate-400">Workers</span>
-        <span class="text-white">{{index .Settings "workers"}}</span>
-      </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">Delivery Engine</span></div>
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid #18181b;"><span style="font-size:13px;color:#71717a;">Workers</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "workers"}}</code></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid #18181b;"><span style="font-size:13px;color:#71717a;">Max Retries</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "max_retries"}}</code></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;"><span style="font-size:13px;color:#71717a;">Connect Timeout</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "connect_timeout"}}</code></div>
     </div>
   </div>
 
-  <div class="stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">HTTP API</h3>
-    <div class="space-y-3 text-sm">
-      <div class="flex justify-between">
-        <span class="text-slate-400">API Address</span>
-        <span class="text-white font-mono">{{index .Settings "api_listen"}}</span>
-      </div>
-      <div class="flex justify-between">
-        <span class="text-slate-400">Auth Token</span>
-        <span class="text-white font-mono text-xs">{{index .Settings "api_token"}}</span>
-      </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">HTTP API</span></div>
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid #18181b;"><span style="font-size:13px;color:#71717a;">Listen Address</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "api_listen"}}</code></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;"><span style="font-size:13px;color:#71717a;">Auth Token</span><code style="font-size:12px;color:#818cf8;background:#09090b;padding:2px 8px;border-radius:4px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;">{{index .Settings "api_token"}}</code></div>
     </div>
   </div>
 
-  <div class="stat-card">
-    <h3 class="text-sm font-semibold text-slate-300 mb-4">Web UI</h3>
-    <div class="space-y-3 text-sm">
-      <div class="flex justify-between">
-        <span class="text-slate-400">Web Address</span>
-        <span class="text-white font-mono">{{index .Settings "web_listen"}}</span>
-      </div>
-      <div class="flex justify-between">
-        <span class="text-slate-400">Database</span>
-        <span class="text-white font-mono text-xs">{{index .Settings "db_path"}}</span>
-      </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">Web UI</span></div>
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid #18181b;"><span style="font-size:13px;color:#71717a;">Listen Address</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "web_listen"}}</code></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;"><span style="font-size:13px;color:#71717a;">Database</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "db_path"}}</code></div>
     </div>
   </div>
+
 </div>
-
-<div class="mt-6 stat-card">
-  <h3 class="text-sm font-semibold text-slate-300 mb-3">Config File Location</h3>
-  <p class="text-slate-400 text-sm">Edit <code class="bg-slate-900 px-2 py-1 rounded text-green-400 text-xs">config.yaml</code> in the server directory and restart to apply changes. All settings including SMTP port, DKIM keys, and delivery options are configured there.</p>
 </div>
 {{end}}

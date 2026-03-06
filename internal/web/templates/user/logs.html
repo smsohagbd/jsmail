@@ -1,16 +1,16 @@
 {{define "title"}}My Logs — {{.ActiveUser}}{{end}}
 {{define "content"}}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-white">My Send Logs</h1>
-  <p class="text-slate-400 text-sm mt-1">{{.DateLabel}} — {{.Total}} records</p>
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">My Send Logs</div>
+  <div class="page-sub">{{.DateLabel}} — {{.Total}} records</div>
 </div>
+<div class="page-body">
 
-<!-- Filters -->
-<div class="stat-card mb-6">
-  <form method="GET" action="/user/logs" class="flex flex-wrap gap-3 items-end">
+<div class="card" style="margin-bottom:16px;">
+  <form method="GET" action="/user/logs" style="padding:16px 20px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
     <div>
-      <label class="block text-xs text-slate-400 mb-1">Range</label>
-      <select name="range" onchange="document.getElementById('custom-dates').classList.toggle('hidden', this.value !== 'custom')" class="w-auto">
+      <div class="form-label">Range</div>
+      <select class="form-input" name="range" style="width:auto;" onchange="document.getElementById('custom').style.display=this.value==='custom'?'flex':'none'">
         <option value="">All Time</option>
         <option value="today" {{if eq (index .Query "range") "today"}}selected{{end}}>Today</option>
         <option value="yesterday" {{if eq (index .Query "range") "yesterday"}}selected{{end}}>Yesterday</option>
@@ -19,65 +19,64 @@
         <option value="custom" {{if eq (index .Query "range") "custom"}}selected{{end}}>Custom</option>
       </select>
     </div>
-    <div id="custom-dates" class="flex gap-2 {{if ne (index .Query "range") "custom"}}hidden{{end}}">
-      <div><label class="block text-xs text-slate-400 mb-1">From</label><input type="date" name="from_date" value="{{index .Query "from_date"}}" class="w-auto"/></div>
-      <div><label class="block text-xs text-slate-400 mb-1">To</label><input type="date" name="to_date" value="{{index .Query "to_date"}}" class="w-auto"/></div>
+    <div id="custom" style="display:{{if eq (index .Query "range") "custom"}}flex{{else}}none{{end}};gap:8px;">
+      <div><div class="form-label">From</div><input class="form-input" type="date" name="from_date" value="{{index .Query "from_date"}}" style="width:auto;"/></div>
+      <div><div class="form-label">To</div><input class="form-input" type="date" name="to_date" value="{{index .Query "to_date"}}" style="width:auto;"/></div>
     </div>
     <div>
-      <label class="block text-xs text-slate-400 mb-1">Status</label>
-      <select name="status" class="w-auto">
+      <div class="form-label">Status</div>
+      <select class="form-input" name="status" style="width:auto;">
         <option value="">All</option>
         <option value="delivered" {{if eq (index .Query "status") "delivered"}}selected{{end}}>Delivered</option>
         <option value="failed" {{if eq (index .Query "status") "failed"}}selected{{end}}>Failed</option>
         <option value="deferred" {{if eq (index .Query "status") "deferred"}}selected{{end}}>Deferred</option>
-        <option value="queued" {{if eq (index .Query "status") "queued"}}selected{{end}}>Queued</option>
       </select>
     </div>
-    <div class="flex-1 min-w-48">
-      <label class="block text-xs text-slate-400 mb-1">Search</label>
-      <input type="text" name="search" value="{{index .Query "search"}}" placeholder="email address..."/>
+    <div style="flex:1;min-width:180px;">
+      <div class="form-label">Search</div>
+      <input class="form-input" type="text" name="search" value="{{index .Query "search"}}" placeholder="email address..."/>
     </div>
-    <button type="submit" class="btn-primary">Filter</button>
-    <a href="/user/logs" class="btn-secondary">Reset</a>
+    <div style="display:flex;gap:8px;">
+      <button type="submit" class="btn btn-primary">Apply</button>
+      <a href="/user/logs" class="btn btn-secondary">Reset</a>
+    </div>
   </form>
 </div>
 
-<div class="stat-card">
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
-        <th class="pb-3 pr-4">From</th>
-        <th class="pb-3 pr-4">To</th>
-        <th class="pb-3 pr-4">Status</th>
-        <th class="pb-3 pr-4">MX Host</th>
-        <th class="pb-3 pr-4">Time</th>
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">From</th><th>To</th><th>Status</th><th>MX Host</th><th style="padding-right:20px;">Time</th>
       </tr></thead>
-      <tbody class="divide-y divide-slate-800">
+      <tbody>
         {{range .Logs}}
-        <tr class="text-slate-300">
-          <td class="py-2.5 pr-4 text-xs truncate max-w-[150px]" title="{{.From}}">{{.From}}</td>
-          <td class="py-2.5 pr-4 text-xs truncate max-w-[150px]" title="{{.To}}">{{.To}}</td>
-          <td class="py-2.5 pr-4"><span class="badge-{{.Status}}">{{.Status}}</span></td>
-          <td class="py-2.5 pr-4 text-xs text-slate-500">{{if .MXHost}}{{.MXHost}}{{else}}—{{end}}</td>
-          <td class="py-2.5 pr-4 text-xs text-slate-500">{{.SentAt.Format "Jan 2 15:04:05"}}</td>
+        <tr>
+          <td style="padding-left:20px;font-size:12px;" class="truncate-cell" title="{{.From}}">{{.From}}</td>
+          <td style="font-size:12px;" class="truncate-cell" title="{{.Recipient}}">{{.Recipient}}</td>
+          <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+          <td style="font-size:12px;color:#52525b;" class="truncate-cell">{{if .MXHost}}{{.MXHost}}{{else}}—{{end}}</td>
+          <td style="font-size:12px;color:#52525b;padding-right:20px;white-space:nowrap;">{{.SentAt.Format "Jan 2 15:04:05"}}</td>
         </tr>
-        {{if .Error}}<tr class="bg-red-950/20"><td colspan="5" class="px-4 py-1.5 text-xs text-red-400">↳ {{.Error}}</td></tr>{{end}}
+        {{if .Error}}
+        <tr style="background:#0d0505;"><td colspan="5" style="padding:6px 20px;font-size:11px;color:#f87171;">↳ {{.Error}}</td></tr>
+        {{end}}
         {{else}}
-        <tr><td colspan="5" class="py-8 text-center text-slate-600">No logs found</td></tr>
+        <tr><td colspan="5" class="empty-state" style="padding-left:20px;">No logs found</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
-
-  {{$total := .Total}}{{$perPage := .PerPage}}{{$pageNum := .PageNum}}
+  {{$total := .Total}}{{$perPage := .PerPage}}{{$p := .PageNum}}
   {{if gt $total (int64 $perPage)}}
-  <div class="flex items-center justify-between mt-4 pt-4 border-t border-slate-700">
-    <span class="text-xs text-slate-500">{{$total}} total</span>
-    <div class="flex gap-2">
-      {{if gt $pageNum 1}}<a href="?page={{sub $pageNum 1}}&{{range $k,$v := .Query}}{{if ne $k "page"}}{{$k}}={{$v}}&{{end}}{{end}}" class="btn-secondary text-xs px-3 py-1">← Prev</a>{{end}}
-      <a href="?page={{add $pageNum 1}}&{{range $k,$v := .Query}}{{if ne $k "page"}}{{$k}}={{$v}}&{{end}}{{end}}" class="btn-secondary text-xs px-3 py-1">Next →</a>
+  <div style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #18181b;">
+    <span style="font-size:12px;color:#52525b;">{{$total}} total</span>
+    <div style="display:flex;gap:6px;">
+      {{if gt $p 1}}<a href="?page={{sub $p 1}}&{{range $k,$v := .Query}}{{if ne $k "page"}}{{$k}}={{$v}}&{{end}}{{end}}" class="btn btn-secondary btn-sm">← Prev</a>{{end}}
+      <a href="?page={{add $p 1}}&{{range $k,$v := .Query}}{{if ne $k "page"}}{{$k}}={{$v}}&{{end}}{{end}}" class="btn btn-secondary btn-sm">Next →</a>
     </div>
   </div>
   {{end}}
+</div>
 </div>
 {{end}}

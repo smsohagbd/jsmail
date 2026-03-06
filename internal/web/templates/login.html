@@ -1,33 +1,34 @@
-{{define "title"}}Login — MailServer{{end}}
+{{define "title"}}Sign in — MailServer{{end}}
 {{define "body"}}
-<div class="min-h-screen flex items-center justify-center bg-slate-950">
-  <div class="w-full max-w-md">
-    <div class="text-center mb-8">
-      <div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl mb-4">
-        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-        </svg>
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#09090b;">
+  <div style="width:100%;max-width:380px;padding:0 16px;">
+    <!-- Logo -->
+    <div style="text-align:center;margin-bottom:32px;">
+      <div style="width:48px;height:48px;background:#6366f1;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;">
+        <svg width="22" height="22" fill="none" stroke="#fff" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
       </div>
-      <h1 class="text-2xl font-bold text-white">MailServer</h1>
-      <p class="text-slate-400 text-sm mt-1">Sign in to your account</p>
+      <div style="font-size:22px;font-weight:700;color:#fafafa;">MailServer</div>
+      <div style="font-size:13px;color:#71717a;margin-top:4px;">Sign in to continue</div>
     </div>
-    <div class="bg-slate-800 rounded-2xl p-8 border border-slate-700 shadow-2xl">
+
+    <!-- Card -->
+    <div class="card" style="padding:28px;">
       {{if .Error}}
-      <div class="bg-red-900/50 border border-red-700 text-red-300 rounded-lg px-4 py-3 mb-5 text-sm">{{.Error}}</div>
+      <div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;border-radius:8px;padding:10px 14px;margin-bottom:20px;font-size:13px;">{{.Error}}</div>
       {{end}}
-      <form method="POST" action="/login" class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-slate-300 mb-1.5">Username</label>
-          <input type="text" name="username" placeholder="admin" required autofocus/>
+      <form method="POST" action="/login">
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input class="form-input" type="text" name="username" placeholder="admin" required autofocus/>
         </div>
-        <div>
-          <label class="block text-sm font-medium text-slate-300 mb-1.5">Password</label>
-          <input type="password" name="password" placeholder="••••••••" required/>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" type="password" name="password" placeholder="••••••••" required/>
         </div>
-        <button type="submit" class="btn-primary w-full py-2.5 mt-2">Sign In</button>
+        <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:10px;">Sign in</button>
       </form>
-      <div class="mt-5 text-center text-sm text-slate-500">
-        Don't have an account? <a href="/register" class="text-indigo-400 hover:text-indigo-300">Register</a>
+      <div style="margin-top:18px;text-align:center;font-size:13px;color:#71717a;">
+        No account? <a href="/register" style="color:#818cf8;">Register</a>
       </div>
     </div>
   </div>

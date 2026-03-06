@@ -1,63 +1,63 @@
 {{define "title"}}Queue — Admin{{end}}
 {{define "content"}}
-<div class="mb-6">
-  <h1 class="text-2xl font-bold text-white">Queue</h1>
-  <p class="text-slate-400 text-sm mt-1">Pending and deferred messages</p>
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">Queue</div>
+  <div class="page-sub">Pending and deferred messages</div>
+</div>
+<div class="page-body">
+
+<div class="stat-grid" style="grid-template-columns:repeat(4,1fr);">
+  <div class="stat-card blue">
+    <div class="stat-icon blue"><svg width="18" height="18" fill="none" stroke="#60a5fa" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+    <div class="stat-value">{{.QueueStats.Pending}}</div>
+    <div class="stat-label">Pending</div>
+  </div>
+  <div class="stat-card indigo">
+    <div class="stat-icon indigo"><svg width="18" height="18" fill="none" stroke="#818cf8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></div>
+    <div class="stat-value">{{.QueueStats.Inflight}}</div>
+    <div class="stat-label">In-flight</div>
+  </div>
+  <div class="stat-card amber">
+    <div class="stat-icon amber"><svg width="18" height="18" fill="none" stroke="#fbbf24" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></div>
+    <div class="stat-value">{{.QueueStats.Deferred}}</div>
+    <div class="stat-label">Deferred</div>
+  </div>
+  <div class="stat-card red">
+    <div class="stat-icon red"><svg width="18" height="18" fill="none" stroke="#f87171" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></div>
+    <div class="stat-value">{{.QueueStats.Failed}}</div>
+    <div class="stat-label">Failed</div>
+  </div>
 </div>
 
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Pending</p>
-    <p class="text-3xl font-bold text-blue-400">{{.QueueStats.Pending}}</p>
-  </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">In-flight</p>
-    <p class="text-3xl font-bold text-indigo-400">{{.QueueStats.Inflight}}</p>
-  </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Deferred</p>
-    <p class="text-3xl font-bold text-yellow-400">{{.QueueStats.Deferred}}</p>
-  </div>
-  <div class="stat-card">
-    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Failed</p>
-    <p class="text-3xl font-bold text-red-400">{{.QueueStats.Failed}}</p>
-  </div>
-</div>
-
-<div class="stat-card">
-  <h3 class="text-sm font-semibold text-slate-300 mb-4">Active Queue</h3>
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
-        <th class="pb-3 pr-4">User</th>
-        <th class="pb-3 pr-4">From</th>
-        <th class="pb-3 pr-4">To</th>
-        <th class="pb-3 pr-4">Status</th>
-        <th class="pb-3 pr-4">Queued At</th>
-        <th class="pb-3 pr-4">Error</th>
-        <th class="pb-3">Actions</th>
+<div class="card">
+  <div class="card-header"><span class="card-title">Active Queue</span></div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">User</th><th>From</th><th>To</th><th>Status</th><th>Queued At</th><th>Error</th><th style="padding-right:20px;"></th>
       </tr></thead>
-      <tbody class="divide-y divide-slate-800">
+      <tbody>
         {{range .Logs}}
-        <tr class="text-slate-300">
-          <td class="py-2.5 pr-4 text-xs text-slate-500">{{.Username}}</td>
-          <td class="py-2.5 pr-4 text-xs truncate max-w-[120px]">{{.From}}</td>
-          <td class="py-2.5 pr-4 text-xs truncate max-w-[120px]">{{.To}}</td>
-          <td class="py-2.5 pr-4"><span class="badge-{{.Status}}">{{.Status}}</span></td>
-          <td class="py-2.5 pr-4 text-xs text-slate-500">{{.CreatedAt.Format "Jan 2 15:04"}}</td>
-          <td class="py-2.5 pr-4 text-xs text-red-400 truncate max-w-[160px]">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
-          <td class="py-2.5">
+        <tr>
+          <td style="padding-left:20px;font-size:12px;color:#52525b;">{{.Username}}</td>
+          <td class="truncate-cell" style="font-size:12px;" title="{{.From}}">{{.From}}</td>
+          <td class="truncate-cell" style="font-size:12px;" title="{{.Recipient}}">{{.Recipient}}</td>
+          <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+          <td style="font-size:12px;color:#52525b;white-space:nowrap;">{{.CreatedAt.Format "Jan 2 15:04"}}</td>
+          <td style="font-size:11px;color:#f87171;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{if .Error}}{{.Error}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="padding-right:20px;">
             <form method="POST" action="/admin/queue/delete" onsubmit="return confirm('Remove from queue?')">
               <input type="hidden" name="message_id" value="{{.MessageID}}"/>
-              <button class="btn-danger">Remove</button>
+              <button type="submit" class="btn btn-danger">Remove</button>
             </form>
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="7" class="py-8 text-center text-slate-600">Queue is empty</td></tr>
+        <tr><td colspan="7" class="empty-state" style="padding-left:20px;">Queue is empty</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
+</div>
 </div>
 {{end}}
