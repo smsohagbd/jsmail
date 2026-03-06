@@ -3,10 +3,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
 
-HOST = "mail.fedcontractingacademy.com"
+HOST = "server.arrowmarketingesp.com"
 PORT = 1069
 
-FROM    = "smsohag@fedcontractingacademy.com"
+FROM    = "smsohag@arrowmarketingesp.com"
 TO      = "test-4e9ebymx8@srv1.mail-tester.com"          # <-- change to your test address
 SUBJECT = "Test from my SMTP server"
 BODY    = "Hello! This email was sent from my own SMTP server."
