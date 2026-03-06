@@ -15,9 +15,10 @@ import (
 
 // Server exposes an HTTP API for injecting messages into the queue.
 type Server struct {
-	cfg      config.APIConfig
-	queue    *queue.Queue
-	verifier *verifier.Verifier
+	cfg       config.APIConfig
+	queue     *queue.Queue
+	verifier  *verifier.Verifier
+	startedAt time.Time
 }
 
 func New(cfg config.APIConfig, q *queue.Queue, heloName string) *Server {
@@ -25,7 +26,7 @@ func New(cfg config.APIConfig, q *queue.Queue, heloName string) *Server {
 		HeloName:       heloName,
 		ConnectTimeout: 10 * time.Second,
 	})
-	return &Server{cfg: cfg, queue: q, verifier: v}
+	return &Server{cfg: cfg, queue: q, verifier: v, startedAt: time.Now()}
 }
 
 func (s *Server) Start() {
@@ -131,7 +132,39 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[API]   GET /health from %s", r.RemoteAddr)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	uptime := time.Since(s.startedAt)
+	qStats := s.queue.Stats()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"version": "1.0.0",
+		"uptime":  formatUptime(uptime),
+		"uptime_seconds": int(uptime.Seconds()),
+		"started_at": s.startedAt.UTC().Format(time.RFC3339),
+		"queue": map[string]any{
+			"pending":  qStats.Pending,
+			"inflight": qStats.Inflight,
+			"deferred": qStats.Deferred,
+			"failed":   qStats.Failed,
+			"total":    qStats.Total,
+		},
+	})
+}
+
+func formatUptime(d time.Duration) string {
+	d = d.Round(time.Second)
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+	seconds := int(d.Seconds()) % 60
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm %ds", days, hours, minutes, seconds)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm %ds", hours, minutes, seconds)
+	}
+	return fmt.Sprintf("%dm %ds", minutes, seconds)
 }
 
 // buildRFC5322 constructs a minimal RFC 5322 message from a SendRequest.

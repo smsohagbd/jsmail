@@ -220,6 +220,60 @@ func (q *Queue) msgPath(id string) string {
 	return filepath.Join(q.dir, id+".json")
 }
 
+// Stats holds queue counts per status.
+type Stats struct {
+	Pending  int `json:"pending"`
+	Inflight int `json:"inflight"`
+	Deferred int `json:"deferred"`
+	Failed   int `json:"failed"`
+	Total    int `json:"total"`
+}
+
+// Stats returns a snapshot of message counts by status.
+func (q *Queue) Stats() Stats {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	var s Stats
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return s
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+		switch msg.Status {
+		case StatusPending:
+			s.Pending++
+		case StatusInflight:
+			s.Inflight++
+		case StatusDeferred:
+			s.Deferred++
+		}
+		s.Total++
+	}
+
+	// Count failed messages in the failed/ subdirectory.
+	failedEntries, err := os.ReadDir(filepath.Join(q.dir, "failed"))
+	if err == nil {
+		for _, e := range failedEntries {
+			if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+				s.Failed++
+			}
+		}
+	}
+	return s
+}
+
 func generateID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
