@@ -399,6 +399,14 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 			}
 			log.Printf("[DELIVERY] ✗ MX %s:%s failed: %v", mx.Host, port, mxErr)
 
+			// 5xx permanent failure (mailbox not found, user rejected, etc.) —
+			// all MX hosts will give the same answer, so stop immediately and
+			// return the 5xx error so the caller can hard-bounce.
+			if isPermanentSMTPError(mxErr) {
+				log.Printf("[DELIVERY] ✗ permanent 5xx from %s — stopping MX attempts for %q", mx.Host, domain)
+				return "", mxErr
+			}
+
 			if isTempRateLimitError(mxErr) {
 				lastMXErr = mxErr
 				// Continue to next MX/port, but remember all were rate-limited.

@@ -207,8 +207,23 @@ func (h *Handler) DeleteLogs(w http.ResponseWriter, r *http.Request) {
 	scope := r.FormValue("scope") // today | yesterday | 7days | all | id
 	if scope == "id" {
 		id, _ := strconv.Atoi(r.FormValue("id"))
+		var log appdb.EmailLog
+		if err := h.DB.First(&log, id).Error; err == nil {
+			// Cancel the queue entry so delivery stops.
+			if log.Status == "queued" || log.Status == "deferred" {
+				h.Queue.CancelByMessageID(log.MessageID)
+			}
+		}
 		h.DB.Delete(&appdb.EmailLog{}, id)
 	} else {
+		// Collect message IDs that are still in-flight before deleting.
+		var pending []appdb.EmailLog
+		pq := h.DB.Model(&appdb.EmailLog{}).Where("status IN ?", []string{"queued", "deferred"})
+		pq, _ = applyLogFilters(pq, r)
+		pq.Find(&pending)
+		for _, l := range pending {
+			h.Queue.CancelByMessageID(l.MessageID)
+		}
 		q := h.DB.Model(&appdb.EmailLog{})
 		q, _ = applyLogFilters(q, r)
 		q.Delete(&appdb.EmailLog{})
