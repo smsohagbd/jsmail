@@ -758,23 +758,37 @@ func (h *Handler) SSL(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	certPath := h.ConfigSnapshot["tls_cert_file"]
 	keyPath := h.ConfigSnapshot["tls_key_file"]
+	tlsMode := h.ConfigSnapshot["tls_mode"]
 	if certPath == "" {
 		certPath = "certs/server.crt"
 	}
 	if keyPath == "" {
 		keyPath = "certs/server.key"
 	}
+	if tlsMode == "" {
+		tlsMode = "starttls"
+	}
+
+	// Warn if the cert is cert.pem (no chain) instead of fullchain.pem.
+	certWarning := ""
+	if strings.HasSuffix(certPath, "/cert.pem") {
+		suggested := strings.TrimSuffix(certPath, "/cert.pem") + "/fullchain.pem"
+		certWarning = "You are using cert.pem which does not include the intermediate CA chain. Most clients will reject this. Use fullchain.pem instead: " + suggested
+	}
+
 	h.Tmpl.Render(w, "admin/ssl", map[string]interface{}{
-		"Page":         "ssl",
-		"ActiveUser":   claims.Username,
-		"TLSEnabled":   h.ConfigSnapshot["tls_enabled"] == "true",
-		"CertPath":     certPath,
-		"KeyPath":      keyPath,
-		"CertInfo":     loadCertInfo(certPath),
-		"Candidates":   findExistingCerts(),
-		"FlashOK":      r.URL.Query().Get("ok"),
-		"FlashErr":     r.URL.Query().Get("err"),
-		"HeloName":     h.ConfigSnapshot["smtp_domain"],
+		"Page":        "ssl",
+		"ActiveUser":  claims.Username,
+		"TLSEnabled":  h.ConfigSnapshot["tls_enabled"] == "true",
+		"TLSMode":     tlsMode,
+		"CertPath":    certPath,
+		"KeyPath":     keyPath,
+		"CertInfo":    loadCertInfo(certPath),
+		"CertWarning": certWarning,
+		"Candidates":  findExistingCerts(),
+		"FlashOK":     r.URL.Query().Get("ok"),
+		"FlashErr":    r.URL.Query().Get("err"),
+		"HeloName":    h.ConfigSnapshot["smtp_domain"],
 	})
 }
 
@@ -794,16 +808,28 @@ func (h *Handler) SaveTLSConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	certFile := strings.TrimSpace(r.FormValue("cert_file"))
 	keyFile := strings.TrimSpace(r.FormValue("key_file"))
+	tlsMode := r.FormValue("tls_mode")
+	if tlsMode != "implicit" {
+		tlsMode = "starttls"
+	}
 	enabled := r.FormValue("tls_enabled") == "on"
 
-	// Validate cert + key match before touching the config.
+	// Auto-fix: if user chose cert.pem, silently upgrade to fullchain.pem if it exists.
+	if strings.HasSuffix(certFile, "/cert.pem") {
+		full := strings.TrimSuffix(certFile, "/cert.pem") + "/fullchain.pem"
+		if _, err := os.Stat(full); err == nil {
+			certFile = full
+		}
+	}
+
+	// Validate cert + key pair before touching the config.
 	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
 		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape("cert/key validation failed: "+err.Error()), http.StatusFound)
 		return
 	}
 
 	// Update config.yaml in-place (preserves comments and all other settings).
-	if err := patchConfigTLS(h.ConfigPath, enabled, certFile, keyFile); err != nil {
+	if err := patchConfigTLS(h.ConfigPath, enabled, certFile, keyFile, tlsMode); err != nil {
 		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape("failed to save config: "+err.Error()), http.StatusFound)
 		return
 	}
@@ -812,13 +838,14 @@ func (h *Handler) SaveTLSConfig(w http.ResponseWriter, r *http.Request) {
 	h.ConfigSnapshot["tls_enabled"] = boolStr(enabled)
 	h.ConfigSnapshot["tls_cert_file"] = certFile
 	h.ConfigSnapshot["tls_key_file"] = keyFile
+	h.ConfigSnapshot["tls_mode"] = tlsMode
 
 	http.Redirect(w, r, "/admin/ssl?ok=TLS+config+saved+—+restart+the+server+to+apply", http.StatusFound)
 }
 
 // patchConfigTLS rewrites only the smtp.tls.* lines in config.yaml while
 // preserving every other line, comment, and indentation.
-func patchConfigTLS(configPath string, enabled bool, certFile, keyFile string) error {
+func patchConfigTLS(configPath string, enabled bool, certFile, keyFile, mode string) error {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
@@ -826,12 +853,12 @@ func patchConfigTLS(configPath string, enabled bool, certFile, keyFile string) e
 
 	lines := strings.Split(string(raw), "\n")
 	inSMTP, inTLS := false, false
+	modePatched := false
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 
-		// Section tracking.
 		if trimmed == "smtp:" {
 			inSMTP, inTLS = true, false
 			continue
@@ -840,7 +867,6 @@ func patchConfigTLS(configPath string, enabled bool, certFile, keyFile string) e
 			inTLS = true
 			continue
 		}
-		// Exit tls block when indentation decreases.
 		if inTLS && len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
 			inTLS, inSMTP = false, false
 		}
@@ -853,6 +879,33 @@ func patchConfigTLS(configPath string, enabled bool, certFile, keyFile string) e
 				lines[i] = indent + `cert_file: "` + certFile + `"`
 			case strings.HasPrefix(trimmed, "key_file:"):
 				lines[i] = indent + `key_file: "` + keyFile + `"`
+			case strings.HasPrefix(trimmed, "mode:"):
+				lines[i] = indent + `mode: "` + mode + `"`
+				modePatched = true
+			}
+		}
+	}
+
+	// If mode: line doesn't exist yet, insert it after key_file: inside the tls block.
+	if !modePatched {
+		inSMTP2, inTLS2 := false, false
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "smtp:" {
+				inSMTP2, inTLS2 = true, false
+				continue
+			}
+			if inSMTP2 && trimmed == "tls:" {
+				inTLS2 = true
+				continue
+			}
+			if inTLS2 && strings.HasPrefix(trimmed, "key_file:") {
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				lines = append(lines[:i+1], append([]string{indent + `mode: "` + mode + `"`}, lines[i+1:]...)...)
+				break
+			}
+			if inTLS2 && len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+				inTLS2, inSMTP2 = false, false
 			}
 		}
 	}

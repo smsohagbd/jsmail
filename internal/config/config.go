@@ -39,6 +39,10 @@ type TLSConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
+	// Mode: "starttls" (plain SMTP + STARTTLS upgrade, port 587) or
+	//       "implicit"  (SSL/TLS from first byte, port 465)
+	// Default is "starttls".
+	Mode string `yaml:"mode"`
 }
 
 type AuthConfig struct {

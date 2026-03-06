@@ -154,6 +154,9 @@ func (s *session) Logout() error {
 }
 
 // Start launches the SMTP server and blocks until it fails.
+// Supports two TLS modes:
+//   - "starttls"  (default) — plain SMTP on the port, STARTTLS upgrade available (RFC 3207)
+//   - "implicit"            — SSL/TLS wraps the connection from the first byte (SMTPS, port 465)
 func Start(cfg config.SMTPConfig, q *queue.Queue) error {
 	lookup := func(username, password string) bool {
 		_, ok := appdb.CheckPassword(username, password)
@@ -168,19 +171,42 @@ func Start(cfg config.SMTPConfig, q *queue.Queue) error {
 	srv.ReadTimeout = 60 * time.Second
 	srv.MaxMessageBytes = cfg.MaxMessageSize
 	srv.MaxRecipients = 50
-	srv.AllowInsecureAuth = !cfg.TLS.Enabled
+	// Always allow auth — the server already requires authentication for every
+	// submission regardless of whether the transport is encrypted. Clients on
+	// non-standard ports (e.g. 1069) that cannot do STARTTLS must still be able
+	// to authenticate so they can submit mail.
+	srv.AllowInsecureAuth = true
+
+	tlsMode := cfg.TLS.Mode
+	if tlsMode == "" {
+		tlsMode = "starttls"
+	}
 
 	if cfg.TLS.Enabled {
 		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 		if err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
+			return fmt.Errorf("load TLS certificate (%s): %w", cfg.TLS.CertFile, err)
 		}
-		srv.TLSConfig = &tls.Config{
+		tlsCfg := &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			MinVersion:   tls.VersionTLS12,
 		}
+
+		switch tlsMode {
+		case "implicit":
+			// SMTPS — TLS wraps the whole connection (like port 465).
+			// Clients must connect with SSL/TLS enabled from the start.
+			srv.TLSConfig = tlsCfg
+			log.Printf("server: SMTP listening on %s (domain=%s, mode=implicit-TLS)", cfg.ListenAddr, cfg.Domain)
+			return srv.ListenAndServeTLS()
+		default: // "starttls"
+			// Plain SMTP that advertises STARTTLS; clients upgrade inside the session.
+			srv.TLSConfig = tlsCfg
+			log.Printf("server: SMTP listening on %s (domain=%s, mode=STARTTLS)", cfg.ListenAddr, cfg.Domain)
+			return srv.ListenAndServe()
+		}
 	}
 
-	log.Printf("server: SMTP listening on %s (domain=%s, tls=%v)", cfg.ListenAddr, cfg.Domain, cfg.TLS.Enabled)
+	log.Printf("server: SMTP listening on %s (domain=%s, tls=disabled)", cfg.ListenAddr, cfg.Domain)
 	return srv.ListenAndServe()
 }

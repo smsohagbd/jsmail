@@ -10,6 +10,11 @@
 
 {{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
 {{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+{{if .CertWarning}}<div style="background:#1c1107;border:1px solid #78350f;color:#fbbf24;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">
+  ⚠ <strong>Wrong certificate file!</strong> {{.CertWarning}}
+  <button type="button" style="margin-left:10px;font-size:11px;background:#78350f;border:none;color:#fef3c7;padding:3px 8px;border-radius:4px;cursor:pointer;"
+    onclick="document.getElementById('cert-path').value='{{.CertPath | js}}'.replace('/cert.pem','/fullchain.pem');this.parentElement.style.display='none'">Auto-fix path</button>
+</div>{{end}}
 
 <!-- Status bar -->
 <div class="card" style="margin-bottom:16px;padding:16px 20px;display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
@@ -84,6 +89,27 @@
             placeholder="/etc/letsencrypt/live/example.com/privkey.pem"/>
         </div>
       </div>
+      <!-- TLS Mode -->
+      <div style="margin-bottom:16px;">
+        <label class="form-label">TLS Mode</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px;">
+          <label id="mode-starttls" style="display:flex;align-items:flex-start;gap:10px;background:#09090b;border:2px solid {{if eq .TLSMode "implicit"}}#27272a{{else}}#818cf8{{end}};border-radius:8px;padding:12px;cursor:pointer;" onclick="setMode('starttls')">
+            <input type="radio" name="tls_mode" value="starttls" {{if ne .TLSMode "implicit"}}checked{{end}} style="margin-top:2px;accent-color:#818cf8;" onchange="setMode('starttls')"/>
+            <div>
+              <div style="font-size:13px;font-weight:600;color:#e4e4e7;">STARTTLS <span style="font-size:11px;color:#71717a;font-weight:400;">(port 587, recommended)</span></div>
+              <div style="font-size:11px;color:#52525b;margin-top:3px;">Plain TCP first, then upgrades to TLS. Standard for submission. Use when your mail client is set to <em>STARTTLS</em> or <em>TLS (if available)</em>.</div>
+            </div>
+          </label>
+          <label id="mode-implicit" style="display:flex;align-items:flex-start;gap:10px;background:#09090b;border:2px solid {{if eq .TLSMode "implicit"}}#818cf8{{else}}#27272a{{end}};border-radius:8px;padding:12px;cursor:pointer;" onclick="setMode('implicit')">
+            <input type="radio" name="tls_mode" value="implicit" {{if eq .TLSMode "implicit"}}checked{{end}} style="margin-top:2px;accent-color:#818cf8;" onchange="setMode('implicit')"/>
+            <div>
+              <div style="font-size:13px;font-weight:600;color:#e4e4e7;">Implicit TLS / SMTPS <span style="font-size:11px;color:#71717a;font-weight:400;">(port 465)</span></div>
+              <div style="font-size:11px;color:#52525b;margin-top:3px;">TLS from the very first byte. Use when your mail client is set to <em>SSL/TLS</em>. Clients connecting without SSL will be immediately rejected.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
           <input type="checkbox" name="tls_enabled" {{if .TLSEnabled}}checked{{end}}
@@ -190,6 +216,10 @@
 </div>
 
 <script>
+function setMode(m) {
+  document.getElementById('mode-starttls').style.borderColor = m === 'starttls' ? '#818cf8' : '#27272a';
+  document.getElementById('mode-implicit').style.borderColor = m === 'implicit'  ? '#818cf8' : '#27272a';
+}
 function selectCert(cert, key) {
   document.getElementById('cert-path').value = cert;
   document.getElementById('key-path').value = key;

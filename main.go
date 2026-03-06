@@ -106,6 +106,7 @@ func main() {
 		"tls_enabled":     boolStr(cfg.SMTP.TLS.Enabled),
 		"tls_cert_file":   cfg.SMTP.TLS.CertFile,
 		"tls_key_file":    cfg.SMTP.TLS.KeyFile,
+		"tls_mode":        cfg.SMTP.TLS.Mode,
 		"dkim_enabled":    boolStr(cfg.Delivery.DKIM.Enabled),
 		"max_retries":     strconv.Itoa(cfg.Delivery.MaxRetries),
 		"connect_timeout": cfg.Delivery.ConnectTimeout,
