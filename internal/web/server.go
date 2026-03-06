@@ -114,6 +114,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/throttle/save", webauth.RequireAdmin(ah.SaveThrottle))
 	mux.HandleFunc("/admin/throttle/delete", webauth.RequireAdmin(ah.DeleteThrottle))
 	mux.HandleFunc("/admin/settings", webauth.RequireAdmin(ah.Settings))
+	mux.HandleFunc("/admin/reports", webauth.RequireAdmin(ah.Reports))
+	mux.HandleFunc("/admin/bounce/remove", webauth.RequireAdmin(ah.RemoveBounce))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer}
@@ -124,6 +126,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/verify", webauth.RequireUser(uh.Verify))
 	mux.HandleFunc("/user/verify/single", webauth.RequireUser(uh.VerifySingle))
 	mux.HandleFunc("/user/verify/bulk", webauth.RequireUser(uh.VerifyBulk))
+	mux.HandleFunc("/user/reports", webauth.RequireUser(uh.Reports))
 
 	log.Printf("web: UI server listening on %s", s.addr)
 	if err := http.ListenAndServe(s.addr, mux); err != nil {

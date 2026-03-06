@@ -55,6 +55,8 @@ func main() {
 			appdb.LogFailed(evt.MessageID, evt.To, evt.Error)
 		case "deferred":
 			appdb.LogDeferred(evt.MessageID, evt.To, evt.Error)
+		case "hard_bounce":
+			appdb.LogHardBounce(evt.MessageID, evt.To, evt.Error)
 		}
 	}
 

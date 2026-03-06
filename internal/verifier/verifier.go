@@ -127,8 +127,8 @@ func (v *Verifier) Verify(email string) Result {
 		r.Checks.SMTPConnect = StatusPass
 		if catchAll {
 			r.Checks.Mailbox = StatusUnknown
-			r.Valid = true
-			r.Reason = "catch-all domain — cannot verify individual mailbox"
+			r.Valid = false // catch-all: cannot confirm mailbox exists
+			r.Reason = "catch-all server — individual mailbox cannot be verified (high bounce risk)"
 		} else {
 			r.Checks.Mailbox = StatusPass
 			r.Valid = true
@@ -244,7 +244,10 @@ func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, bool) {
 	domain := email[strings.Index(email, "@")+1:]
 	randAddr := fmt.Sprintf("verify-%s@%s", randomHex(8), domain)
 
-	catchAll := rcptProbe(client, randAddr) == probeExists
+	randResult := rcptProbe(client, randAddr)
+	// If server accepts the random address → definitely catch-all.
+	// If server is unknown/evasive (won't tell us) → assume catch-all to be safe.
+	catchAll := randResult == probeExists || randResult == probeUnknown
 	client.Reset()
 	return probeExists, catchAll
 }

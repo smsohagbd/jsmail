@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -13,6 +14,18 @@ import (
 	"smtp-server/internal/queue"
 	webauth "smtp-server/internal/web/auth"
 )
+
+// flatQuery converts url.Values (map[string][]string) to map[string]string
+// so Go templates can compare values with eq without type errors.
+func flatQuery(v url.Values) map[string]string {
+	m := make(map[string]string, len(v))
+	for k, vals := range v {
+		if len(vals) > 0 {
+			m[k] = vals[0]
+		}
+	}
+	return m
+}
 
 
 type Handler struct {
@@ -174,7 +187,7 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 		"PageNum":   page,
 		"PerPage":   perPage,
 		"DateLabel": dateLabel,
-		"Query":     r.URL.Query(),
+		"Query":     flatQuery(r.URL.Query()),
 	})
 }
 
@@ -295,4 +308,111 @@ func (h *Handler) Settings(w http.ResponseWriter, r *http.Request) {
 		"ActiveUser": claims.Username,
 		"Settings":   h.ConfigSnapshot,
 	})
+}
+
+// ──────────────────────────── Reports ────────────────────────────────────────
+
+type domainStat struct {
+	Domain string
+	Count  int64
+}
+
+type senderStat struct {
+	Username string
+	Count    int64
+}
+
+func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+
+	// Overall totals.
+	var totalSent, delivered, hardBounce, softBounce, failed, deferred, queued, bounceListTotal int64
+	h.DB.Model(&appdb.EmailLog{}).Count(&totalSent)
+	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "delivered").Count(&delivered)
+	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "hard_bounce").Count(&hardBounce)
+	h.DB.Model(&appdb.EmailLog{}).Where("status IN ?", []string{"soft_bounce", "deferred"}).Count(&softBounce)
+	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "failed").Count(&failed)
+	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "deferred").Count(&deferred)
+	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "queued").Count(&queued)
+	h.DB.Model(&appdb.BounceList{}).Count(&bounceListTotal)
+
+	// Delivery rate (non-queued/deferred attempts).
+	attempted := totalSent - queued - deferred
+	var deliveryRate float64
+	if attempted > 0 {
+		deliveryRate = float64(delivered) / float64(attempted) * 100
+	}
+
+	// Top 10 recipient domains.
+	type domainRow struct {
+		Domain string
+		Count  int64
+	}
+	var topDomains []domainRow
+	h.DB.Raw(`SELECT substr(recipient, instr(recipient,'@')+1) AS domain, COUNT(*) AS count
+		FROM email_logs WHERE deleted_at IS NULL
+		GROUP BY domain ORDER BY count DESC LIMIT 10`).Scan(&topDomains)
+
+	// Top 10 senders.
+	var topSenders []struct {
+		Username string
+		Count    int64
+	}
+	h.DB.Model(&appdb.EmailLog{}).
+		Select("username, COUNT(*) as count").
+		Group("username").Order("count DESC").Limit(10).Scan(&topSenders)
+
+	// Last 30 days delivery chart.
+	today := time.Now().Truncate(24 * time.Hour)
+	days := 30
+	chartLabels := make([]string, days)
+	chartDelivered := make([]int64, days)
+	chartBounced := make([]int64, days)
+	for i := days - 1; i >= 0; i-- {
+		day := today.AddDate(0, 0, -i)
+		idx := days - 1 - i
+		chartLabels[idx] = day.Format("Jan 2")
+		h.DB.Model(&appdb.EmailLog{}).
+			Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "delivered").
+			Count(&chartDelivered[idx])
+		h.DB.Model(&appdb.EmailLog{}).
+			Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "hard_bounce").
+			Count(&chartBounced[idx])
+	}
+	labelsJSON, _ := json.Marshal(chartLabels)
+	deliveredJSON, _ := json.Marshal(chartDelivered)
+	bouncedJSON, _ := json.Marshal(chartBounced)
+
+	// Recent hard bounces.
+	var recentBounces []appdb.BounceList
+	h.DB.Order("last_seen_at DESC").Limit(20).Find(&recentBounces)
+
+	h.Tmpl.Render(w, "admin/reports", map[string]interface{}{
+		"Page":             "reports",
+		"ActiveUser":       claims.Username,
+		"TotalSent":        totalSent,
+		"Delivered":        delivered,
+		"HardBounce":       hardBounce,
+		"SoftBounce":       softBounce,
+		"Failed":           failed,
+		"Deferred":         deferred,
+		"Queued":           queued,
+		"BounceListTotal":  bounceListTotal,
+		"DeliveryRate":     deliveryRate,
+		"TopDomains":       topDomains,
+		"TopSenders":       topSenders,
+		"ChartLabels":      string(labelsJSON),
+		"ChartDelivered":   string(deliveredJSON),
+		"ChartBounced":     string(bouncedJSON),
+		"RecentBounces":    recentBounces,
+	})
+}
+
+// RemoveBounce removes an address from the suppression list.
+func (h *Handler) RemoveBounce(w http.ResponseWriter, r *http.Request) {
+	email := r.FormValue("email")
+	if email != "" {
+		appdb.RemoveFromBounceList(email)
+	}
+	http.Redirect(w, r, "/admin/reports", http.StatusFound)
 }

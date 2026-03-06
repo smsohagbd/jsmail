@@ -56,3 +56,13 @@ type Setting struct {
 	Key   string `gorm:"uniqueIndex"`
 	Value string
 }
+
+// BounceList records permanently invalid email addresses (hard bounces).
+// Addresses in this list are rejected at RCPT TO time.
+type BounceList struct {
+	gorm.Model
+	Email      string `gorm:"uniqueIndex;not null"`
+	Reason     string
+	BounceCount int
+	LastSeenAt time.Time
+}

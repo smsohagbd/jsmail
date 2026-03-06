@@ -64,9 +64,9 @@
         <tr>
           <td style="padding-left:20px;font-family:monospace;font-size:12px;">{{.Email}}</td>
           <td>{{if .Valid}}<span style="color:#4ade80;font-weight:600;">✓</span>{{else}}<span style="color:#f87171;font-weight:600;">✗</span>{{end}}</td>
-          <td>{{if .Checks.Format}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#f87171;font-size:12px;">fail</span>{{end}}</td>
-          <td>{{if .Checks.MXExists}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#f87171;font-size:12px;">fail</span>{{end}}</td>
-          <td>{{if .Checks.SMTPConnects}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#52525b;font-size:12px;">—</span>{{end}}</td>
+          <td>{{if eq .Checks.Format "pass"}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#f87171;font-size:12px;">fail</span>{{end}}</td>
+          <td>{{if eq .Checks.MXExists "pass"}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else}}<span style="color:#f87171;font-size:12px;">fail</span>{{end}}</td>
+          <td>{{if eq .Checks.SMTPConnect "pass"}}<span style="color:#4ade80;font-size:12px;">ok</span>{{else if eq .Checks.SMTPConnect "fail"}}<span style="color:#f87171;font-size:12px;">fail</span>{{else}}<span style="color:#52525b;font-size:12px;">—</span>{{end}}</td>
           <td>{{if .IsDisposable}}<span style="color:#fbbf24;font-size:12px;">yes</span>{{else}}<span style="color:#3f3f46;font-size:12px;">no</span>{{end}}</td>
           <td>{{if .IsCatchAll}}<span style="color:#fbbf24;font-size:12px;">yes</span>{{else}}<span style="color:#3f3f46;font-size:12px;">no</span>{{end}}</td>
           <td style="font-size:12px;color:#71717a;padding-right:20px;">{{if .Reason}}{{.Reason}}{{else}}—{{end}}</td>
@@ -100,14 +100,28 @@ async function verifySingle() {
       badge.textContent = '✗ Invalid — ' + (d.reason || 'unknown');
     }
     const checks = document.getElementById('single-checks');
-    const row = (label, ok, na) => `<div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:#71717a;">${label}</span><span style="font-size:12px;font-weight:600;color:${na?'#52525b':ok?'#4ade80':'#f87171'}">${na?'—':ok?'✓':'✗'}</span></div>`;
+    // Check values are strings: "pass" | "fail" | "unknown"
+    const pass = v => v === 'pass';
+    const fail = v => v === 'fail';
+    const unknown = v => !v || v === 'unknown';
+    const row = (label, val, isPositiveBad) => {
+      let icon, color;
+      if (unknown(val))      { icon='—'; color='#52525b'; }
+      else if (pass(val))    { icon='✓'; color= isPositiveBad ? '#f87171' : '#4ade80'; }
+      else                   { icon='✗'; color= isPositiveBad ? '#4ade80' : '#f87171'; }
+      return `<div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:#71717a;">${label}</span><span style="font-size:12px;font-weight:600;color:${color}">${icon}</span></div>`;
+    };
+    const boolRow = (label, bool, okWhenFalse) => {
+      const ok = okWhenFalse ? !bool : !!bool;
+      return `<div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;"><span style="font-size:12px;color:#71717a;">${label}</span><span style="font-size:12px;font-weight:600;color:${ok?'#4ade80':'#f87171'}">${ok?'✓':'✗'}</span></div>`;
+    };
     checks.innerHTML =
-      row('Format', d.checks?.format) +
-      row('MX Record', d.checks?.mx_exists) +
-      row('SMTP Connect', d.checks?.smtp_connects, !d.checks?.smtp_connects && !d.checks?.mx_exists) +
-      row('Mailbox', d.checks?.rcpt_accepted, !d.checks?.rcpt_accepted && !d.checks?.smtp_connects) +
-      row('Disposable', !d.is_disposable) +
-      row('Catch-All', !d.is_catch_all);
+      row('Format',       d.checks?.format) +
+      row('MX Record',    d.checks?.mx_exists) +
+      row('SMTP Connect', d.checks?.smtp_connect) +
+      row('Mailbox',      d.checks?.mailbox) +
+      boolRow('Disposable', d.is_disposable, true) +
+      boolRow('Catch-All',  d.is_catch_all,  true);
     const mxDiv = document.getElementById('single-mx');
     mxDiv.innerHTML = d.mx_host ? `<div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;font-size:12px;"><span style="color:#52525b;">MX Host: </span><code style="color:#e4e4e7;">${d.mx_host}</code></div>` : '';
   } catch(e) { alert('Error: ' + e.message); }

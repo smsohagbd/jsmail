@@ -136,7 +136,21 @@ func (e *Engine) deliver(msg *queue.Message) {
 		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data)
 		if err != nil {
 			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
-			lastErr = err
+			if isPermanentSMTPError(err) {
+				// Hard bounce — emit event per recipient, do NOT set lastErr (skip retry)
+				log.Printf("[DELIVERY] ✗ hard bounce detected for domain %q", domain)
+				if e.OnEvent != nil {
+					for _, rcpt := range rcpts {
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: rcpt, Status: "hard_bounce",
+							Error: err.Error(),
+						})
+					}
+				}
+			} else {
+				lastErr = err
+			}
 		} else {
 			for _, rcpt := range rcpts {
 				recipientMX[rcpt] = mxHost
@@ -398,4 +412,31 @@ func signDKIM(data []byte, opts *dkim.SignOptions) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// isPermanentSMTPError returns true if the error represents a 5xx permanent
+// SMTP rejection (hard bounce). 4xx errors are temporary (soft bounce).
+func isPermanentSMTPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	// Check for explicit 5xx SMTP codes in the error string.
+	for _, code := range []string{
+		"550 ", "550:", "551 ", "551:", "552 ", "552:",
+		"553 ", "553:", "554 ", "554:", "521 ", "521:",
+	} {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	// Keyword fallback.
+	return strings.Contains(lower, "mailbox not found") ||
+		strings.Contains(lower, "no such user") ||
+		strings.Contains(lower, "user unknown") ||
+		strings.Contains(lower, "does not exist") ||
+		strings.Contains(lower, "bad destination") ||
+		strings.Contains(lower, "invalid recipient") ||
+		strings.Contains(lower, "address rejected")
 }

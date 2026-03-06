@@ -3,6 +3,7 @@ package user
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -13,6 +14,16 @@ import (
 	webauth "smtp-server/internal/web/auth"
 	"smtp-server/internal/verifier"
 )
+
+func flatQuery(v url.Values) map[string]string {
+	m := make(map[string]string, len(v))
+	for k, vals := range v {
+		if len(vals) > 0 {
+			m[k] = vals[0]
+		}
+	}
+	return m
+}
 
 type Handler struct {
 	DB       *gorm.DB
@@ -93,7 +104,7 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 		"PageNum":   page,
 		"PerPage":   perPage,
 		"DateLabel": dateLabel,
-		"Query":     r.URL.Query(),
+		"Query":     flatQuery(r.URL.Query()),
 	})
 }
 
@@ -249,4 +260,71 @@ func joinLines(ss []string) string {
 		result += s
 	}
 	return result
+}
+
+// ──────────────────────────── Reports ────────────────────────────────────────
+
+func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	uname := claims.Username
+
+	var totalSent, delivered, hardBounce, softBounce, failed, deferred, queued int64
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ?", uname).Count(&totalSent)
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "delivered").Count(&delivered)
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "hard_bounce").Count(&hardBounce)
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status IN ?", uname, []string{"soft_bounce", "deferred"}).Count(&softBounce)
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "failed").Count(&failed)
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "deferred").Count(&deferred)
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "queued").Count(&queued)
+
+	attempted := totalSent - queued - deferred
+	var deliveryRate float64
+	if attempted > 0 {
+		deliveryRate = float64(delivered) / float64(attempted) * 100
+	}
+
+	var topDomains []struct {
+		Domain string
+		Count  int64
+	}
+	h.DB.Raw(`SELECT substr(recipient, instr(recipient,'@')+1) AS domain, COUNT(*) AS count
+		FROM email_logs WHERE deleted_at IS NULL AND username = ?
+		GROUP BY domain ORDER BY count DESC LIMIT 10`, uname).Scan(&topDomains)
+
+	today := time.Now().Truncate(24 * time.Hour)
+	days := 30
+	chartLabels := make([]string, days)
+	chartDelivered := make([]int64, days)
+	chartBounced := make([]int64, days)
+	for i := days - 1; i >= 0; i-- {
+		day := today.AddDate(0, 0, -i)
+		idx := days - 1 - i
+		chartLabels[idx] = day.Format("Jan 2")
+		h.DB.Model(&appdb.EmailLog{}).
+			Where("username = ? AND sent_at >= ? AND sent_at < ? AND status = ?", uname, day, day.Add(24*time.Hour), "delivered").
+			Count(&chartDelivered[idx])
+		h.DB.Model(&appdb.EmailLog{}).
+			Where("username = ? AND sent_at >= ? AND sent_at < ? AND status = ?", uname, day, day.Add(24*time.Hour), "hard_bounce").
+			Count(&chartBounced[idx])
+	}
+	labelsJSON, _ := json.Marshal(chartLabels)
+	deliveredJSON, _ := json.Marshal(chartDelivered)
+	bouncedJSON, _ := json.Marshal(chartBounced)
+
+	h.Tmpl.Render(w, "user/reports", map[string]interface{}{
+		"Page":           "reports",
+		"ActiveUser":     uname,
+		"TotalSent":      totalSent,
+		"Delivered":      delivered,
+		"HardBounce":     hardBounce,
+		"SoftBounce":     softBounce,
+		"Failed":         failed,
+		"Deferred":       deferred,
+		"Queued":         queued,
+		"DeliveryRate":   deliveryRate,
+		"TopDomains":     topDomains,
+		"ChartLabels":    string(labelsJSON),
+		"ChartDelivered": string(deliveredJSON),
+		"ChartBounced":   string(bouncedJSON),
+	})
 }

@@ -106,6 +106,10 @@ func (s *session) Mail(from string, _ *smtp.MailOptions) error {
 }
 
 func (s *session) Rcpt(to string, _ *smtp.RcptOptions) error {
+	if appdb.IsHardBounced(to) {
+		log.Printf("[SMTP] ✗ RCPT TO rejected     ip=%s to=%q (hard bounce suppressed)", s.remoteIP, to)
+		return errors.New("550 5.1.1 address rejected — permanently bounced")
+	}
 	s.to = append(s.to, to)
 	log.Printf("[SMTP]   RCPT TO              ip=%s to=%q", s.remoteIP, to)
 	return nil

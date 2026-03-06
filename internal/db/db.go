@@ -2,6 +2,7 @@ package db
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -36,6 +37,7 @@ func Init(path, adminUser, adminPass string) error {
 		&ThrottleRule{},
 		&UpstreamSMTP{},
 		&Setting{},
+		&BounceList{},
 	); err != nil {
 		return err
 	}
@@ -110,6 +112,40 @@ func LogDeferred(msgID, recipient, errMsg string) {
 			"status": "deferred",
 			"error":  errMsg,
 		})
+}
+
+// LogHardBounce marks a log entry as hard_bounce and adds address to bounce list.
+func LogHardBounce(msgID, recipient, errMsg string) {
+	DB.Model(&EmailLog{}).
+		Where("message_id = ? AND recipient = ?", msgID, recipient).
+		Updates(map[string]interface{}{
+			"status": "hard_bounce",
+			"error":  errMsg,
+		})
+
+	// Upsert into bounce list.
+	var entry BounceList
+	if err := DB.Where("email = ?", recipient).First(&entry).Error; err != nil {
+		DB.Create(&BounceList{Email: recipient, Reason: errMsg, BounceCount: 1, LastSeenAt: time.Now()})
+	} else {
+		DB.Model(&entry).Updates(map[string]interface{}{
+			"reason":       errMsg,
+			"bounce_count": entry.BounceCount + 1,
+			"last_seen_at": time.Now(),
+		})
+	}
+}
+
+// IsHardBounced returns true if the address is in the bounce suppression list.
+func IsHardBounced(email string) bool {
+	var count int64
+	DB.Model(&BounceList{}).Where("email = ?", strings.ToLower(email)).Count(&count)
+	return count > 0
+}
+
+// RemoveFromBounceList removes an address from the suppression list.
+func RemoveFromBounceList(email string) {
+	DB.Where("email = ?", strings.ToLower(email)).Delete(&BounceList{})
 }
 
 // CheckPassword verifies a user's password and returns the user if valid.
