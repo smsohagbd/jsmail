@@ -1,0 +1,63 @@
+{{define "title"}}Queue — Admin{{end}}
+{{define "content"}}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Queue</h1>
+  <p class="text-slate-400 text-sm mt-1">Pending and deferred messages</p>
+</div>
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Pending</p>
+    <p class="text-3xl font-bold text-blue-400">{{.QueueStats.Pending}}</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">In-flight</p>
+    <p class="text-3xl font-bold text-indigo-400">{{.QueueStats.Inflight}}</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Deferred</p>
+    <p class="text-3xl font-bold text-yellow-400">{{.QueueStats.Deferred}}</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Failed</p>
+    <p class="text-3xl font-bold text-red-400">{{.QueueStats.Failed}}</p>
+  </div>
+</div>
+
+<div class="stat-card">
+  <h3 class="text-sm font-semibold text-slate-300 mb-4">Active Queue</h3>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
+        <th class="pb-3 pr-4">User</th>
+        <th class="pb-3 pr-4">From</th>
+        <th class="pb-3 pr-4">To</th>
+        <th class="pb-3 pr-4">Status</th>
+        <th class="pb-3 pr-4">Queued At</th>
+        <th class="pb-3 pr-4">Error</th>
+        <th class="pb-3">Actions</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-800">
+        {{range .Logs}}
+        <tr class="text-slate-300">
+          <td class="py-2.5 pr-4 text-xs text-slate-500">{{.Username}}</td>
+          <td class="py-2.5 pr-4 text-xs truncate max-w-[120px]">{{.From}}</td>
+          <td class="py-2.5 pr-4 text-xs truncate max-w-[120px]">{{.To}}</td>
+          <td class="py-2.5 pr-4"><span class="badge-{{.Status}}">{{.Status}}</span></td>
+          <td class="py-2.5 pr-4 text-xs text-slate-500">{{.CreatedAt.Format "Jan 2 15:04"}}</td>
+          <td class="py-2.5 pr-4 text-xs text-red-400 truncate max-w-[160px]">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
+          <td class="py-2.5">
+            <form method="POST" action="/admin/queue/delete" onsubmit="return confirm('Remove from queue?')">
+              <input type="hidden" name="message_id" value="{{.MessageID}}"/>
+              <button class="btn-danger">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="7" class="py-8 text-center text-slate-600">Queue is empty</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

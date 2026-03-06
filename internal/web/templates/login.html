@@ -1,0 +1,35 @@
+{{define "title"}}Login — MailServer{{end}}
+{{define "body"}}
+<div class="min-h-screen flex items-center justify-center bg-slate-950">
+  <div class="w-full max-w-md">
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl mb-4">
+        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <h1 class="text-2xl font-bold text-white">MailServer</h1>
+      <p class="text-slate-400 text-sm mt-1">Sign in to your account</p>
+    </div>
+    <div class="bg-slate-800 rounded-2xl p-8 border border-slate-700 shadow-2xl">
+      {{if .Error}}
+      <div class="bg-red-900/50 border border-red-700 text-red-300 rounded-lg px-4 py-3 mb-5 text-sm">{{.Error}}</div>
+      {{end}}
+      <form method="POST" action="/login" class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Username</label>
+          <input type="text" name="username" placeholder="admin" required autofocus/>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Password</label>
+          <input type="password" name="password" placeholder="••••••••" required/>
+        </div>
+        <button type="submit" class="btn-primary w-full py-2.5 mt-2">Sign In</button>
+      </form>
+      <div class="mt-5 text-center text-sm text-slate-500">
+        Don't have an account? <a href="/register" class="text-indigo-400 hover:text-indigo-300">Register</a>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>{{block "title" .}}MailServer{{end}}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+<style>
+  .sidebar-link { @apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-all text-sm font-medium; }
+  .sidebar-link.active { @apply bg-indigo-600 text-white; }
+  .stat-card { @apply bg-slate-800 rounded-xl p-5 border border-slate-700; }
+  .btn-primary { @apply bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors; }
+  .btn-danger { @apply bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors; }
+  .btn-secondary { @apply bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors; }
+  .badge-delivered { @apply bg-green-900 text-green-300 px-2 py-0.5 rounded text-xs font-medium; }
+  .badge-failed { @apply bg-red-900 text-red-300 px-2 py-0.5 rounded text-xs font-medium; }
+  .badge-deferred { @apply bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded text-xs font-medium; }
+  .badge-queued { @apply bg-blue-900 text-blue-300 px-2 py-0.5 rounded text-xs font-medium; }
+  input[type=text],input[type=email],input[type=password],input[type=number],select,textarea {
+    @apply bg-slate-700 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-500;
+  }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+{{block "body" .}}{{end}}
+</body>
+</html>

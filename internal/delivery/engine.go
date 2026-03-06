@@ -22,6 +22,17 @@ import (
 	"smtp-server/internal/queue"
 )
 
+// DeliveryEvent carries the result of a delivery attempt for a single recipient.
+type DeliveryEvent struct {
+	MessageID string
+	Username  string
+	From      string
+	To        string
+	Status    string // delivered | failed | deferred
+	Error     string
+	MXHost    string
+}
+
 // Engine delivers queued messages to remote SMTP servers.
 type Engine struct {
 	cfg        config.DeliveryConfig
@@ -29,6 +40,7 @@ type Engine struct {
 	retryBase  time.Duration
 	connectTO  time.Duration
 	dkimSigner *dkim.SignOptions
+	OnEvent    func(DeliveryEvent) // optional hook for DB logging
 }
 
 // New creates a delivery Engine.
@@ -127,6 +139,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 	if lastErr == nil {
 		log.Printf("[DELIVERY] ✓ message %s DELIVERED SUCCESSFULLY", msg.ID)
 		e.queue.Complete(msg.ID)
+		if e.OnEvent != nil {
+			for _, to := range msg.To {
+				e.OnEvent(DeliveryEvent{MessageID: msg.ID, Username: msg.Username, From: msg.From, To: to, Status: "delivered"})
+			}
+		}
 		return
 	}
 
@@ -134,6 +151,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 		log.Printf("[DELIVERY] ✗ message %s PERMANENTLY FAILED (max retries reached)", msg.ID)
 		log.Printf("[DELIVERY]   reason: %v", lastErr)
 		e.queue.Fail(msg, fmt.Sprintf("max retries exceeded: %v", lastErr))
+		if e.OnEvent != nil {
+			for _, to := range msg.To {
+				e.OnEvent(DeliveryEvent{MessageID: msg.ID, Username: msg.Username, From: msg.From, To: to, Status: "failed", Error: lastErr.Error()})
+			}
+		}
 		return
 	}
 
@@ -146,6 +168,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 		msg.ID, backoff, msg.RetryCount+2)
 	log.Printf("[DELIVERY]   reason: %v", lastErr)
 	e.queue.Defer(msg, backoff, lastErr.Error())
+	if e.OnEvent != nil {
+		for _, to := range msg.To {
+			e.OnEvent(DeliveryEvent{MessageID: msg.ID, Username: msg.Username, From: msg.From, To: to, Status: "deferred", Error: lastErr.Error()})
+		}
+	}
 }
 
 // deliveryPorts defines the ports tried in order for outbound delivery.

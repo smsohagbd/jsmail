@@ -1,0 +1,122 @@
+{{define "title"}}Dashboard — Admin{{end}}
+{{define "content"}}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Dashboard</h1>
+  <p class="text-slate-400 text-sm mt-1">Overview of your mail server</p>
+</div>
+
+<!-- Stat cards -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Today</p>
+    <p class="text-3xl font-bold text-white">{{.TotalToday}}</p>
+    <p class="text-xs text-slate-500 mt-1">emails sent</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Yesterday</p>
+    <p class="text-3xl font-bold text-white">{{.TotalYesterday}}</p>
+    <p class="text-xs text-slate-500 mt-1">emails sent</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">This Month</p>
+    <p class="text-3xl font-bold text-white">{{.TotalMonth}}</p>
+    <p class="text-xs text-slate-500 mt-1">emails sent</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Queue</p>
+    <p class="text-3xl font-bold text-yellow-400">{{.Pending}}</p>
+    <p class="text-xs text-slate-500 mt-1">pending / deferred</p>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+  <!-- Chart -->
+  <div class="lg:col-span-2 stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">Delivered — Last 7 Days</h3>
+    <canvas id="chart" height="100"></canvas>
+  </div>
+  <!-- Quick stats -->
+  <div class="stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">Server Status</h3>
+    <div class="space-y-3">
+      <div class="flex justify-between items-center">
+        <span class="text-sm text-slate-400">Total Users</span>
+        <span class="text-sm font-semibold text-white">{{.TotalUsers}}</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-sm text-slate-400">Pending</span>
+        <span class="text-sm font-semibold text-blue-400">{{.QueueStats.Pending}}</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-sm text-slate-400">Deferred</span>
+        <span class="text-sm font-semibold text-yellow-400">{{.QueueStats.Deferred}}</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-sm text-slate-400">In-flight</span>
+        <span class="text-sm font-semibold text-indigo-400">{{.QueueStats.Inflight}}</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-sm text-slate-400">Failed</span>
+        <span class="text-sm font-semibold text-red-400">{{.QueueStats.Failed}}</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent logs -->
+<div class="stat-card">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-sm font-semibold text-slate-300">Recent Activity</h3>
+    <a href="/admin/logs" class="text-xs text-indigo-400 hover:text-indigo-300">View all →</a>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 uppercase">
+        <th class="pb-2">User</th><th class="pb-2">From</th><th class="pb-2">To</th><th class="pb-2">Status</th><th class="pb-2">Time</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-800">
+        {{range .RecentLogs}}
+        <tr class="text-slate-300">
+          <td class="py-2 text-xs text-slate-500">{{.Username}}</td>
+          <td class="py-2 truncate max-w-[140px]">{{.From}}</td>
+          <td class="py-2 truncate max-w-[140px]">{{.To}}</td>
+          <td class="py-2"><span class="badge-{{.Status}}">{{.Status}}</span></td>
+          <td class="py-2 text-xs text-slate-500">{{.SentAt.Format "Jan 2 15:04"}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" class="py-4 text-center text-slate-600 text-sm">No activity yet</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const ctx = document.getElementById('chart').getContext('2d');
+new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: {{.ChartLabels}},
+    datasets: [{
+      label: 'Delivered',
+      data: {{.ChartCounts}},
+      borderColor: '#6366f1',
+      backgroundColor: 'rgba(99,102,241,0.1)',
+      borderWidth: 2,
+      fill: true,
+      tension: 0.4,
+      pointBackgroundColor: '#6366f1',
+      pointRadius: 4,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' } },
+      y: { grid: { color: '#1e293b' }, ticks: { color: '#64748b' }, beginAtZero: true }
+    }
+  }
+});
+</script>
+{{end}}

@@ -1,0 +1,78 @@
+{{define "title"}}Settings — Admin{{end}}
+{{define "content"}}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Settings</h1>
+  <p class="text-slate-400 text-sm mt-1">Server configuration is managed in <code class="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-400 text-xs">config.yaml</code> — restart server to apply changes.</p>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  <div class="stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">SMTP Server</h3>
+    <div class="space-y-3 text-sm">
+      <div class="flex justify-between">
+        <span class="text-slate-400">Listen Address</span>
+        <span class="text-white font-mono">{{index .Settings "smtp_listen"}}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Domain / HELO</span>
+        <span class="text-white font-mono">{{index .Settings "smtp_domain"}}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">DKIM Signing</span>
+        <span class="text-white">{{index .Settings "dkim_enabled"}}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">Delivery Engine</h3>
+    <div class="space-y-3 text-sm">
+      <div class="flex justify-between">
+        <span class="text-slate-400">Max Retries</span>
+        <span class="text-white">{{index .Settings "max_retries"}}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Connect Timeout</span>
+        <span class="text-white">{{index .Settings "connect_timeout"}}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Workers</span>
+        <span class="text-white">{{index .Settings "workers"}}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">HTTP API</h3>
+    <div class="space-y-3 text-sm">
+      <div class="flex justify-between">
+        <span class="text-slate-400">API Address</span>
+        <span class="text-white font-mono">{{index .Settings "api_listen"}}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Auth Token</span>
+        <span class="text-white font-mono text-xs">{{index .Settings "api_token"}}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">Web UI</h3>
+    <div class="space-y-3 text-sm">
+      <div class="flex justify-between">
+        <span class="text-slate-400">Web Address</span>
+        <span class="text-white font-mono">{{index .Settings "web_listen"}}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Database</span>
+        <span class="text-white font-mono text-xs">{{index .Settings "db_path"}}</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mt-6 stat-card">
+  <h3 class="text-sm font-semibold text-slate-300 mb-3">Config File Location</h3>
+  <p class="text-slate-400 text-sm">Edit <code class="bg-slate-900 px-2 py-1 rounded text-green-400 text-xs">config.yaml</code> in the server directory and restart to apply changes. All settings including SMTP port, DKIM keys, and delivery options are configured there.</p>
+</div>
+{{end}}

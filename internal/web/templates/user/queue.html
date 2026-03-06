@@ -1,0 +1,41 @@
+{{define "title"}}Queue — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">My Queue</h1>
+  <p class="text-slate-400 text-sm mt-1">Pending and deferred messages</p>
+</div>
+
+<div class="stat-card">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
+        <th class="pb-3 pr-4">From</th>
+        <th class="pb-3 pr-4">To</th>
+        <th class="pb-3 pr-4">Status</th>
+        <th class="pb-3 pr-4">Queued At</th>
+        <th class="pb-3 pr-4">Error</th>
+        <th class="pb-3">Actions</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-800">
+        {{range .Logs}}
+        <tr class="text-slate-300">
+          <td class="py-2.5 pr-4 text-xs truncate max-w-[130px]">{{.From}}</td>
+          <td class="py-2.5 pr-4 text-xs truncate max-w-[130px]">{{.To}}</td>
+          <td class="py-2.5 pr-4"><span class="badge-{{.Status}}">{{.Status}}</span></td>
+          <td class="py-2.5 pr-4 text-xs text-slate-500">{{.CreatedAt.Format "Jan 2 15:04"}}</td>
+          <td class="py-2.5 pr-4 text-xs text-red-400 truncate max-w-[160px]">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
+          <td class="py-2.5">
+            <form method="POST" action="/user/queue/delete" onsubmit="return confirm('Remove this message?')">
+              <input type="hidden" name="message_id" value="{{.MessageID}}"/>
+              <button class="btn-danger">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6" class="py-8 text-center text-slate-600">Queue is empty</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

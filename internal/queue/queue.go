@@ -27,6 +27,7 @@ const (
 // Message represents a queued email.
 type Message struct {
 	ID         string    `json:"id"`
+	Username   string    `json:"username,omitempty"`
 	From       string    `json:"from"`
 	To         []string  `json:"to"`
 	Data       []byte    `json:"data"`
@@ -165,6 +166,14 @@ func (q *Queue) Fail(msg *Message, reason string) {
 	data, _ := json.MarshalIndent(msg, "", "  ")
 	os.WriteFile(filepath.Join(q.dir, "failed", msg.ID+".json"), data, 0644)
 	os.Remove(q.msgPath(msg.ID))
+}
+
+// CancelByMessageID removes a message from the queue by its ID.
+func (q *Queue) CancelByMessageID(msgID string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.inflight, msgID)
+	os.Remove(q.msgPath(msgID))
 }
 
 // resetInflight resets any in-flight messages from a previous run to pending.

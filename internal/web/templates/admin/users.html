@@ -1,0 +1,120 @@
+{{define "title"}}Users — Admin{{end}}
+{{define "content"}}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-white">Users</h1>
+    <p class="text-slate-400 text-sm mt-1">Manage SMTP accounts</p>
+  </div>
+  <button onclick="document.getElementById('create-modal').classList.remove('hidden')" class="btn-primary">+ New User</button>
+</div>
+
+<div class="stat-card">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
+        <th class="pb-3 pr-4">Username</th>
+        <th class="pb-3 pr-4">Email</th>
+        <th class="pb-3 pr-4">Quota/Day</th>
+        <th class="pb-3 pr-4">Status</th>
+        <th class="pb-3 pr-4">Created</th>
+        <th class="pb-3">Actions</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-800">
+        {{range .Users}}
+        <tr class="text-slate-300">
+          <td class="py-3 pr-4 font-medium text-white">{{.Username}}</td>
+          <td class="py-3 pr-4 text-slate-400">{{if .Email}}{{.Email}}{{else}}<span class="text-slate-600">—</span>{{end}}</td>
+          <td class="py-3 pr-4">{{if .QuotaPerDay}}{{.QuotaPerDay}}{{else}}<span class="text-green-400">Unlimited</span>{{end}}</td>
+          <td class="py-3 pr-4">
+            {{if .Active}}<span class="bg-green-900 text-green-300 px-2 py-0.5 rounded text-xs">Active</span>
+            {{else}}<span class="bg-red-900 text-red-300 px-2 py-0.5 rounded text-xs">Disabled</span>{{end}}
+          </td>
+          <td class="py-3 pr-4 text-xs text-slate-500">{{.CreatedAt.Format "Jan 2, 2006"}}</td>
+          <td class="py-3 flex gap-2">
+            <button onclick="editUser({{.ID}}, '{{.Username}}', '{{.Email}}', {{.QuotaPerDay}}, {{.Active}})" class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded">Edit</button>
+            <form method="POST" action="/admin/users/delete" onsubmit="return confirm('Delete {{.Username}}?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6" class="py-8 text-center text-slate-600">No users yet. Create one above.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create modal -->
+<div id="create-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="bg-slate-800 rounded-2xl p-6 w-full max-w-md border border-slate-700 shadow-2xl">
+    <h2 class="text-lg font-bold text-white mb-5">Create User</h2>
+    <form method="POST" action="/admin/users/create" class="space-y-4">
+      <div>
+        <label class="block text-sm text-slate-300 mb-1">Username <span class="text-slate-500">(SMTP login)</span></label>
+        <input type="text" name="username" required/>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300 mb-1">Password</label>
+        <input type="password" name="password" required/>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300 mb-1">Email</label>
+        <input type="email" name="email"/>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300 mb-1">Daily Quota <span class="text-slate-500">(0 = unlimited)</span></label>
+        <input type="number" name="quota" value="0" min="0"/>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn-primary flex-1">Create</button>
+        <button type="button" onclick="document.getElementById('create-modal').classList.add('hidden')" class="btn-secondary flex-1">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Edit modal -->
+<div id="edit-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="bg-slate-800 rounded-2xl p-6 w-full max-w-md border border-slate-700 shadow-2xl">
+    <h2 class="text-lg font-bold text-white mb-5">Edit User</h2>
+    <form method="POST" action="/admin/users/update" class="space-y-4">
+      <input type="hidden" name="id" id="edit-id"/>
+      <div>
+        <label class="block text-sm text-slate-300 mb-1">Username</label>
+        <input type="text" id="edit-username" disabled class="opacity-50"/>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300 mb-1">New Password <span class="text-slate-500">(leave blank to keep)</span></label>
+        <input type="password" name="password"/>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300 mb-1">Daily Quota</label>
+        <input type="number" name="quota" id="edit-quota" min="0"/>
+      </div>
+      <div class="flex items-center gap-3">
+        <label class="text-sm text-slate-300">Active</label>
+        <select name="active" id="edit-active" class="w-auto">
+          <option value="1">Yes</option>
+          <option value="0">No</option>
+        </select>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn-primary flex-1">Save</button>
+        <button type="button" onclick="document.getElementById('edit-modal').classList.add('hidden')" class="btn-secondary flex-1">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function editUser(id, username, email, quota, active) {
+  document.getElementById('edit-id').value = id;
+  document.getElementById('edit-username').value = username;
+  document.getElementById('edit-quota').value = quota;
+  document.getElementById('edit-active').value = active ? '1' : '0';
+  document.getElementById('edit-modal').classList.remove('hidden');
+}
+</script>
+{{end}}

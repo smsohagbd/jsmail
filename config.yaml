@@ -31,5 +31,14 @@ api:
   listen_addr: ":8069"
   auth_token: "change-this-secret-token"
 
+admin:
+  username: "admin"
+  password: "admin123"      # change this!
+
+web:
+  listen_addr: ":8090"
+  secret_key: "change-this-32-char-secret-key!!"
+  db_path: "smtp-server.db"
+
 logging:
   level: "info"

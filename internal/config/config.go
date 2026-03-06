@@ -11,7 +11,20 @@ type Config struct {
 	Delivery DeliveryConfig `yaml:"delivery"`
 	Queue    QueueConfig    `yaml:"queue"`
 	API      APIConfig      `yaml:"api"`
+	Admin    AdminConfig    `yaml:"admin"`
+	Web      WebConfig      `yaml:"web"`
 	Logging  LoggingConfig  `yaml:"logging"`
+}
+
+type AdminConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+type WebConfig struct {
+	ListenAddr string `yaml:"listen_addr"`
+	SecretKey  string `yaml:"secret_key"`
+	DBPath     string `yaml:"db_path"`
 }
 
 type SMTPConfig struct {
@@ -121,5 +134,20 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.API.ListenAddr == "" {
 		cfg.API.ListenAddr = ":8080"
+	}
+	if cfg.Admin.Username == "" {
+		cfg.Admin.Username = "admin"
+	}
+	if cfg.Admin.Password == "" {
+		cfg.Admin.Password = "admin123"
+	}
+	if cfg.Web.ListenAddr == "" {
+		cfg.Web.ListenAddr = ":8090"
+	}
+	if cfg.Web.SecretKey == "" {
+		cfg.Web.SecretKey = "change-this-32-char-secret-key!!"
+	}
+	if cfg.Web.DBPath == "" {
+		cfg.Web.DBPath = "smtp-server.db"
 	}
 }

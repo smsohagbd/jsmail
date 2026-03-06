@@ -1,0 +1,76 @@
+{{define "title"}}Dashboard — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Welcome, {{.ActiveUser}}</h1>
+  <p class="text-slate-400 text-sm mt-1">Your SMTP sending statistics</p>
+</div>
+
+{{with .User}}
+{{if .QuotaPerDay}}
+<div class="bg-indigo-900/30 border border-indigo-700 rounded-xl p-4 mb-6 flex items-center gap-3">
+  <svg class="w-5 h-5 text-indigo-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <span class="text-sm text-indigo-200">Daily quota: <strong>{{.QuotaPerDay}} emails/day</strong></span>
+</div>
+{{end}}
+{{end}}
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Today</p>
+    <p class="text-3xl font-bold text-white">{{.TotalToday}}</p>
+    <p class="text-xs text-slate-500 mt-1">sent</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Yesterday</p>
+    <p class="text-3xl font-bold text-white">{{.TotalYesterday}}</p>
+    <p class="text-xs text-slate-500 mt-1">sent</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">This Month</p>
+    <p class="text-3xl font-bold text-white">{{.TotalMonth}}</p>
+    <p class="text-xs text-slate-500 mt-1">sent</p>
+  </div>
+  <div class="stat-card">
+    <p class="text-xs text-slate-400 uppercase tracking-wider mb-2">Queue</p>
+    <p class="text-3xl font-bold text-yellow-400">{{.Pending}}</p>
+    <p class="text-xs text-slate-500 mt-1">pending</p>
+  </div>
+</div>
+
+<div class="stat-card">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-sm font-semibold text-slate-300">Recent Activity</h3>
+    <a href="/user/logs" class="text-xs text-indigo-400 hover:text-indigo-300">View all →</a>
+  </div>
+
+  <div class="mb-4 bg-slate-900 rounded-lg p-4 border border-slate-700">
+    <p class="text-xs text-slate-400 mb-2 font-medium">SMTP Connection Details</p>
+    <div class="grid grid-cols-2 gap-2 text-xs text-slate-300">
+      <div><span class="text-slate-500">Host:</span> <span class="font-mono">your-server-domain</span></div>
+      <div><span class="text-slate-500">Port:</span> <span class="font-mono">1025</span></div>
+      <div><span class="text-slate-500">Username:</span> <span class="font-mono text-indigo-300">{{.ActiveUser}}</span></div>
+      <div><span class="text-slate-500">Auth:</span> <span class="font-mono">PLAIN / LOGIN</span></div>
+    </div>
+  </div>
+
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 uppercase">
+        <th class="pb-2">From</th><th class="pb-2">To</th><th class="pb-2">Status</th><th class="pb-2">Time</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-800">
+        {{range .RecentLogs}}
+        <tr class="text-slate-300">
+          <td class="py-2 text-xs truncate max-w-[150px]">{{.From}}</td>
+          <td class="py-2 text-xs truncate max-w-[150px]">{{.To}}</td>
+          <td class="py-2"><span class="badge-{{.Status}}">{{.Status}}</span></td>
+          <td class="py-2 text-xs text-slate-500">{{.SentAt.Format "Jan 2 15:04"}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4" class="py-4 text-center text-slate-600 text-sm">No activity yet</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

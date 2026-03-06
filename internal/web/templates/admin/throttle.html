@@ -1,0 +1,100 @@
+{{define "title"}}Throttling — Admin{{end}}
+{{define "content"}}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-white">Throttling</h1>
+    <p class="text-slate-400 text-sm mt-1">Rate limits per user or domain. 0 = unlimited.</p>
+  </div>
+  <button onclick="document.getElementById('add-modal').classList.remove('hidden')" class="btn-primary">+ Add Rule</button>
+</div>
+
+<div class="stat-card">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
+        <th class="pb-3 pr-4">User <span class="normal-case text-slate-600">(empty=global)</span></th>
+        <th class="pb-3 pr-4">Domain <span class="normal-case text-slate-600">(empty=all)</span></th>
+        <th class="pb-3 pr-4">Per Sec</th>
+        <th class="pb-3 pr-4">Per Min</th>
+        <th class="pb-3 pr-4">Per Hour</th>
+        <th class="pb-3 pr-4">Per Day</th>
+        <th class="pb-3 pr-4">Per Month</th>
+        <th class="pb-3">Actions</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-800">
+        {{range .Rules}}
+        <tr class="text-slate-300">
+          <td class="py-2.5 pr-4">{{if .Username}}<span class="text-indigo-400">{{.Username}}</span>{{else}}<span class="text-slate-500 italic">global</span>{{end}}</td>
+          <td class="py-2.5 pr-4">{{if .Domain}}{{.Domain}}{{else}}<span class="text-slate-500 italic">all</span>{{end}}</td>
+          <td class="py-2.5 pr-4">{{if .PerSec}}{{.PerSec}}{{else}}—{{end}}</td>
+          <td class="py-2.5 pr-4">{{if .PerMin}}{{.PerMin}}{{else}}—{{end}}</td>
+          <td class="py-2.5 pr-4">{{if .PerHour}}{{.PerHour}}{{else}}—{{end}}</td>
+          <td class="py-2.5 pr-4">{{if .PerDay}}{{.PerDay}}{{else}}—{{end}}</td>
+          <td class="py-2.5 pr-4">{{if .PerMonth}}{{.PerMonth}}{{else}}—{{end}}</td>
+          <td class="py-2.5 flex gap-2">
+            <button onclick="editRule({{.ID}}, '{{.Username}}', '{{.Domain}}', {{.PerSec}}, {{.PerMin}}, {{.PerHour}}, {{.PerDay}}, {{.PerMonth}})" class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded">Edit</button>
+            <form method="POST" action="/admin/throttle/delete">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button class="btn-danger">Del</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="8" class="py-8 text-center text-slate-600">No rules. All sending is unlimited.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add/Edit modal -->
+<div id="add-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="bg-slate-800 rounded-2xl p-6 w-full max-w-lg border border-slate-700 shadow-2xl">
+    <h2 class="text-lg font-bold text-white mb-5" id="modal-title">Add Throttle Rule</h2>
+    <form method="POST" action="/admin/throttle/save" class="space-y-4">
+      <input type="hidden" name="id" id="rule-id" value="0"/>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm text-slate-300 mb-1">Username <span class="text-slate-500">(empty = master)</span></label>
+          <input type="text" name="username" id="rule-username" placeholder="leave blank for global"/>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300 mb-1">Domain <span class="text-slate-500">(empty = all)</span></label>
+          <input type="text" name="domain" id="rule-domain" placeholder="gmail.com"/>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div><label class="block text-xs text-slate-400 mb-1">Per Second</label><input type="number" name="per_sec" id="rule-per-sec" value="0" min="0"/></div>
+        <div><label class="block text-xs text-slate-400 mb-1">Per Minute</label><input type="number" name="per_min" id="rule-per-min" value="0" min="0"/></div>
+        <div><label class="block text-xs text-slate-400 mb-1">Per Hour</label><input type="number" name="per_hour" id="rule-per-hour" value="0" min="0"/></div>
+        <div><label class="block text-xs text-slate-400 mb-1">Per Day</label><input type="number" name="per_day" id="rule-per-day" value="0" min="0"/></div>
+        <div><label class="block text-xs text-slate-400 mb-1">Per Month</label><input type="number" name="per_month" id="rule-per-month" value="0" min="0"/></div>
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn-primary flex-1">Save Rule</button>
+        <button type="button" onclick="closeModal()" class="btn-secondary flex-1">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function editRule(id, username, domain, ps, pm, ph, pd, pmo) {
+  document.getElementById('modal-title').textContent = 'Edit Throttle Rule';
+  document.getElementById('rule-id').value = id;
+  document.getElementById('rule-username').value = username;
+  document.getElementById('rule-domain').value = domain;
+  document.getElementById('rule-per-sec').value = ps;
+  document.getElementById('rule-per-min').value = pm;
+  document.getElementById('rule-per-hour').value = ph;
+  document.getElementById('rule-per-day').value = pd;
+  document.getElementById('rule-per-month').value = pmo;
+  document.getElementById('add-modal').classList.remove('hidden');
+}
+function closeModal() {
+  document.getElementById('add-modal').classList.add('hidden');
+  document.getElementById('rule-id').value = '0';
+  document.getElementById('modal-title').textContent = 'Add Throttle Rule';
+}
+</script>
+{{end}}

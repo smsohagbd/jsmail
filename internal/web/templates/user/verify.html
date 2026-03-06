@@ -1,0 +1,125 @@
+{{define "title"}}Verify Email — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-white">Email Verification</h1>
+  <p class="text-slate-400 text-sm mt-1">Check if email addresses are valid before sending</p>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  <!-- Single verify -->
+  <div class="stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">Single Email Check</h3>
+    <div id="single-result"></div>
+    <div class="flex gap-2">
+      <input type="email" id="single-email" placeholder="user@example.com" class="flex-1"/>
+      <button onclick="verifySingle()" class="btn-primary flex-shrink-0">Check</button>
+    </div>
+    <div id="single-output" class="mt-4 hidden">
+      <div id="single-badge" class="text-center py-3 rounded-lg mb-4"></div>
+      <div id="single-details" class="space-y-2 text-sm"></div>
+    </div>
+  </div>
+
+  <!-- Bulk verify -->
+  <div class="stat-card">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">Bulk Verification</h3>
+    <form method="POST" action="/user/verify/bulk">
+      <textarea name="emails" rows="8" placeholder="Enter emails — one per line or comma-separated&#10;&#10;user1@gmail.com&#10;user2@yahoo.com&#10;..." class="mb-3 font-mono text-xs"></textarea>
+      <button type="submit" class="btn-primary w-full">Verify All</button>
+    </form>
+  </div>
+</div>
+
+{{if .Results}}
+<div class="mt-6 stat-card">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-sm font-semibold text-slate-300">Results</h3>
+    <div class="flex gap-3">
+      <span class="bg-green-900 text-green-300 px-3 py-1 rounded-full text-xs font-medium">{{.ValidCount}} valid</span>
+      <span class="bg-red-900 text-red-300 px-3 py-1 rounded-full text-xs font-medium">{{.InvalidCount}} invalid</span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+    <div>
+      <label class="block text-xs text-slate-400 mb-2">Valid Emails (copy-paste ready)</label>
+      <textarea readonly rows="6" class="font-mono text-xs text-green-300 bg-green-950/30 border-green-800">{{.ValidList}}</textarea>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-400 mb-2">Invalid Emails</label>
+      <textarea readonly rows="6" class="font-mono text-xs text-red-300 bg-red-950/30 border-red-800">{{.InvalidList}}</textarea>
+    </div>
+  </div>
+
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-slate-500 uppercase border-b border-slate-700">
+        <th class="pb-3 pr-4">Email</th>
+        <th class="pb-3 pr-4">Valid</th>
+        <th class="pb-3 pr-4">Format</th>
+        <th class="pb-3 pr-4">MX</th>
+        <th class="pb-3 pr-4">SMTP</th>
+        <th class="pb-3 pr-4">Disposable</th>
+        <th class="pb-3 pr-4">Catch-All</th>
+        <th class="pb-3">Reason</th>
+      </tr></thead>
+      <tbody class="divide-y divide-slate-800">
+        {{range .Results}}
+        <tr class="text-slate-300 {{if not .Valid}}bg-red-950/10{{end}}">
+          <td class="py-2 pr-4 text-xs font-mono">{{.Email}}</td>
+          <td class="py-2 pr-4">{{if .Valid}}<span class="text-green-400">✓</span>{{else}}<span class="text-red-400">✗</span>{{end}}</td>
+          <td class="py-2 pr-4 text-xs">{{if .Checks.Format}}<span class="text-green-400">ok</span>{{else}}<span class="text-red-400">fail</span>{{end}}</td>
+          <td class="py-2 pr-4 text-xs">{{if .Checks.MXExists}}<span class="text-green-400">ok</span>{{else}}<span class="text-red-400">fail</span>{{end}}</td>
+          <td class="py-2 pr-4 text-xs">{{if .Checks.SMTPConnects}}<span class="text-green-400">ok</span>{{else}}<span class="text-yellow-400">skip</span>{{end}}</td>
+          <td class="py-2 pr-4 text-xs">{{if .IsDisposable}}<span class="text-yellow-400">yes</span>{{else}}<span class="text-slate-500">no</span>{{end}}</td>
+          <td class="py-2 pr-4 text-xs">{{if .IsCatchAll}}<span class="text-yellow-400">yes</span>{{else}}<span class="text-slate-500">no</span>{{end}}</td>
+          <td class="py-2 text-xs text-slate-400">{{if .Reason}}{{.Reason}}{{else}}—{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
+<script>
+async function verifySingle() {
+  const email = document.getElementById('single-email').value.trim();
+  if (!email) return;
+  const btn = event.target;
+  btn.textContent = 'Checking...';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/user/verify/single?email=' + encodeURIComponent(email));
+    const data = await res.json();
+    const out = document.getElementById('single-output');
+    out.classList.remove('hidden');
+    const badge = document.getElementById('single-badge');
+    if (data.valid) {
+      badge.className = 'text-center py-3 rounded-lg mb-4 bg-green-900/50 text-green-300 font-semibold';
+      badge.textContent = '✓ Valid Email';
+    } else {
+      badge.className = 'text-center py-3 rounded-lg mb-4 bg-red-900/50 text-red-300 font-semibold';
+      badge.textContent = '✗ Invalid — ' + (data.reason || 'unknown reason');
+    }
+    const details = document.getElementById('single-details');
+    details.innerHTML = `
+      <div class="grid grid-cols-2 gap-2 text-xs">
+        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Format</span><span class="${data.checks?.format ? 'text-green-400' : 'text-red-400'}">${data.checks?.format ? '✓' : '✗'}</span></div>
+        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">MX Record</span><span class="${data.checks?.mx_exists ? 'text-green-400' : 'text-red-400'}">${data.checks?.mx_exists ? '✓' : '✗'}</span></div>
+        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">SMTP Connect</span><span class="${data.checks?.smtp_connects ? 'text-green-400' : 'text-yellow-400'}">${data.checks?.smtp_connects ? '✓' : '–'}</span></div>
+        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Mailbox</span><span class="${data.checks?.rcpt_accepted ? 'text-green-400' : 'text-yellow-400'}">${data.checks?.rcpt_accepted ? '✓' : '–'}</span></div>
+        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Disposable</span><span class="${data.is_disposable ? 'text-yellow-400' : 'text-slate-400'}">${data.is_disposable ? 'Yes' : 'No'}</span></div>
+        <div class="flex justify-between bg-slate-900 rounded px-3 py-2"><span class="text-slate-400">Catch-All</span><span class="${data.is_catch_all ? 'text-yellow-400' : 'text-slate-400'}">${data.is_catch_all ? 'Yes' : 'No'}</span></div>
+      </div>
+      ${data.mx_host ? `<div class="bg-slate-900 rounded px-3 py-2 text-xs mt-2"><span class="text-slate-400">MX Host:</span> <span class="text-white font-mono">${data.mx_host}</span></div>` : ''}
+    `;
+  } catch(e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.textContent = 'Check';
+    btn.disabled = false;
+  }
+}
+</script>
+{{end}}

@@ -11,23 +11,28 @@ import (
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
 
+	appdb "smtp-server/internal/db"
 	"smtp-server/internal/config"
 	"smtp-server/internal/queue"
 )
 
+// UserLookup is called to authenticate a user; returns true if credentials are valid.
+type UserLookup func(username, password string) bool
+
 // backend implements smtp.Backend.
 type backend struct {
-	cfg   config.SMTPConfig
-	queue *queue.Queue
-	users map[string]string
+	cfg        config.SMTPConfig
+	queue      *queue.Queue
+	users      map[string]string // fallback from config
+	userLookup UserLookup        // dynamic lookup from DB
 }
 
-func newBackend(cfg config.SMTPConfig, q *queue.Queue) *backend {
+func newBackend(cfg config.SMTPConfig, q *queue.Queue, lookup UserLookup) *backend {
 	users := make(map[string]string)
 	for _, u := range cfg.Auth.Users {
 		users[u.Username] = u.Password
 	}
-	return &backend{cfg: cfg, queue: q, users: users}
+	return &backend{cfg: cfg, queue: q, users: users, userLookup: lookup}
 }
 
 func (b *backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
@@ -68,8 +73,19 @@ func (s *session) Auth(mech string) (sasl.Server, error) {
 }
 
 func (s *session) checkCredentials(username, password string) error {
-	expected, ok := s.backend.users[username]
-	if !ok || expected != password {
+	ok := false
+
+	// Prefer DB lookup if available
+	if s.backend.userLookup != nil {
+		ok = s.backend.userLookup(username, password)
+	}
+	// Fall back to config users
+	if !ok {
+		expected, found := s.backend.users[username]
+		ok = found && expected == password
+	}
+
+	if !ok {
 		log.Printf("[SMTP] ✗ AUTH failed       ip=%s user=%q (wrong credentials)", s.remoteIP, username)
 		return errors.New("535 5.7.8 invalid credentials")
 	}
@@ -106,14 +122,17 @@ func (s *session) Data(r io.Reader) error {
 		s.remoteIP, len(data), s.from, s.to)
 
 	msg := &queue.Message{
-		From: s.from,
-		To:   s.to,
-		Data: data,
+		Username: s.authUser,
+		From:     s.from,
+		To:       s.to,
+		Data:     data,
 	}
 	if err := s.backend.queue.Enqueue(msg); err != nil {
 		log.Printf("[SMTP] ✗ enqueue failed       ip=%s err=%v", s.remoteIP, err)
 		return errors.New("451 4.3.0 failed to accept message")
 	}
+	// Log to DB if available
+	appdb.LogQueued(s.authUser, msg.ID, msg.From, msg.To)
 	log.Printf("[SMTP] ✓ message queued       ip=%s id=%s from=%s to=%v",
 		s.remoteIP, msg.ID, msg.From, msg.To)
 	return nil
@@ -132,7 +151,11 @@ func (s *session) Logout() error {
 
 // Start launches the SMTP server and blocks until it fails.
 func Start(cfg config.SMTPConfig, q *queue.Queue) error {
-	b := newBackend(cfg, q)
+	lookup := func(username, password string) bool {
+		_, ok := appdb.CheckPassword(username, password)
+		return ok
+	}
+	b := newBackend(cfg, q, lookup)
 
 	srv := smtp.NewServer(b)
 	srv.Addr = cfg.ListenAddr
