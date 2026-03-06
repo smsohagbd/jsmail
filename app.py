@@ -1,20 +1,23 @@
-import smtplib
+import smtplib, uuid, time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate
 
 HOST = "mail.fedcontractingacademy.com"
-PORT = 1025
+PORT = 1069
 
 FROM    = "smsohag@fedcontractingacademy.com"
-TO      = "test-09427ff4@appmaildev.com"          # <-- change to your test address
+TO      = "test-4e9ebymx8@srv1.mail-tester.com"          # <-- change to your test address
 SUBJECT = "Test from my SMTP server"
 BODY    = "Hello! This email was sent from my own SMTP server."
 
 # Build a proper RFC 5322 message with all required headers
 msg = MIMEMultipart()
-msg["From"]    = FROM
-msg["To"]      = TO
-msg["Subject"] = SUBJECT
+msg["From"]       = FROM
+msg["To"]         = TO
+msg["Subject"]    = SUBJECT
+msg["Date"]       = formatdate(localtime=True)
+msg["Message-ID"] = f"<{uuid.uuid4()}@fedcontractingacademy.com>"
 msg.attach(MIMEText(BODY, "plain"))
 
 print(f"Connecting to {HOST}:{PORT} ...")

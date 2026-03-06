@@ -45,6 +45,11 @@ go build -o smtp-server .
 ./smtp-server -config config.yaml
 ```
 
+
+git add .
+git commit -m "fix code "
+git push
+
 ### 3. Send via SMTP (port 587)
 
 Use any SMTP client, e.g. `swaks`:
@@ -200,7 +205,3 @@ api:
   listen_addr: ":8080"
   auth_token: "change-this-secret-token"
 ```
-
-git add .
-git commit -m "fix code "
-git push

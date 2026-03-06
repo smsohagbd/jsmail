@@ -2,9 +2,11 @@ package delivery
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -90,7 +92,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 	log.Printf("[DELIVERY]   attempt = %d / %d", msg.RetryCount+1, e.cfg.MaxRetries+1)
 	log.Printf("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
-	data := msg.Data
+	data := injectMissingHeaders(msg.Data, e.cfg.HeloName)
 	if e.dkimSigner != nil {
 		signed, err := signDKIM(data, e.dkimSigner)
 		if err != nil {
@@ -248,6 +250,54 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 		log.Printf("[DELIVERY] ⚠ QUIT error (message was accepted): %v", err)
 	}
 	return nil
+}
+
+// ---- Header injection ----
+
+// injectMissingHeaders ensures the message has the required RFC 5322 headers
+// (Message-ID and Date) that Gmail and other providers reject without.
+func injectMissingHeaders(data []byte, domain string) []byte {
+	header, body, found := bytes.Cut(data, []byte("\r\n\r\n"))
+	if !found {
+		// Try Unix line endings
+		header, body, found = bytes.Cut(data, []byte("\n\n"))
+		if !found {
+			return data
+		}
+	}
+
+	headerStr := string(header)
+	var inject strings.Builder
+
+	if !containsHeader(headerStr, "Message-ID") {
+		b := make([]byte, 12)
+		rand.Read(b)
+		msgID := fmt.Sprintf("Message-ID: <%d.%s@%s>\r\n",
+			time.Now().UnixNano(), hex.EncodeToString(b), domain)
+		inject.WriteString(msgID)
+		log.Printf("[DELIVERY]   injected Message-ID header")
+	}
+
+	if !containsHeader(headerStr, "Date") {
+		inject.WriteString("Date: " + time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700") + "\r\n")
+		log.Printf("[DELIVERY]   injected Date header")
+	}
+
+	if inject.Len() == 0 {
+		return data
+	}
+
+	sep := "\r\n\r\n"
+	if !found {
+		sep = "\n\n"
+	}
+	return []byte(inject.String() + headerStr + sep + string(body))
+}
+
+func containsHeader(header, name string) bool {
+	lower := strings.ToLower(header)
+	return strings.Contains(lower, "\n"+strings.ToLower(name)+":") ||
+		strings.HasPrefix(lower, strings.ToLower(name)+":")
 }
 
 // ---- DKIM helpers ----
