@@ -125,15 +125,25 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	email := r.FormValue("email")
 	quota, _ := strconv.Atoi(r.FormValue("quota"))
+	smtpMode := r.FormValue("smtp_mode")
+	if smtpMode == "" {
+		smtpMode = "system_only"
+	}
+	maxCustomSMTP, _ := strconv.Atoi(r.FormValue("max_custom_smtp"))
+	if maxCustomSMTP == 0 {
+		maxCustomSMTP = 5
+	}
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	h.DB.Create(&appdb.User{
-		Username:    username,
-		Password:    string(hash),
-		Email:       email,
-		Role:        "user",
-		QuotaPerDay: quota,
-		Active:      true,
+		Username:      username,
+		Password:      string(hash),
+		Email:         email,
+		Role:          "user",
+		QuotaPerDay:   quota,
+		Active:        true,
+		SMTPMode:      smtpMode,
+		MaxCustomSMTP: maxCustomSMTP,
 	})
 	http.Redirect(w, r, "/admin/users", http.StatusFound)
 }
@@ -146,10 +156,20 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.FormValue("id"))
 	quota, _ := strconv.Atoi(r.FormValue("quota"))
 	active := r.FormValue("active") == "1"
+	smtpMode := r.FormValue("smtp_mode")
+	if smtpMode == "" {
+		smtpMode = "system_only"
+	}
+	maxCustomSMTP, _ := strconv.Atoi(r.FormValue("max_custom_smtp"))
+	if maxCustomSMTP == 0 {
+		maxCustomSMTP = 5
+	}
 
 	updates := map[string]interface{}{
-		"quota_per_day": quota,
-		"active":        active,
+		"quota_per_day":   quota,
+		"active":          active,
+		"smtp_mode":       smtpMode,
+		"max_custom_smtp": maxCustomSMTP,
 	}
 	if pw := r.FormValue("password"); pw != "" {
 		hash, _ := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)

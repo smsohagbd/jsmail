@@ -8,12 +8,30 @@ import (
 
 type User struct {
 	gorm.Model
-	Username    string `gorm:"uniqueIndex;not null"`
-	Email       string
-	Password    string `gorm:"not null"` // bcrypt hash
-	Role        string `gorm:"default:user"` // admin | user
-	QuotaPerDay int    `gorm:"default:0"`    // 0 = unlimited
-	Active      bool   `gorm:"default:true"`
+	Username      string `gorm:"uniqueIndex;not null"`
+	Email         string
+	Password      string `gorm:"not null"`      // bcrypt hash
+	Role          string `gorm:"default:user"`  // admin | user
+	QuotaPerDay   int    `gorm:"default:0"`     // 0 = unlimited
+	Active        bool   `gorm:"default:true"`
+	// SMTP delivery mode: system_only | custom_only | system_and_custom
+	SMTPMode      string `gorm:"default:'system_only'"`
+	SMTPRotation  bool   `gorm:"default:false"` // rotate across all custom SMTPs
+	MaxCustomSMTP int    `gorm:"default:5"`     // max custom SMTP servers allowed
+}
+
+// UserSMTP stores a user's custom outbound SMTP relay credentials.
+type UserSMTP struct {
+	gorm.Model
+	OwnerUsername string `gorm:"index;not null"`
+	Label         string // friendly name, e.g. "SendGrid", "Mailgun"
+	Host          string `gorm:"not null"`
+	Port          int    `gorm:"default:587"`
+	Username      string `gorm:"not null"`
+	Password      string `gorm:"type:text;not null"`
+	UseTLS        bool   `gorm:"default:true"`  // try STARTTLS
+	IsDefault     bool   `gorm:"default:false"` // preferred relay when rotation is off
+	Active        bool   `gorm:"default:true"`
 }
 
 type EmailLog struct {

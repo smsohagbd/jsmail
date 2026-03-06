@@ -49,6 +49,17 @@ type IPEntry struct {
 	PerDay  int
 }
 
+// SMTPRelay describes a custom outbound SMTP relay server.
+type SMTPRelay struct {
+	ID       uint
+	Label    string
+	Host     string
+	Port     int
+	Username string
+	Password string
+	UseTLS   bool
+}
+
 // ipCounter tracks rolling send counts for one outbound IP.
 type ipCounter struct {
 	minCount  int
@@ -75,6 +86,15 @@ type Engine struct {
 	// Return nil or empty to use the system default IP.
 	IPPoolProvider func() []IPEntry
 
+	// UserSMTPProvider returns the SMTP delivery mode and custom relay list for a user.
+	// mode: "system_only" | "custom_only" | "system_and_custom"
+	// relays: active custom SMTP servers for the user (may be empty)
+	UserSMTPProvider func(username string) (mode string, relays []SMTPRelay)
+
+	// Per-user relay rotation tracking (guarded by userRelayMu).
+	userRelayMu  sync.Mutex
+	userRelayIdx map[string]int
+
 	// Per-domain 421 cooldown tracking.
 	cooldownMu sync.Mutex
 	cooldowns  map[string]*domainCooldownEntry
@@ -92,11 +112,12 @@ type Engine struct {
 // New creates a delivery Engine.
 func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 	e := &Engine{
-		cfg:        cfg,
-		queue:      q,
-		cooldowns:  make(map[string]*domainCooldownEntry),
-		sems:       make(map[string]chan struct{}),
-		ipCounters: make(map[string]*ipCounter),
+		cfg:          cfg,
+		queue:        q,
+		cooldowns:    make(map[string]*domainCooldownEntry),
+		sems:         make(map[string]chan struct{}),
+		ipCounters:   make(map[string]*ipCounter),
+		userRelayIdx: make(map[string]int),
 	}
 
 	if d, err := time.ParseDuration(cfg.RetryInterval); err == nil {
@@ -157,6 +178,79 @@ func (e *Engine) deliver(msg *queue.Message) {
 	log.Printf("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
 	data := injectMissingHeaders(msg.Data, e.cfg.HeloName)
+
+	// ── Custom SMTP relay routing ──────────────────────────────────────────
+	// If a UserSMTPProvider is registered, check whether this user's messages
+	// should be routed through a custom relay instead of direct MX delivery.
+	if e.UserSMTPProvider != nil && msg.Username != "" {
+		mode, relays := e.UserSMTPProvider(msg.Username)
+		if mode == "custom_only" || mode == "system_and_custom" {
+			relay := e.pickRelay(msg.Username, mode, relays)
+			if relay != nil {
+				log.Printf("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
+				if err := e.deliverViaRelay(*relay, msg.From, msg.To, data); err != nil {
+					log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
+					if isPermanentSMTPError(err) {
+						if e.OnEvent != nil {
+							for _, to := range msg.To {
+								e.OnEvent(DeliveryEvent{
+									MessageID: msg.ID, Username: msg.Username,
+									From: msg.From, To: to, Status: "hard_bounce",
+									Error: err.Error(), MXHost: relay.Host,
+								})
+							}
+						}
+						e.queue.Complete(msg.ID)
+					} else {
+						backoff := e.retryBase * (1 << uint(msg.RetryCount))
+						if backoff > 24*time.Hour {
+							backoff = 24 * time.Hour
+						}
+						e.queue.Defer(msg, backoff, err.Error())
+						if e.OnEvent != nil {
+							for _, to := range msg.To {
+								e.OnEvent(DeliveryEvent{
+									MessageID: msg.ID, Username: msg.Username,
+									From: msg.From, To: to, Status: "deferred",
+									Error: err.Error(), MXHost: relay.Host,
+								})
+							}
+						}
+					}
+				} else {
+					log.Printf("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
+					e.queue.Complete(msg.ID)
+					if e.OnEvent != nil {
+						for _, to := range msg.To {
+							e.OnEvent(DeliveryEvent{
+								MessageID: msg.ID, Username: msg.Username,
+								From: msg.From, To: to, Status: "delivered",
+								MXHost: relay.Host,
+							})
+						}
+					}
+				}
+				return
+			}
+			// No relay available for custom_only → fail
+			if mode == "custom_only" {
+				log.Printf("[DELIVERY] ✗ message %s FAILED: no active custom SMTP for user %q", msg.ID, msg.Username)
+				e.queue.Fail(msg, "no active custom SMTP configured")
+				if e.OnEvent != nil {
+					for _, to := range msg.To {
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: to, Status: "failed",
+							Error: "no active custom SMTP configured",
+						})
+					}
+				}
+				return
+			}
+			// system_and_custom with no relays → fall through to system delivery
+		}
+	}
+	// ── end custom relay routing ───────────────────────────────────────────
 
 	// Resolve DKIM signer: prefer per-domain key from DB, fallback to config key.
 	signer := e.dkimSigner
@@ -516,6 +610,111 @@ func (e *Engine) nextOutboundIP() string {
 
 	log.Printf("[DELIVERY] ⚠ all pool IPs are at their rate limits — using system default")
 	return ""
+}
+
+// pickRelay selects the next relay for a user using round-robin rotation.
+// For system_and_custom mode, index 0 means "use system MX delivery" (returns nil).
+// For custom_only, only custom relays are in the pool.
+func (e *Engine) pickRelay(username, mode string, relays []SMTPRelay) *SMTPRelay {
+	if len(relays) == 0 {
+		return nil
+	}
+
+	e.userRelayMu.Lock()
+	defer e.userRelayMu.Unlock()
+
+	// Build the pool: for system_and_custom, slot 0 = system (nil), then custom relays.
+	poolSize := len(relays)
+	systemSlot := false
+	if mode == "system_and_custom" {
+		poolSize++
+		systemSlot = true
+	}
+
+	idx := e.userRelayIdx[username] % poolSize
+	e.userRelayIdx[username] = (idx + 1) % poolSize
+
+	if systemSlot && idx == 0 {
+		return nil // caller should use system MX delivery
+	}
+	relayIdx := idx
+	if systemSlot {
+		relayIdx = idx - 1
+	}
+	if relayIdx < 0 || relayIdx >= len(relays) {
+		return nil
+	}
+	r := relays[relayIdx]
+	return &r
+}
+
+// deliverViaRelay sends all recipients of a message through an authenticated SMTP relay.
+func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, data []byte) error {
+	addr := fmt.Sprintf("%s:%d", relay.Host, relay.Port)
+	log.Printf("[DELIVERY]   relay connecting to %s …", addr)
+
+	conn, err := net.DialTimeout("tcp4", addr, e.connectTO)
+	if err != nil {
+		return fmt.Errorf("relay dial %s: %w", addr, err)
+	}
+	log.Printf("[DELIVERY]   relay TCP connected to %s", addr)
+
+	heloName := e.cfg.HeloName
+	if heloName == "" {
+		heloName = "localhost"
+	}
+
+	client, err := smtp.NewClient(conn, relay.Host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("relay new client: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello(heloName); err != nil {
+		return fmt.Errorf("relay EHLO: %w", err)
+	}
+
+	if relay.UseTLS {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			tlsCfg := &tls.Config{ServerName: relay.Host, MinVersion: tls.VersionTLS12}
+			if err := client.StartTLS(tlsCfg); err != nil {
+				log.Printf("[DELIVERY]   relay STARTTLS failed (%v), continuing plain", err)
+			} else {
+				log.Printf("[DELIVERY]   relay STARTTLS ok")
+			}
+		}
+	}
+
+	if relay.Username != "" {
+		auth := smtp.PlainAuth("", relay.Username, relay.Password, relay.Host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("relay AUTH: %w", err)
+		}
+		log.Printf("[DELIVERY]   relay AUTH ok (user=%s)", relay.Username)
+	}
+
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("relay MAIL FROM <%s>: %w", from, err)
+	}
+	for _, rcpt := range rcpts {
+		if err := client.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("relay RCPT TO <%s>: %w", rcpt, err)
+		}
+	}
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("relay DATA: %w", err)
+	}
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("relay write: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("relay DATA close: %w", err)
+	}
+	log.Printf("[DELIVERY]   relay DATA sent (%d bytes) → ok", len(data))
+	client.Quit()
+	return nil
 }
 
 func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte) error {

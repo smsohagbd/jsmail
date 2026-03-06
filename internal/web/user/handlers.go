@@ -1,9 +1,12 @@
 package user
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"net/smtp"
 	"net/url"
 	"strconv"
 	"strings"
@@ -316,6 +319,293 @@ func userOutboundIP() string {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// ──────────────────────────── Custom SMTP ────────────────────────────────────
+
+func (h *Handler) SMTPPage(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	var u appdb.User
+	h.DB.Where("username = ?", claims.Username).First(&u)
+
+	smtps := appdb.GetUserSMTPs(claims.Username)
+	h.Tmpl.Render(w, "user/smtp", map[string]interface{}{
+		"Page":          "smtp",
+		"ActiveUser":    claims.Username,
+		"SMTPs":         smtps,
+		"SMTPMode":      u.SMTPMode,
+		"SMTPRotation":  u.SMTPRotation,
+		"MaxCustomSMTP": u.MaxCustomSMTP,
+		"FlashOK":       r.URL.Query().Get("ok"),
+		"FlashErr":      r.URL.Query().Get("err"),
+	})
+}
+
+func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/smtp", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+
+	var u appdb.User
+	h.DB.Where("username = ?", claims.Username).First(&u)
+
+	existing := appdb.GetUserSMTPs(claims.Username)
+	if u.MaxCustomSMTP > 0 && len(existing) >= u.MaxCustomSMTP {
+		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape(
+			fmt.Sprintf("limit reached: maximum %d custom SMTP servers allowed", u.MaxCustomSMTP)), http.StatusFound)
+		return
+	}
+
+	host := strings.TrimSpace(r.FormValue("host"))
+	portStr := strings.TrimSpace(r.FormValue("port"))
+	username := strings.TrimSpace(r.FormValue("smtp_user"))
+	password := r.FormValue("smtp_pass")
+	label := strings.TrimSpace(r.FormValue("label"))
+	useTLS := r.FormValue("use_tls") == "on"
+	port, _ := strconv.Atoi(portStr)
+	if port == 0 {
+		port = 587
+	}
+	if label == "" {
+		label = host
+	}
+
+	// Test the connection before saving.
+	if err := testSMTPConn(host, port, username, password, useTLS); err != nil {
+		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("connection failed: "+err.Error()), http.StatusFound)
+		return
+	}
+
+	entry := &appdb.UserSMTP{
+		OwnerUsername: claims.Username,
+		Label:         label,
+		Host:          host,
+		Port:          port,
+		Username:      username,
+		Password:      password,
+		UseTLS:        useTLS,
+		Active:        true,
+	}
+	if err := appdb.AddUserSMTP(entry); err != nil {
+		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("save failed: "+err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/smtp?ok=SMTP+server+added+and+verified", http.StatusFound)
+}
+
+func (h *Handler) DeleteSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/smtp", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	appdb.DeleteUserSMTP(uint(id), claims.Username)
+	http.Redirect(w, r, "/user/smtp?ok=SMTP+server+removed", http.StatusFound)
+}
+
+func (h *Handler) SetDefaultSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/smtp", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	appdb.SetDefaultUserSMTP(uint(id), claims.Username)
+	http.Redirect(w, r, "/user/smtp?ok=Default+SMTP+updated", http.StatusFound)
+}
+
+func (h *Handler) ToggleSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/smtp", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	appdb.ToggleUserSMTP(uint(id), claims.Username)
+	http.Redirect(w, r, "/user/smtp?ok=SMTP+status+toggled", http.StatusFound)
+}
+
+func (h *Handler) ToggleSMTPRotation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/smtp", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	var u appdb.User
+	h.DB.Where("username = ?", claims.Username).First(&u)
+	appdb.SetUserSMTPMode(claims.Username, u.SMTPMode, !u.SMTPRotation, u.MaxCustomSMTP)
+	http.Redirect(w, r, "/user/smtp?ok=Rotation+setting+updated", http.StatusFound)
+}
+
+// BulkAddSMTP parses multiple lines in "host:port:user:pass:tls" format and adds them.
+func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/smtp", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	var u appdb.User
+	h.DB.Where("username = ?", claims.Username).First(&u)
+
+	raw := r.FormValue("lines")
+	testAll := r.FormValue("test_all") == "on"
+
+	added, skipped, errs := 0, 0, []string{}
+
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Check limit before each entry.
+		existing := appdb.GetUserSMTPs(claims.Username)
+		if u.MaxCustomSMTP > 0 && len(existing) >= u.MaxCustomSMTP {
+			errs = append(errs, fmt.Sprintf("limit reached (%d) — stopped at line: %s", u.MaxCustomSMTP, line))
+			break
+		}
+
+		// Parse: host:port:user:pass:tls  (port and tls optional)
+		parts := strings.SplitN(line, ":", 5)
+		if len(parts) < 3 {
+			errs = append(errs, "bad format (need host:port:user:pass:tls): "+line)
+			skipped++
+			continue
+		}
+
+		host := strings.TrimSpace(parts[0])
+		port := 587
+		userIdx, passIdx, tlsIdx := 1, 2, -1
+
+		// Detect if second field is a port number.
+		if p, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+			port = p
+			userIdx, passIdx = 2, 3
+			if len(parts) > 4 {
+				tlsIdx = 4
+			}
+		} else {
+			// No port field: host:user:pass[:tls]
+			if len(parts) > 3 {
+				tlsIdx = 3
+			}
+		}
+
+		if passIdx >= len(parts) {
+			errs = append(errs, "missing password: "+line)
+			skipped++
+			continue
+		}
+		smtpUser := strings.TrimSpace(parts[userIdx])
+		smtpPass := strings.TrimSpace(parts[passIdx])
+		useTLS := true // default on
+		if tlsIdx >= 0 && tlsIdx < len(parts) {
+			v := strings.TrimSpace(parts[tlsIdx])
+			useTLS = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+		}
+
+		if testAll {
+			if err := testSMTPConn(host, port, smtpUser, smtpPass, useTLS); err != nil {
+				errs = append(errs, fmt.Sprintf("%s:%d — test failed: %v", host, port, err))
+				skipped++
+				continue
+			}
+		}
+
+		entry := &appdb.UserSMTP{
+			OwnerUsername: claims.Username,
+			Label:         host,
+			Host:          host,
+			Port:          port,
+			Username:      smtpUser,
+			Password:      smtpPass,
+			UseTLS:        useTLS,
+			Active:        true,
+		}
+		if err := appdb.AddUserSMTP(entry); err != nil {
+			errs = append(errs, fmt.Sprintf("%s — db error: %v", host, err))
+			skipped++
+		} else {
+			added++
+		}
+	}
+
+	msg := fmt.Sprintf("%d added", added)
+	if skipped > 0 {
+		msg += fmt.Sprintf(", %d skipped", skipped)
+	}
+	if len(errs) > 0 {
+		msg += ": " + strings.Join(errs, "; ")
+		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape(msg), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/smtp?ok="+url.QueryEscape(msg), http.StatusFound)
+}
+
+// TestSMTP validates an SMTP connection (called via JSON API for live feedback).
+func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	host := strings.TrimSpace(r.FormValue("host"))
+	portStr := strings.TrimSpace(r.FormValue("port"))
+	username := strings.TrimSpace(r.FormValue("smtp_user"))
+	password := r.FormValue("smtp_pass")
+	useTLS := r.FormValue("use_tls") == "true"
+	port, _ := strconv.Atoi(portStr)
+	if port == 0 {
+		port = 587
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := testSMTPConn(host, port, username, password, useTLS); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// testSMTPConn tries to connect and authenticate to an SMTP server.
+func testSMTPConn(host string, port int, username, password string, useTLS bool) error {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	conn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("SMTP handshake: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.Hello("test.localhost"); err != nil {
+		return fmt.Errorf("EHLO: %w", err)
+	}
+
+	if useTLS {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			tlsCfg := &tls.Config{ServerName: host, InsecureSkipVerify: false}
+			if err := client.StartTLS(tlsCfg); err != nil {
+				// Not fatal — some servers require STARTTLS, some don't. Try auth anyway.
+				_ = err
+			}
+		}
+	}
+
+	if username != "" {
+		auth := smtp.PlainAuth("", username, password, host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("AUTH failed (wrong credentials?): %w", err)
+		}
+	}
+	client.Quit()
+	return nil
 }
 
 // ──────────────────────────── Reports ────────────────────────────────────────

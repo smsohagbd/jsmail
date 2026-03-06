@@ -68,6 +68,28 @@ func main() {
 		return "", "", false
 	}
 
+	// Custom SMTP relay: returns delivery mode + active relay list for a user.
+	eng.UserSMTPProvider = func(username string) (mode string, relays []delivery.SMTPRelay) {
+		mode, _ = appdb.GetUserSMTPMode(username)
+		if mode == "system_only" || mode == "" {
+			return "system_only", nil
+		}
+		dbRelays := appdb.GetActiveUserSMTPs(username)
+		out := make([]delivery.SMTPRelay, 0, len(dbRelays))
+		for _, r := range dbRelays {
+			out = append(out, delivery.SMTPRelay{
+				ID:       r.ID,
+				Label:    r.Label,
+				Host:     r.Host,
+				Port:     r.Port,
+				Username: r.Username,
+				Password: r.Password,
+				UseTLS:   r.UseTLS,
+			})
+		}
+		return mode, out
+	}
+
 	// IP pool: round-robin with per-IP rate limits from DB table.
 	eng.IPPoolProvider = func() []delivery.IPEntry {
 		if appdb.GetSetting("ip_pool_enabled", "false") != "true" {

@@ -1,0 +1,392 @@
+{{define "title"}}Custom SMTP — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Custom SMTP Servers</div>
+    <div class="page-sub">Add your own SMTP relays (SendGrid, Mailgun, etc.) — connection is verified on save</div>
+  </div>
+  {{if ne .SMTPMode "system_only"}}
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-primary" onclick="openModal('single')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Add SMTP
+    </button>
+    <button class="btn btn-secondary" onclick="openModal('bulk')">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h8"/></svg>
+      Bulk Import
+    </button>
+  </div>
+  {{end}}
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<!-- Mode info card -->
+<div class="card" style="margin-bottom:16px;padding:16px 20px;">
+  <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:11px;color:#52525b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Current Mode</div>
+      {{if eq .SMTPMode "system_only"}}
+        <div style="display:inline-flex;align-items:center;gap:6px;background:#18181b;border:1px solid #3f3f46;padding:5px 12px;border-radius:20px;font-size:13px;color:#a1a1aa;">
+          <svg width="12" height="12" fill="none" stroke="#71717a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
+          System SMTP Only
+        </div>
+      {{else if eq .SMTPMode "custom_only"}}
+        <div style="display:inline-flex;align-items:center;gap:6px;background:#1e1b4b;border:1px solid #4338ca;padding:5px 12px;border-radius:20px;font-size:13px;color:#818cf8;">
+          <svg width="12" height="12" fill="none" stroke="#818cf8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          Custom SMTP Only
+        </div>
+      {{else}}
+        <div style="display:inline-flex;align-items:center;gap:6px;background:#052e16;border:1px solid #14532d;padding:5px 12px;border-radius:20px;font-size:13px;color:#4ade80;">
+          <svg width="12" height="12" fill="none" stroke="#4ade80" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          System + Custom (Rotation)
+        </div>
+      {{end}}
+    </div>
+
+    {{if ne .SMTPMode "system_only"}}
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:13px;color:#71717a;">Rotate across all SMTPs:</span>
+      <form method="POST" action="/user/smtp/rotation" style="display:inline;">
+        <button type="submit" style="background:{{if .SMTPRotation}}#1e4620{{else}}#1c1917{{end}};
+          border:1px solid {{if .SMTPRotation}}#14532d{{else}}#44403c{{end}};
+          color:{{if .SMTPRotation}}#4ade80{{else}}#78716c{{end}};
+          padding:5px 14px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;">
+          {{if .SMTPRotation}}✓ Rotation On{{else}}✗ Rotation Off{{end}}
+        </button>
+      </form>
+    </div>
+    {{end}}
+
+    <div style="margin-left:auto;font-size:12px;color:#52525b;">
+      {{len .SMTPs}} / {{.MaxCustomSMTP}} servers used
+    </div>
+  </div>
+  {{if eq .SMTPMode "system_only"}}
+  <div style="margin-top:12px;padding:10px 14px;background:#09090b;border-radius:6px;font-size:12px;color:#52525b;">
+    Your account is set to use the system SMTP server. Contact your admin to enable custom SMTP.
+  </div>
+  {{end}}
+</div>
+
+<!-- SMTP list -->
+{{if .SMTPs}}
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header"><span class="card-title">Your SMTP Servers</span></div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Label</th>
+        <th>Host / Port</th>
+        <th>Username</th>
+        <th>TLS</th>
+        <th>Status</th>
+        <th style="padding-right:20px;text-align:right;">Actions</th>
+      </tr></thead>
+      <tbody>
+        {{range .SMTPs}}
+        <tr>
+          <td style="padding-left:20px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              {{if .IsDefault}}
+              <span style="background:#1e1b4b;color:#818cf8;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;">DEFAULT</span>
+              {{end}}
+              <span style="font-size:13px;font-weight:600;color:#e4e4e7;">{{.Label}}</span>
+            </div>
+          </td>
+          <td style="font-family:monospace;font-size:12px;color:#a1a1aa;">{{.Host}}:{{.Port}}</td>
+          <td style="font-size:12px;color:#71717a;">{{.Username}}</td>
+          <td>
+            {{if .UseTLS}}
+            <span style="color:#4ade80;font-size:11px;">STARTTLS</span>
+            {{else}}
+            <span style="color:#f87171;font-size:11px;">Plain</span>
+            {{end}}
+          </td>
+          <td>
+            <form method="POST" action="/user/smtp/toggle" style="display:inline;">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" style="background:{{if .Active}}#052e16{{else}}#1c1c1c{{end}};
+                border:1px solid {{if .Active}}#14532d{{else}}#27272a{{end}};
+                color:{{if .Active}}#4ade80{{else}}#52525b{{end}};
+                padding:3px 10px;border-radius:12px;font-size:11px;cursor:pointer;">
+                {{if .Active}}Active{{else}}Disabled{{end}}
+              </button>
+            </form>
+          </td>
+          <td style="padding-right:20px;text-align:right;">
+            <div style="display:flex;gap:6px;justify-content:flex-end;">
+              {{if not .IsDefault}}
+              <form method="POST" action="/user/smtp/default" style="display:inline;">
+                <input type="hidden" name="id" value="{{.ID}}"/>
+                <button type="submit" class="btn btn-ghost" style="font-size:11px;padding:4px 10px;">Set Default</button>
+              </form>
+              {{end}}
+              <form method="POST" action="/user/smtp/delete" style="display:inline;"
+                onsubmit="return confirm('Delete this SMTP server?')">
+                <input type="hidden" name="id" value="{{.ID}}"/>
+                <button type="submit" class="btn btn-danger" style="font-size:11px;padding:4px 10px;">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{else if ne .SMTPMode "system_only"}}
+<div class="card" style="padding:40px;text-align:center;margin-bottom:16px;">
+  <div style="font-size:32px;margin-bottom:12px;">📡</div>
+  <div style="font-size:15px;font-weight:600;color:#e4e4e7;margin-bottom:6px;">No custom SMTP servers yet</div>
+  <div style="font-size:13px;color:#52525b;margin-bottom:16px;">Add your first SMTP relay (e.g. SendGrid, Mailgun, Amazon SES)</div>
+  <button class="btn btn-primary" onclick="document.getElementById('add-modal').classList.remove('hidden')">Add SMTP Server</button>
+</div>
+{{end}}
+
+<!-- How rotation works info -->
+{{if ne .SMTPMode "system_only"}}
+<div class="card" style="padding:16px 20px;">
+  <div style="font-size:13px;font-weight:600;color:#e4e4e7;margin-bottom:8px;">How delivery works</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
+      <div style="font-size:11px;color:#818cf8;font-weight:600;margin-bottom:4px;">Rotation OFF</div>
+      <div style="font-size:12px;color:#71717a;">All mail goes through the DEFAULT server (marked with purple badge)</div>
+    </div>
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
+      <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:4px;">Rotation ON</div>
+      <div style="font-size:12px;color:#71717a;">Each message is sent through the next server in round-robin order across all <em>active</em> servers</div>
+    </div>
+    {{if eq .SMTPMode "system_and_custom"}}
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
+      <div style="font-size:11px;color:#fbbf24;font-weight:600;margin-bottom:4px;">System + Custom</div>
+      <div style="font-size:12px;color:#71717a;">System SMTP (direct MX delivery) is included in the rotation pool alongside your custom servers</div>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+</div>
+
+<!-- ══════════════════════════ Add / Bulk Modal ══════════════════════════════ -->
+<div id="add-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;">
+  <div style="background:#18181b;border:1px solid #27272a;border-radius:12px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;">
+
+    <!-- Modal header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px 0;">
+      <div style="display:flex;gap:0;border:1px solid #27272a;border-radius:8px;overflow:hidden;">
+        <button id="tab-single" onclick="switchTab('single')"
+          style="padding:6px 18px;font-size:12px;font-weight:600;cursor:pointer;border:none;background:#818cf8;color:#fff;transition:all .15s;">
+          Single
+        </button>
+        <button id="tab-bulk" onclick="switchTab('bulk')"
+          style="padding:6px 18px;font-size:12px;font-weight:600;cursor:pointer;border:none;background:#27272a;color:#71717a;transition:all .15s;">
+          Bulk Import
+        </button>
+      </div>
+      <button onclick="closeModal()" style="background:none;border:none;color:#71717a;font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <!-- ── Single tab ── -->
+    <div id="pane-single" style="padding:20px 24px 24px;">
+      <div style="font-size:13px;font-weight:700;color:#e4e4e7;margin-bottom:16px;">Add Custom SMTP Server</div>
+
+      <!-- Quick presets -->
+      <div style="margin-bottom:16px;">
+        <div style="font-size:11px;color:#52525b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Quick Presets</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.gmail.com',587,'gmail','Gmail')">
+            <img src="https://www.google.com/favicon.ico" width="12" height="12" style="border-radius:2px;"> Gmail
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.mail.yahoo.com',587,'yahoo','Yahoo')">
+            <img src="https://www.yahoo.com/favicon.ico" width="12" height="12" style="border-radius:2px;"> Yahoo
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.office365.com',587,'outlook','Outlook/Office365')">
+            <img src="https://outlook.com/favicon.ico" width="12" height="12" style="border-radius:2px;"> Outlook
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.sendgrid.net',587,'apikey','SendGrid')">
+            <span style="color:#1a82e2;font-size:10px;font-weight:700;">SG</span> SendGrid
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.mailgun.org',587,'','Mailgun')">
+            <span style="color:#f06b26;font-size:10px;font-weight:700;">MG</span> Mailgun
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('email-smtp.us-east-1.amazonaws.com',587,'','Amazon SES')">
+            <span style="color:#ff9900;font-size:10px;font-weight:700;">SES</span> Amazon SES
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.zoho.com',587,'','Zoho')">
+            <span style="color:#e42527;font-size:10px;font-weight:700;">Z</span> Zoho
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.postmarkapp.com',587,'','Postmark')">
+            <span style="color:#ffcc00;font-size:10px;font-weight:700;">PM</span> Postmark
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.elasticemail.com',2525,'','Elastic Email')">
+            <span style="color:#00aaff;font-size:10px;font-weight:700;">EE</span> Elastic Email
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.brevo.com',587,'','Brevo/Sendinblue')">
+            <span style="color:#0092ff;font-size:10px;font-weight:700;">BR</span> Brevo
+          </button>
+        </div>
+      </div>
+
+      <form method="POST" action="/user/smtp/add" id="smtp-add-form">
+        <div class="form-group">
+          <label class="form-label">Label</label>
+          <input class="form-input" name="label" id="f-label" placeholder="e.g. SendGrid Production"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 110px;gap:10px;">
+          <div class="form-group">
+            <label class="form-label">SMTP Host</label>
+            <input class="form-input" name="host" id="f-host" placeholder="smtp.example.com" required/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Port</label>
+            <input class="form-input" name="port" id="f-port" value="587" placeholder="587"/>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="form-group">
+            <label class="form-label">Username</label>
+            <input class="form-input" name="smtp_user" id="f-user" placeholder="apikey" required/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input class="form-input" type="password" name="smtp_pass" id="f-pass" placeholder="••••••••" required/>
+          </div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" name="use_tls" id="f-tls" checked style="width:14px;height:14px;accent-color:#818cf8;"/>
+            <span style="font-size:13px;color:#e4e4e7;">Use STARTTLS</span>
+          </label>
+        </div>
+        <div id="test-result" style="display:none;padding:9px 13px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+          <button type="button" class="btn btn-ghost" style="font-size:12px;" onclick="testSMTP()">
+            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Test
+          </button>
+          <button type="button" class="btn btn-ghost" style="font-size:12px;" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" style="font-size:12px;">Save &amp; Verify</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- ── Bulk tab ── -->
+    <div id="pane-bulk" style="padding:20px 24px 24px;display:none;">
+      <div style="font-size:13px;font-weight:700;color:#e4e4e7;margin-bottom:4px;">Bulk Import SMTP Servers</div>
+      <div style="font-size:12px;color:#52525b;margin-bottom:14px;">One server per line. Format:
+        <code style="background:#09090b;padding:2px 6px;border-radius:4px;color:#a78bfa;">host:port:user:pass:tls</code>
+        — TLS is <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">1</code> or <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">0</code>
+      </div>
+
+      <!-- Examples -->
+      <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:10px 14px;font-family:monospace;font-size:11px;color:#52525b;margin-bottom:14px;line-height:1.8;">
+        smtp.gmail.com:587:user@gmail.com:app-password:1<br>
+        smtp.sendgrid.net:587:apikey:SG.xxxx:1<br>
+        smtp.mailgun.org:587:postmaster@mg.example.com:key-xxx:1<br>
+        smtp.office365.com:587:user@company.com:password:1
+      </div>
+
+      <form method="POST" action="/user/smtp/bulk" id="bulk-form">
+        <div class="form-group">
+          <textarea class="form-input" name="lines" id="bulk-lines" rows="10"
+            placeholder="smtp.gmail.com:587:user@gmail.com:app-password:1&#10;smtp.sendgrid.net:587:apikey:SG.xxxx:1"
+            style="font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" name="test_all" id="bulk-test" style="width:14px;height:14px;accent-color:#818cf8;"/>
+            <span style="font-size:13px;color:#e4e4e7;">Test each connection before saving</span>
+            <span style="font-size:11px;color:#52525b;">(slower but safer)</span>
+          </label>
+        </div>
+        <div id="bulk-progress" style="display:none;padding:9px 13px;border-radius:6px;font-size:12px;margin-bottom:12px;background:#09090b;border:1px solid #27272a;color:#a1a1aa;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button type="button" class="btn btn-ghost" style="font-size:12px;" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" style="font-size:12px;">Import All</button>
+        </div>
+      </form>
+    </div>
+
+  </div>
+</div>
+
+<style>
+.preset-btn {
+  display:inline-flex;align-items:center;gap:5px;
+  background:#09090b;border:1px solid #27272a;color:#a1a1aa;
+  padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;
+  transition:border-color .15s,color .15s;
+}
+.preset-btn:hover { border-color:#818cf8;color:#e4e4e7; }
+</style>
+
+<script>
+// ── Tab switching ──────────────────────────────────────────────────────────
+function openModal(tab) {
+  document.getElementById('add-modal').classList.remove('hidden');
+  switchTab(tab || 'single');
+}
+function closeModal() {
+  document.getElementById('add-modal').classList.add('hidden');
+}
+function switchTab(t) {
+  const isSingle = t === 'single';
+  document.getElementById('pane-single').style.display = isSingle ? '' : 'none';
+  document.getElementById('pane-bulk').style.display   = isSingle ? 'none' : '';
+  document.getElementById('tab-single').style.background = isSingle ? '#818cf8' : '#27272a';
+  document.getElementById('tab-single').style.color = isSingle ? '#fff' : '#71717a';
+  document.getElementById('tab-bulk').style.background = isSingle ? '#27272a' : '#818cf8';
+  document.getElementById('tab-bulk').style.color = isSingle ? '#71717a' : '#fff';
+}
+
+// ── Preset fill ────────────────────────────────────────────────────────────
+function applyPreset(host, port, defaultUser, label) {
+  document.getElementById('f-host').value  = host;
+  document.getElementById('f-port').value  = port;
+  document.getElementById('f-label').value = label;
+  if (defaultUser) document.getElementById('f-user').value = defaultUser;
+  document.getElementById('f-user').focus();
+  // Clear any previous test result
+  const r = document.getElementById('test-result');
+  r.style.display = 'none';
+}
+
+// ── Single SMTP test ───────────────────────────────────────────────────────
+async function testSMTP() {
+  const host = document.getElementById('f-host').value.trim();
+  const port = document.getElementById('f-port').value || '587';
+  const user = document.getElementById('f-user').value.trim();
+  const pass = document.getElementById('f-pass').value;
+  const useTLS = document.getElementById('f-tls').checked;
+  const res  = document.getElementById('test-result');
+
+  res.style.display = 'block';
+  res.style.cssText += ';background:#09090b;border:1px solid #27272a;color:#a1a1aa;';
+  res.textContent = '⏳ Connecting to ' + host + ':' + port + ' …';
+
+  try {
+    const r = await fetch('/user/smtp/test', {
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({host,port,smtp_user:user,smtp_pass:pass,use_tls:useTLS?'true':'false'})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      res.style.cssText += ';background:#052e16;border:1px solid #14532d;color:#4ade80;';
+      res.textContent = '✓ Connection successful — credentials accepted';
+    } else {
+      res.style.cssText += ';background:#1c0606;border:1px solid #450a0a;color:#f87171;';
+      res.textContent = '✗ ' + (d.error || 'Connection failed');
+    }
+  } catch(e) {
+    res.style.cssText += ';background:#1c0606;border:1px solid #450a0a;color:#f87171;';
+    res.textContent = '✗ ' + e.message;
+  }
+}
+</script>
+{{end}}

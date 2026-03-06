@@ -146,6 +146,14 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/domains", webauth.RequireUser(uh.Domains))
 	mux.HandleFunc("/user/domains/add", webauth.RequireUser(uh.AddDomain))
 	mux.HandleFunc("/user/domains/delete", webauth.RequireUser(uh.DeleteDomain))
+	mux.HandleFunc("/user/smtp", webauth.RequireUser(uh.SMTPPage))
+	mux.HandleFunc("/user/smtp/add", webauth.RequireUser(uh.AddSMTP))
+	mux.HandleFunc("/user/smtp/delete", webauth.RequireUser(uh.DeleteSMTP))
+	mux.HandleFunc("/user/smtp/default", webauth.RequireUser(uh.SetDefaultSMTP))
+	mux.HandleFunc("/user/smtp/toggle", webauth.RequireUser(uh.ToggleSMTP))
+	mux.HandleFunc("/user/smtp/rotation", webauth.RequireUser(uh.ToggleSMTPRotation))
+	mux.HandleFunc("/user/smtp/test", webauth.RequireUser(uh.TestSMTP))
+	mux.HandleFunc("/user/smtp/bulk", webauth.RequireUser(uh.BulkAddSMTP))
 
 	log.Printf("web: UI server listening on %s", s.addr)
 	if err := http.ListenAndServe(s.addr, mux); err != nil {

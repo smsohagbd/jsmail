@@ -4,7 +4,7 @@
   <div style="display:flex;align-items:center;justify-content:space-between;">
     <div>
       <div class="page-title">Users</div>
-      <div class="page-sub">Manage SMTP accounts</div>
+      <div class="page-sub">Manage SMTP accounts and delivery modes</div>
     </div>
     <button class="btn btn-primary" onclick="document.getElementById('create-modal').style.display='flex'">
       <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
@@ -20,6 +20,8 @@
         <th style="padding-left:20px;">Username</th>
         <th>Email</th>
         <th>Daily Quota</th>
+        <th>SMTP Mode</th>
+        <th>Max Custom</th>
         <th>Status</th>
         <th>Created</th>
         <th style="padding-right:20px;">Actions</th>
@@ -32,11 +34,22 @@
           </td>
           <td style="color:#71717a;">{{if .Email}}{{.Email}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
           <td>{{if .QuotaPerDay}}<span style="color:#e4e4e7;">{{.QuotaPerDay}}/day</span>{{else}}<span style="color:#4ade80;font-size:12px;">Unlimited</span>{{end}}</td>
+          <td>
+            {{if eq .SMTPMode "custom_only"}}
+              <span style="background:#1e1b4b;color:#818cf8;font-size:11px;padding:2px 8px;border-radius:10px;">Custom Only</span>
+            {{else if eq .SMTPMode "system_and_custom"}}
+              <span style="background:#052e16;color:#4ade80;font-size:11px;padding:2px 8px;border-radius:10px;">Sys+Custom</span>
+            {{else}}
+              <span style="background:#18181b;color:#71717a;font-size:11px;padding:2px 8px;border-radius:10px;">System Only</span>
+            {{end}}
+          </td>
+          <td style="font-size:12px;color:#71717a;">{{.MaxCustomSMTP}}</td>
           <td>{{if .Active}}<span class="badge badge-active">Active</span>{{else}}<span class="badge badge-inactive">Disabled</span>{{end}}</td>
           <td style="font-size:12px;color:#52525b;">{{.CreatedAt.Format "Jan 2, 2006"}}</td>
           <td style="padding-right:20px;">
             <div style="display:flex;gap:6px;">
-              <button class="btn btn-secondary btn-sm" onclick="editUser({{.ID}},'{{.Username}}','{{.Email}}',{{.QuotaPerDay}},{{.Active}})">Edit</button>
+              <button class="btn btn-secondary btn-sm"
+                onclick="editUser({{.ID}},'{{.Username}}','{{.Email}}',{{.QuotaPerDay}},{{.Active}},'{{.SMTPMode}}',{{.MaxCustomSMTP}})">Edit</button>
               <form method="POST" action="/admin/users/delete" style="display:inline;" onsubmit="return confirm('Delete {{.Username}}?')">
                 <input type="hidden" name="id" value="{{.ID}}"/>
                 <button type="submit" class="btn btn-danger">Delete</button>
@@ -45,10 +58,7 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="6" class="empty-state" style="padding-left:20px;">
-          <svg width="32" height="32" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-          No users yet
-        </td></tr>
+        <tr><td colspan="8" class="empty-state" style="padding-left:20px;">No users yet</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -58,7 +68,7 @@
 
 <!-- Create modal -->
 <div id="create-modal" class="modal-backdrop" style="display:none;">
-  <div class="modal">
+  <div class="modal" style="max-width:500px;">
     <div class="modal-title">Create SMTP User</div>
     <form method="POST" action="/admin/users/create">
       <div class="form-group">
@@ -77,6 +87,19 @@
         <label class="form-label">Daily Quota <span style="color:#52525b;">(0 = unlimited)</span></label>
         <input class="form-input" type="number" name="quota" value="0" min="0"/>
       </div>
+      <div class="form-group">
+        <label class="form-label">SMTP Delivery Mode</label>
+        <select class="form-input" name="smtp_mode">
+          <option value="system_only">System SMTP Only — user gets no custom SMTP access</option>
+          <option value="custom_only">Custom SMTP Only — user must use their own SMTP</option>
+          <option value="system_and_custom">System + Custom — rotate between system and user's SMTPs</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Max Custom SMTP Servers</label>
+        <input class="form-input" type="number" name="max_custom_smtp" value="5" min="0"/>
+        <div style="font-size:11px;color:#52525b;margin-top:4px;">0 = unlimited</div>
+      </div>
       <div style="display:flex;gap:10px;margin-top:20px;">
         <button type="submit" class="btn btn-primary" style="flex:1;justify-content:center;">Create</button>
         <button type="button" class="btn btn-secondary" style="flex:1;justify-content:center;" onclick="document.getElementById('create-modal').style.display='none'">Cancel</button>
@@ -87,7 +110,7 @@
 
 <!-- Edit modal -->
 <div id="edit-modal" class="modal-backdrop" style="display:none;">
-  <div class="modal">
+  <div class="modal" style="max-width:500px;">
     <div class="modal-title">Edit User</div>
     <form method="POST" action="/admin/users/update">
       <input type="hidden" name="id" id="edit-id"/>
@@ -102,6 +125,18 @@
       <div class="form-group">
         <label class="form-label">Daily Quota <span style="color:#52525b;">(0 = unlimited)</span></label>
         <input class="form-input" type="number" name="quota" id="edit-quota" min="0"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">SMTP Delivery Mode</label>
+        <select class="form-input" name="smtp_mode" id="edit-smtp-mode">
+          <option value="system_only">System SMTP Only</option>
+          <option value="custom_only">Custom SMTP Only</option>
+          <option value="system_and_custom">System + Custom (Rotation)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Max Custom SMTP Servers</label>
+        <input class="form-input" type="number" name="max_custom_smtp" id="edit-max-smtp" min="0"/>
       </div>
       <div class="form-group">
         <label class="form-label">Status</label>
@@ -119,11 +154,13 @@
 </div>
 
 <script>
-function editUser(id, username, email, quota, active) {
+function editUser(id, username, email, quota, active, smtpMode, maxSmtp) {
   document.getElementById('edit-id').value = id;
   document.getElementById('edit-uname').value = username;
   document.getElementById('edit-quota').value = quota;
   document.getElementById('edit-active').value = active ? '1' : '0';
+  document.getElementById('edit-smtp-mode').value = smtpMode || 'system_only';
+  document.getElementById('edit-max-smtp').value = maxSmtp || 5;
   document.getElementById('edit-modal').style.display = 'flex';
 }
 </script>

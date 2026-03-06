@@ -46,6 +46,7 @@ func Init(path, adminUser, adminPass string) error {
 		&BounceList{},
 		&Domain{},
 		&IPPool{},
+		&UserSMTP{},
 	); err != nil {
 		return err
 	}
@@ -266,6 +267,89 @@ func SetSetting(key, value string) {
 	} else {
 		DB.Model(&s).Update("value", value)
 	}
+}
+
+// ──────────────────────────── UserSMTP ───────────────────────────────────────
+
+// GetUserSMTPs returns all custom SMTP entries for a user.
+func GetUserSMTPs(username string) []UserSMTP {
+	var list []UserSMTP
+	DB.Where("owner_username = ?", username).Order("is_default desc, created_at asc").Find(&list)
+	return list
+}
+
+// GetActiveUserSMTPs returns only active custom SMTP entries for a user.
+func GetActiveUserSMTPs(username string) []UserSMTP {
+	var list []UserSMTP
+	DB.Where("owner_username = ? AND active = ?", username, true).
+		Order("is_default desc, created_at asc").Find(&list)
+	return list
+}
+
+// AddUserSMTP inserts a new custom SMTP entry. If it's the first one, marks it default.
+func AddUserSMTP(entry *UserSMTP) error {
+	var count int64
+	DB.Model(&UserSMTP{}).Where("owner_username = ?", entry.OwnerUsername).Count(&count)
+	if count == 0 {
+		entry.IsDefault = true
+	}
+	return DB.Create(entry).Error
+}
+
+// DeleteUserSMTP removes a custom SMTP entry.
+func DeleteUserSMTP(id uint, username string) {
+	var entry UserSMTP
+	if err := DB.Where("id = ? AND owner_username = ?", id, username).First(&entry).Error; err != nil {
+		return
+	}
+	DB.Delete(&entry)
+	// If the deleted entry was the default, promote the first remaining one.
+	if entry.IsDefault {
+		var next UserSMTP
+		if err := DB.Where("owner_username = ? AND active = ?", username, true).
+			Order("created_at asc").First(&next).Error; err == nil {
+			DB.Model(&next).Update("is_default", true)
+		}
+	}
+}
+
+// SetDefaultUserSMTP sets one entry as default and clears all others for the user.
+func SetDefaultUserSMTP(id uint, username string) {
+	DB.Model(&UserSMTP{}).Where("owner_username = ?", username).
+		Update("is_default", false)
+	DB.Model(&UserSMTP{}).Where("id = ? AND owner_username = ?", id, username).
+		Update("is_default", true)
+}
+
+// ToggleUserSMTP flips the active flag for an entry.
+func ToggleUserSMTP(id uint, username string) {
+	var entry UserSMTP
+	if err := DB.Where("id = ? AND owner_username = ?", id, username).First(&entry).Error; err != nil {
+		return
+	}
+	DB.Model(&entry).Update("active", !entry.Active)
+}
+
+// GetUserSMTPMode returns a user's SMTP delivery mode and rotation preference.
+func GetUserSMTPMode(username string) (mode string, rotation bool) {
+	var u User
+	if err := DB.Select("smtp_mode", "smtp_rotation").
+		Where("username = ?", username).First(&u).Error; err != nil {
+		return "system_only", false
+	}
+	if u.SMTPMode == "" {
+		return "system_only", false
+	}
+	return u.SMTPMode, u.SMTPRotation
+}
+
+// SetUserSMTPMode updates a user's SMTP mode and rotation flag.
+func SetUserSMTPMode(username, mode string, rotation bool, maxSMTP int) {
+	DB.Model(&User{}).Where("username = ?", username).Updates(map[string]interface{}{
+		"smtp_mode":       mode,
+		"smtp_rotation":   rotation,
+		"max_custom_smtp": maxSMTP,
+	})
 }
 
 // CheckPassword verifies a user's password and returns the user if valid.
