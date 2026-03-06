@@ -10,21 +10,29 @@ import (
 
 	"smtp-server/internal/config"
 	"smtp-server/internal/queue"
+	"smtp-server/internal/verifier"
 )
 
 // Server exposes an HTTP API for injecting messages into the queue.
 type Server struct {
-	cfg   config.APIConfig
-	queue *queue.Queue
+	cfg      config.APIConfig
+	queue    *queue.Queue
+	verifier *verifier.Verifier
 }
 
-func New(cfg config.APIConfig, q *queue.Queue) *Server {
-	return &Server{cfg: cfg, queue: q}
+func New(cfg config.APIConfig, q *queue.Queue, heloName string) *Server {
+	v := verifier.New(verifier.Config{
+		HeloName:       heloName,
+		ConnectTimeout: 10 * time.Second,
+	})
+	return &Server{cfg: cfg, queue: q, verifier: v}
 }
 
 func (s *Server) Start() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/send", s.requireAuth(s.handleSend))
+	mux.HandleFunc("/verify", s.requireAuth(s.handleVerify))
+	mux.HandleFunc("/verify/bulk", s.requireAuth(s.handleVerifyBulk))
 	mux.HandleFunc("/health", s.handleHealth)
 
 	log.Printf("api: HTTP server listening on %s", s.cfg.ListenAddr)
@@ -156,6 +164,103 @@ func sanitizeDomain(email string) string {
 		return email[idx+1:]
 	}
 	return "unknown"
+}
+
+// handleVerify verifies a single email address.
+// GET  /verify?email=user@example.com
+// POST /verify  {"email":"user@example.com"}
+func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	var email string
+	if r.Method == http.MethodGet {
+		email = strings.TrimSpace(r.URL.Query().Get("email"))
+	} else if r.Method == http.MethodPost {
+		var body struct {
+			Email string `json:"email"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		email = strings.TrimSpace(body.Email)
+	} else {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET or POST"})
+		return
+	}
+
+	if email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
+		return
+	}
+
+	log.Printf("[API] verify request for %q from %s", email, r.RemoteAddr)
+	result := s.verifier.Verify(email)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleVerifyBulk verifies a list of emails concurrently.
+// POST /verify/bulk  {"emails":["a@b.com","c@d.com",...], "concurrency": 5}
+func (s *Server) handleVerifyBulk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return
+	}
+
+	var body struct {
+		Emails      []string `json:"emails"`
+		Concurrency int      `json:"concurrency"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if len(body.Emails) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "emails array is required"})
+		return
+	}
+	if len(body.Emails) > 500 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "max 500 emails per request"})
+		return
+	}
+
+	concurrency := body.Concurrency
+	if concurrency <= 0 {
+		concurrency = 5
+	}
+
+	log.Printf("[API] bulk verify %d emails (concurrency=%d) from %s",
+		len(body.Emails), concurrency, r.RemoteAddr)
+
+	results := s.verifier.VerifyBulk(body.Emails, concurrency)
+
+	// Build summary stats.
+	valid, invalid, unknown, disposable, catchAll := 0, 0, 0, 0, 0
+	for _, res := range results {
+		switch {
+		case res.IsDisposable:
+			disposable++
+		case res.IsCatchAll:
+			catchAll++
+			if res.Valid {
+				valid++
+			}
+		case res.Valid:
+			valid++
+		case res.Checks.Mailbox == "unknown":
+			unknown++
+		default:
+			invalid++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":      len(results),
+		"valid":      valid,
+		"invalid":    invalid,
+		"unknown":    unknown,
+		"catch_all":  catchAll,
+		"disposable": disposable,
+		"results":    results,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

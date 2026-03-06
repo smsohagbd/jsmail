@@ -37,7 +37,7 @@ func main() {
 	eng.Start()
 
 	// Start the HTTP injection API.
-	go api.New(cfg.API, q).Start()
+	go api.New(cfg.API, q, cfg.Delivery.HeloName).Start()
 
 	// Start the SMTP submission server.
 	go func() {
