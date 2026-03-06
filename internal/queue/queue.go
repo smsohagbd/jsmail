@@ -141,7 +141,7 @@ func (q *Queue) Complete(id string) {
 	os.Remove(q.msgPath(id))
 }
 
-// Defer reschedules a message for later retry.
+// Defer reschedules a message for later retry and increments the retry counter.
 func (q *Queue) Defer(msg *Message, retryAfter time.Duration, lastError string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -152,6 +152,22 @@ func (q *Queue) Defer(msg *Message, retryAfter time.Duration, lastError string) 
 	msg.LastError = lastError
 	if err := q.save(msg); err != nil {
 		log.Printf("queue: failed to defer message %s: %v", msg.ID, err)
+	}
+}
+
+// DeferNoIncrement reschedules a message for later retry WITHOUT incrementing
+// the retry counter. Used for 421 rate-limit deferrals so MaxRetries is
+// reserved for real SMTP failures.
+func (q *Queue) DeferNoIncrement(msg *Message, retryAfter time.Duration, lastError string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.inflight, msg.ID)
+	msg.Status = StatusDeferred
+	// RetryCount intentionally not incremented.
+	msg.NextRetry = time.Now().Add(retryAfter)
+	msg.LastError = lastError
+	if err := q.save(msg); err != nil {
+		log.Printf("queue: failed to defer (no-inc) message %s: %v", msg.ID, err)
 	}
 }
 

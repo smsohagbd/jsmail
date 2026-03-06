@@ -56,22 +56,24 @@ func (r *tmplRenderer) Render(w http.ResponseWriter, name string, data map[strin
 
 // Server is the web UI server.
 type Server struct {
-	addr     string
-	db       *gorm.DB
-	queue    *queue.Queue
-	verifier *verifier.Verifier
-	renderer *tmplRenderer
-	cfg      map[string]string // snapshot of config values for settings page
+	addr       string
+	db         *gorm.DB
+	queue      *queue.Queue
+	verifier   *verifier.Verifier
+	renderer   *tmplRenderer
+	cfg        map[string]string // snapshot of config values for settings page
+	configPath string            // path to config.yaml for the editor
 }
 
-func NewServer(addr string, db *gorm.DB, q *queue.Queue, v *verifier.Verifier, cfgSnapshot map[string]string) *Server {
+func NewServer(addr string, db *gorm.DB, q *queue.Queue, v *verifier.Verifier, cfgSnapshot map[string]string, configPath string) *Server {
 	return &Server{
-		addr:     addr,
-		db:       db,
-		queue:    q,
-		verifier: v,
-		renderer: &tmplRenderer{fs: templateFS},
-		cfg:      cfgSnapshot,
+		addr:       addr,
+		db:         db,
+		queue:      q,
+		verifier:   v,
+		renderer:   &tmplRenderer{fs: templateFS},
+		cfg:        cfgSnapshot,
+		configPath: configPath,
 	}
 }
 
@@ -100,7 +102,7 @@ func (s *Server) Start() {
 	})
 
 	// Admin routes
-	ah := &webadmin.Handler{DB: s.db, Queue: s.queue, Tmpl: s.renderer, ConfigSnapshot: s.cfg}
+	ah := &webadmin.Handler{DB: s.db, Queue: s.queue, Tmpl: s.renderer, ConfigSnapshot: s.cfg, ConfigPath: s.configPath}
 	mux.HandleFunc("/admin", webauth.RequireAdmin(ah.Dashboard))
 	mux.HandleFunc("/admin/users", webauth.RequireAdmin(ah.Users))
 	mux.HandleFunc("/admin/users/create", webauth.RequireAdmin(ah.CreateUser))
@@ -116,6 +118,15 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/settings", webauth.RequireAdmin(ah.Settings))
 	mux.HandleFunc("/admin/reports", webauth.RequireAdmin(ah.Reports))
 	mux.HandleFunc("/admin/bounce/remove", webauth.RequireAdmin(ah.RemoveBounce))
+	mux.HandleFunc("/admin/domains", webauth.RequireAdmin(ah.Domains))
+	mux.HandleFunc("/admin/domains/add", webauth.RequireAdmin(ah.AddDomain))
+	mux.HandleFunc("/admin/domains/delete", webauth.RequireAdmin(ah.DeleteDomain))
+	mux.HandleFunc("/admin/ippool", webauth.RequireAdmin(ah.IPPool))
+	mux.HandleFunc("/admin/ippool/save", webauth.RequireAdmin(ah.SaveIPPool))
+	mux.HandleFunc("/admin/config", webauth.RequireAdmin(ah.ConfigEditor))
+	mux.HandleFunc("/admin/ssl", webauth.RequireAdmin(ah.SSL))
+	mux.HandleFunc("/admin/ssl/generate", webauth.RequireAdmin(ah.GenerateSelfSigned))
+	mux.HandleFunc("/admin/ssl/verify", webauth.RequireAdmin(ah.VerifyCert))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer}
@@ -127,6 +138,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/verify/single", webauth.RequireUser(uh.VerifySingle))
 	mux.HandleFunc("/user/verify/bulk", webauth.RequireUser(uh.VerifyBulk))
 	mux.HandleFunc("/user/reports", webauth.RequireUser(uh.Reports))
+	mux.HandleFunc("/user/domains", webauth.RequireUser(uh.Domains))
+	mux.HandleFunc("/user/domains/add", webauth.RequireUser(uh.AddDomain))
+	mux.HandleFunc("/user/domains/delete", webauth.RequireUser(uh.DeleteDomain))
 
 	log.Printf("web: UI server listening on %s", s.addr)
 	if err := http.ListenAndServe(s.addr, mux); err != nil {

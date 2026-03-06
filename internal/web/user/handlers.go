@@ -2,9 +2,11 @@ package user
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -260,6 +262,60 @@ func joinLines(ss []string) string {
 		result += s
 	}
 	return result
+}
+
+// ──────────────────────────── Domains ────────────────────────────────────────
+
+func (h *Handler) Domains(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	serverIP := userOutboundIP()
+	h.Tmpl.Render(w, "user/domains", map[string]interface{}{
+		"Page":       "domains",
+		"ActiveUser": claims.Username,
+		"Domains":    appdb.GetDomainsByOwner(claims.Username),
+		"ServerIP":   serverIP,
+		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   r.URL.Query().Get("err"),
+	})
+}
+
+func (h *Handler) AddDomain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/domains", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	name := strings.TrimSpace(r.FormValue("name"))
+	selector := strings.TrimSpace(r.FormValue("selector"))
+	if name == "" {
+		http.Redirect(w, r, "/user/domains?err=domain+name+required", http.StatusFound)
+		return
+	}
+	if _, err := appdb.CreateDomain(claims.Username, name, selector); err != nil {
+		http.Redirect(w, r, "/user/domains?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/domains?ok=domain+added", http.StatusFound)
+}
+
+func (h *Handler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	// Only delete if owned by this user.
+	var d appdb.Domain
+	if err := h.DB.Where("id = ? AND owner_username = ?", id, claims.Username).First(&d).Error; err == nil {
+		appdb.DeleteDomain(uint(id))
+	}
+	http.Redirect(w, r, "/user/domains", http.StatusFound)
+}
+
+func userOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "unknown"
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
 // ──────────────────────────── Reports ────────────────────────────────────────

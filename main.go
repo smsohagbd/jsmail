@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"smtp-server/internal/api"
@@ -60,6 +61,34 @@ func main() {
 		}
 	}
 
+	// Per-domain DKIM: load key from DB based on the From: domain.
+	eng.DKIMKeyLoader = func(domain string) (privKeyPEM, selector string, ok bool) {
+		if d, found := appdb.GetDomainByName(domain); found && d.DKIMPrivKey != "" {
+			return d.DKIMPrivKey, d.DKIMSelector, true
+		}
+		return "", "", false
+	}
+
+	// IP pool: round-robin outbound IPs from DB setting.
+	eng.IPPoolProvider = func() []string {
+		if appdb.GetSetting("ip_pool_enabled", "false") != "true" {
+			return nil
+		}
+		raw := appdb.GetSetting("ip_pool_ips", "")
+		var ips []string
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) > 0 {
+				ips = append(ips, parts[0])
+			}
+		}
+		return ips
+	}
+
 	eng.Start()
 
 	// Start the HTTP injection API.
@@ -77,6 +106,9 @@ func main() {
 	cfgSnapshot := map[string]string{
 		"smtp_listen":     cfg.SMTP.ListenAddr,
 		"smtp_domain":     cfg.SMTP.Domain,
+		"tls_enabled":     boolStr(cfg.SMTP.TLS.Enabled),
+		"tls_cert_file":   cfg.SMTP.TLS.CertFile,
+		"tls_key_file":    cfg.SMTP.TLS.KeyFile,
 		"dkim_enabled":    boolStr(cfg.Delivery.DKIM.Enabled),
 		"max_retries":     strconv.Itoa(cfg.Delivery.MaxRetries),
 		"connect_timeout": cfg.Delivery.ConnectTimeout,
@@ -86,7 +118,7 @@ func main() {
 		"web_listen":      cfg.Web.ListenAddr,
 		"db_path":         cfg.Web.DBPath,
 	}
-	go web.NewServer(cfg.Web.ListenAddr, appdb.DB, q, v, cfgSnapshot).Start()
+	go web.NewServer(cfg.Web.ListenAddr, appdb.DB, q, v, cfgSnapshot, *configPath).Start()
 
 	log.Printf("=== smtp-server started ===")
 	log.Printf("  SMTP  : %s  (domain: %s)", cfg.SMTP.ListenAddr, cfg.SMTP.Domain)

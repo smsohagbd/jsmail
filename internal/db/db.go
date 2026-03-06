@@ -1,6 +1,12 @@
 package db
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -38,6 +44,7 @@ func Init(path, adminUser, adminPass string) error {
 		&UpstreamSMTP{},
 		&Setting{},
 		&BounceList{},
+		&Domain{},
 	); err != nil {
 		return err
 	}
@@ -146,6 +153,93 @@ func IsHardBounced(email string) bool {
 // RemoveFromBounceList removes an address from the suppression list.
 func RemoveFromBounceList(email string) {
 	DB.Where("email = ?", strings.ToLower(email)).Delete(&BounceList{})
+}
+
+// ──────────────────────────── Domains ────────────────────────────────────────
+
+// CreateDomain generates a DKIM RSA-2048 key pair and stores the domain.
+func CreateDomain(ownerUsername, name, selector string) (*Domain, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if selector == "" {
+		selector = "mail"
+	}
+
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("generate DKIM key: %w", err)
+	}
+
+	privKeyPEM := string(pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privKey),
+	}))
+
+	pubDER, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshal public key: %w", err)
+	}
+	dkimDNS := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubDER)
+
+	d := &Domain{
+		OwnerUsername: ownerUsername,
+		Name:          name,
+		DKIMSelector:  selector,
+		DKIMPrivKey:   privKeyPEM,
+		DKIMPubKeyDNS: dkimDNS,
+	}
+	if err := DB.Create(d).Error; err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// GetAllDomains returns all domains ordered by name.
+func GetAllDomains() []Domain {
+	var domains []Domain
+	DB.Order("name asc").Find(&domains)
+	return domains
+}
+
+// GetDomainsByOwner returns domains owned by a specific user.
+func GetDomainsByOwner(owner string) []Domain {
+	var domains []Domain
+	DB.Where("owner_username = ?", owner).Order("name asc").Find(&domains)
+	return domains
+}
+
+// GetDomainByName looks up a domain by name.
+func GetDomainByName(name string) (*Domain, bool) {
+	var d Domain
+	if err := DB.Where("name = ?", strings.ToLower(name)).First(&d).Error; err != nil {
+		return nil, false
+	}
+	return &d, true
+}
+
+// DeleteDomain removes a domain record.
+func DeleteDomain(id uint) {
+	DB.Delete(&Domain{}, id)
+}
+
+// ──────────────────────────── Settings ───────────────────────────────────────
+
+// GetSetting retrieves a setting value by key, returning def if not set.
+func GetSetting(key, def string) string {
+	var s Setting
+	if err := DB.Where("key = ?", key).First(&s).Error; err != nil {
+		return def
+	}
+	return s.Value
+}
+
+// SetSetting upserts a setting.
+func SetSetting(key, value string) {
+	var s Setting
+	if err := DB.Where("key = ?", key).First(&s).Error; err != nil {
+		DB.Create(&Setting{Key: key, Value: value})
+	} else {
+		DB.Model(&s).Update("value", value)
+	}
 }
 
 // CheckPassword verifies a user's password and returns the user if valid.

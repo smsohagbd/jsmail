@@ -1,0 +1,108 @@
+{{define "title"}}SSL / TLS — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">SSL / TLS Management</div>
+    <div class="page-sub">Manage certificates for SMTP TLS and STARTTLS</div>
+  </div>
+</div>
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<!-- Current cert status -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">SMTP TLS Status</div>
+    {{if .TLSEnabled}}
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <div style="width:8px;height:8px;border-radius:50%;background:#4ade80;"></div>
+      <span style="font-size:13px;color:#4ade80;font-weight:600;">TLS Enabled</span>
+    </div>
+    {{else}}
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <div style="width:8px;height:8px;border-radius:50%;background:#f87171;"></div>
+      <span style="font-size:13px;color:#f87171;font-weight:600;">TLS Disabled</span>
+    </div>
+    <p style="font-size:12px;color:#52525b;">Enable TLS in config.yaml: <code style="color:#a1a1aa;">smtp.tls.enabled: true</code></p>
+    {{end}}
+    <div style="font-size:12px;color:#52525b;font-family:monospace;margin-top:8px;">
+      <div>cert: {{.CertPath}}</div>
+      <div>key:  {{.KeyPath}}</div>
+    </div>
+  </div>
+
+  {{if .CertInfo}}
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">Current Certificate</div>
+    <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;">
+      <div><span style="color:#52525b;">CN:</span> <span style="color:#e4e4e7;">{{.CertInfo.Subject}}</span></div>
+      <div><span style="color:#52525b;">Valid:</span> <span style="color:#e4e4e7;">{{.CertInfo.NotBefore}} → {{.CertInfo.NotAfter}}</span></div>
+      {{if .CertInfo.DNSNames}}<div><span style="color:#52525b;">SANs:</span> <span style="color:#a78bfa;">{{range .CertInfo.DNSNames}}{{.}} {{end}}</span></div>{{end}}
+    </div>
+    <div style="margin-top:10px;">
+      <form method="POST" action="/admin/ssl/verify" style="display:inline;">
+        <input type="hidden" name="cert_path" value="{{.CertPath}}"/>
+        <input type="hidden" name="key_path" value="{{.KeyPath}}"/>
+        <button type="submit" class="btn btn-ghost" style="font-size:11px;">Verify Cert+Key Match</button>
+      </form>
+    </div>
+  </div>
+  {{else}}
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">Current Certificate</div>
+    <p style="font-size:13px;color:#52525b;">No certificate found at <code>{{.CertPath}}</code></p>
+    <p style="font-size:12px;color:#52525b;">Generate one below to get started.</p>
+  </div>
+  {{end}}
+</div>
+
+<!-- Self-signed generation -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Generate Self-Signed Certificate</span>
+    <span style="font-size:12px;color:#52525b;">ECDSA P-256 · 1 year validity</span>
+  </div>
+  <div class="card-body" style="padding:20px;">
+    <form method="POST" action="/admin/ssl/generate" style="display:flex;gap:10px;align-items:flex-end;">
+      <div style="flex:1;">
+        <label class="form-label">Hostname (Common Name)</label>
+        <input class="form-input" name="hostname" value="{{.HeloName}}" placeholder="mail.example.com"/>
+      </div>
+      <button type="submit" class="btn btn-primary" style="white-space:nowrap;">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+        Generate Certificate
+      </button>
+    </form>
+    <p style="font-size:12px;color:#52525b;margin-top:10px;">
+      Saves to <code style="color:#a1a1aa;">certs/server.crt</code> and <code style="color:#a1a1aa;">certs/server.key</code>.
+      Then update <code style="color:#a1a1aa;">config.yaml</code> to point to these files and <strong style="color:#fbbf24;">restart the server</strong>.
+    </p>
+  </div>
+</div>
+
+<!-- Let's Encrypt instructions -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Let's Encrypt (Recommended for Production)</span>
+    <span style="font-size:12px;color:#52525b;">Free, trusted, auto-renewal</span>
+  </div>
+  <div class="card-body" style="padding:20px;">
+    <p style="font-size:13px;color:#a1a1aa;margin-bottom:14px;">Let's Encrypt provides a free, publicly trusted certificate. Requirements:</p>
+    <ul style="font-size:12px;color:#71717a;line-height:2;padding-left:18px;margin-bottom:16px;">
+      <li>Your server's hostname must point to this server's IP in DNS</li>
+      <li>Port 80 (HTTP) must be publicly accessible for the ACME challenge</li>
+      <li>Port 443 or 25 can be used after cert is issued</li>
+    </ul>
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:14px;">
+      <div style="font-size:11px;color:#52525b;margin-bottom:8px;">Run on your server (requires certbot):</div>
+      <code style="font-size:12px;color:#4ade80;display:block;word-break:break-all;">certbot certonly --standalone -d {{.HeloName}} --agree-tos --non-interactive</code>
+      <div style="margin-top:12px;font-size:11px;color:#52525b;margin-bottom:8px;">Then update config.yaml with the issued cert paths:</div>
+      <code style="font-size:12px;color:#60a5fa;display:block;">smtp:<br>&nbsp;&nbsp;tls:<br>&nbsp;&nbsp;&nbsp;&nbsp;enabled: true<br>&nbsp;&nbsp;&nbsp;&nbsp;cert_file: /etc/letsencrypt/live/{{.HeloName}}/fullchain.pem<br>&nbsp;&nbsp;&nbsp;&nbsp;key_file: /etc/letsencrypt/live/{{.HeloName}}/privkey.pem</code>
+    </div>
+  </div>
+</div>
+
+</div>
+{{end}}

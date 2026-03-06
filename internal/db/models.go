@@ -61,8 +61,18 @@ type Setting struct {
 // Addresses in this list are rejected at RCPT TO time.
 type BounceList struct {
 	gorm.Model
-	Email      string `gorm:"uniqueIndex;not null"`
-	Reason     string
+	Email       string `gorm:"uniqueIndex;not null"`
+	Reason      string
 	BounceCount int
-	LastSeenAt time.Time
+	LastSeenAt  time.Time
+}
+
+// Domain represents a verified sending domain with its DKIM keys and DNS records.
+type Domain struct {
+	gorm.Model
+	OwnerUsername string `gorm:"index"`           // empty = global/admin domain
+	Name          string `gorm:"uniqueIndex;not null"` // e.g. "example.com"
+	DKIMSelector  string                          // e.g. "mail"
+	DKIMPrivKey   string `gorm:"type:text"`        // PEM PKCS1 RSA private key
+	DKIMPubKeyDNS string `gorm:"type:text"`        // "v=DKIM1; k=rsa; p=..." for DNS TXT
 }

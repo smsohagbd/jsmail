@@ -1,0 +1,57 @@
+{{define "title"}}IP Pool — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">IP Pool</div>
+    <div class="page-sub">Rotate outbound IPs for better deliverability</div>
+  </div>
+</div>
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Outbound IP Addresses</span></div>
+    <div class="card-body" style="padding:20px;">
+      <form method="POST" action="/admin/ippool/save">
+        <div class="form-group" style="margin-bottom:16px;">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+            <input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}} style="width:16px;height:16px;accent-color:#818cf8;"/>
+            <span class="form-label" style="margin:0;">Enable IP Pool Rotation</span>
+          </label>
+          <p style="font-size:12px;color:#52525b;margin-top:6px;">When enabled, outbound connections will rotate through the IPs listed below (round-robin).</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">IP Addresses</label>
+          <textarea class="form-input" name="ips" rows="12" style="font-family:monospace;font-size:13px;resize:vertical;"
+            placeholder="# One IP per line. Optionally add a hostname comment.&#10;1.2.3.4&#10;5.6.7.8  # secondary IP&#10;# 9.10.11.12  (commented out = skipped)">{{.IPs}}</textarea>
+          <p style="font-size:11px;color:#52525b;margin-top:6px;">Lines starting with # are ignored. First word on each line is taken as the IP.</p>
+        </div>
+        <div style="display:flex;justify-content:flex-end;">
+          <button type="submit" class="btn btn-primary">Save IP Pool</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div class="card" style="padding:20px;">
+      <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">How it works</div>
+      <ul style="font-size:12px;color:#a1a1aa;line-height:1.8;padding-left:18px;margin:0;">
+        <li>Each outbound connection binds to the next IP in the list</li>
+        <li>Round-robin distributes load evenly</li>
+        <li>If binding fails, system falls back to default IP</li>
+        <li>Each IP should have a PTR/rDNS record pointing to your HELO name</li>
+        <li>Add each IP to your SPF record</li>
+      </ul>
+    </div>
+    <div class="card" style="padding:20px;">
+      <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">SPF with multiple IPs</div>
+      <div style="font-family:monospace;font-size:11px;color:#4ade80;background:#052e16;padding:10px;border-radius:6px;word-break:break-all;">v=spf1 ip4:1.2.3.4 ip4:5.6.7.8 ~all</div>
+    </div>
+  </div>
+</div>
+
+</div>
+{{end}}

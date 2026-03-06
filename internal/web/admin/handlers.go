@@ -1,10 +1,21 @@
 package admin
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -33,6 +44,7 @@ type Handler struct {
 	Queue          *queue.Queue
 	Tmpl           TemplateRenderer
 	ConfigSnapshot map[string]string
+	ConfigPath     string // path to config.yaml for the editor
 }
 
 type TemplateRenderer interface {
@@ -415,4 +427,243 @@ func (h *Handler) RemoveBounce(w http.ResponseWriter, r *http.Request) {
 		appdb.RemoveFromBounceList(email)
 	}
 	http.Redirect(w, r, "/admin/reports", http.StatusFound)
+}
+
+// ──────────────────────────── Domains ────────────────────────────────────────
+
+func (h *Handler) Domains(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	domains := appdb.GetAllDomains()
+	serverIP := getOutboundIP()
+	heloName := h.ConfigSnapshot["smtp_domain"]
+	h.Tmpl.Render(w, "admin/domains", map[string]interface{}{
+		"Page":       "domains",
+		"ActiveUser": claims.Username,
+		"Domains":    domains,
+		"ServerIP":   serverIP,
+		"HeloName":   heloName,
+		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   r.URL.Query().Get("err"),
+	})
+}
+
+func (h *Handler) AddDomain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/domains", http.StatusFound)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	selector := strings.TrimSpace(r.FormValue("selector"))
+	if name == "" {
+		http.Redirect(w, r, "/admin/domains?err=domain+name+required", http.StatusFound)
+		return
+	}
+	if _, err := appdb.CreateDomain("", name, selector); err != nil {
+		http.Redirect(w, r, "/admin/domains?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/domains?ok=domain+added", http.StatusFound)
+}
+
+func (h *Handler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	appdb.DeleteDomain(uint(id))
+	http.Redirect(w, r, "/admin/domains", http.StatusFound)
+}
+
+// getOutboundIP returns the preferred outbound IP of this machine.
+func getOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "unknown"
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// ──────────────────────────── IP Pool ────────────────────────────────────────
+
+func (h *Handler) IPPool(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	h.Tmpl.Render(w, "admin/ippool", map[string]interface{}{
+		"Page":       "ippool",
+		"ActiveUser": claims.Username,
+		"Enabled":    appdb.GetSetting("ip_pool_enabled", "false") == "true",
+		"IPs":        appdb.GetSetting("ip_pool_ips", ""),
+		"FlashOK":    r.URL.Query().Get("ok"),
+	})
+}
+
+func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
+	enabled := r.FormValue("enabled") == "on"
+	ips := strings.TrimSpace(r.FormValue("ips"))
+	if enabled {
+		appdb.SetSetting("ip_pool_enabled", "true")
+	} else {
+		appdb.SetSetting("ip_pool_enabled", "false")
+	}
+	appdb.SetSetting("ip_pool_ips", ips)
+	http.Redirect(w, r, "/admin/ippool?ok=saved", http.StatusFound)
+}
+
+// ──────────────────────────── Config Editor ───────────────────────────────────
+
+func (h *Handler) ConfigEditor(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	var content, errMsg string
+	if r.Method == http.MethodPost {
+		content = r.FormValue("content")
+		if err := os.WriteFile(h.ConfigPath, []byte(content), 0644); err != nil {
+			errMsg = "Save failed: " + err.Error()
+		} else {
+			http.Redirect(w, r, "/admin/config?ok=saved", http.StatusFound)
+			return
+		}
+	} else {
+		raw, err := os.ReadFile(h.ConfigPath)
+		if err != nil {
+			errMsg = "Cannot read config: " + err.Error()
+		} else {
+			content = string(raw)
+		}
+	}
+	h.Tmpl.Render(w, "admin/configeditor", map[string]interface{}{
+		"Page":       "config",
+		"ActiveUser": claims.Username,
+		"Content":    content,
+		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   errMsg,
+	})
+}
+
+// ──────────────────────────── SSL / TLS ──────────────────────────────────────
+
+type certInfo struct {
+	Subject   string
+	NotBefore string
+	NotAfter  string
+	DNSNames  []string
+	IsCA      bool
+}
+
+func loadCertInfo(certPath string) *certInfo {
+	raw, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil
+	}
+	return &certInfo{
+		Subject:   cert.Subject.CommonName,
+		NotBefore: cert.NotBefore.Format("Jan 2 2006"),
+		NotAfter:  cert.NotAfter.Format("Jan 2 2006"),
+		DNSNames:  cert.DNSNames,
+		IsCA:      cert.IsCA,
+	}
+}
+
+func (h *Handler) SSL(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	certPath := h.ConfigSnapshot["tls_cert_file"]
+	keyPath := h.ConfigSnapshot["tls_key_file"]
+	if certPath == "" {
+		certPath = "certs/server.crt"
+	}
+	if keyPath == "" {
+		keyPath = "certs/server.key"
+	}
+	h.Tmpl.Render(w, "admin/ssl", map[string]interface{}{
+		"Page":         "ssl",
+		"ActiveUser":   claims.Username,
+		"TLSEnabled":   h.ConfigSnapshot["tls_enabled"] == "true",
+		"CertPath":     certPath,
+		"KeyPath":      keyPath,
+		"CertInfo":     loadCertInfo(certPath),
+		"FlashOK":      r.URL.Query().Get("ok"),
+		"FlashErr":     r.URL.Query().Get("err"),
+		"HeloName":     h.ConfigSnapshot["smtp_domain"],
+	})
+}
+
+func (h *Handler) GenerateSelfSigned(w http.ResponseWriter, r *http.Request) {
+	hostname := strings.TrimSpace(r.FormValue("hostname"))
+	if hostname == "" {
+		hostname = h.ConfigSnapshot["smtp_domain"]
+	}
+	if hostname == "" {
+		hostname = "mail.example.com"
+	}
+
+	certPath, keyPath, err := generateSelfSignedCert(hostname)
+	if err != nil {
+		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	// Update config snapshot so the page reflects new paths.
+	h.ConfigSnapshot["tls_cert_file"] = certPath
+	h.ConfigSnapshot["tls_key_file"] = keyPath
+	h.ConfigSnapshot["tls_enabled"] = "true"
+	http.Redirect(w, r, "/admin/ssl?ok=cert+generated+at+"+url.QueryEscape(certPath), http.StatusFound)
+}
+
+func generateSelfSignedCert(hostname string) (certPath, keyPath string, err error) {
+	os.MkdirAll("certs", 0700)
+
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: hostname},
+		DNSNames:     []string{hostname},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privKey.PublicKey, privKey)
+	if err != nil {
+		return "", "", err
+	}
+
+	certPath = "certs/server.crt"
+	keyPath = "certs/server.key"
+
+	cf, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", "", err
+	}
+	pem.Encode(cf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	cf.Close()
+
+	keyDER, _ := x509.MarshalECPrivateKey(privKey)
+	kf, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return "", "", err
+	}
+	pem.Encode(kf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	kf.Close()
+
+	return certPath, keyPath, nil
+}
+
+// VerifyCert checks that the cert and key are a matching pair.
+func (h *Handler) VerifyCert(w http.ResponseWriter, r *http.Request) {
+	certPath := strings.TrimSpace(r.FormValue("cert_path"))
+	keyPath := strings.TrimSpace(r.FormValue("key_path"))
+	_, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape("cert/key mismatch: "+err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ssl?ok=cert+and+key+match+✓", http.StatusFound)
 }

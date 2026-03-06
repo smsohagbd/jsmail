@@ -1,0 +1,61 @@
+{{define "title"}}Config Editor — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Config Editor</div>
+    <div class="page-sub">Edit config.yaml directly — restart the server to apply changes</div>
+  </div>
+</div>
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}} — restart the server to apply</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<div style="display:grid;grid-template-columns:1fr 280px;gap:16px;">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">config.yaml</span>
+      <span style="font-size:11px;color:#52525b;font-family:monospace;">Changes take effect after server restart</span>
+    </div>
+    <div class="card-body" style="padding:0;">
+      <form method="POST" action="/admin/config">
+        <textarea name="content" id="cfg-editor" style="width:100%;min-height:560px;background:#09090b;color:#e4e4e7;font-family:'JetBrains Mono',monospace,sans-serif;font-size:13px;line-height:1.6;border:none;border-radius:0 0 12px 12px;padding:20px;resize:vertical;outline:none;box-sizing:border-box;tab-size:2;">{{.Content}}</textarea>
+        <div style="padding:12px 16px;border-top:1px solid #18181b;display:flex;gap:8px;justify-content:flex-end;">
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div class="card" style="padding:20px;">
+      <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Key Settings</div>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;">
+        <div style="color:#a1a1aa;"><span style="color:#52525b;">smtp.listen_addr</span><br>SMTP port e.g. :1069</div>
+        <div style="color:#a1a1aa;"><span style="color:#52525b;">smtp.tls.enabled</span><br>Enable TLS on SMTP</div>
+        <div style="color:#a1a1aa;"><span style="color:#52525b;">smtp.tls.cert_file</span><br>Path to TLS cert</div>
+        <div style="color:#a1a1aa;"><span style="color:#52525b;">delivery.workers</span><br>Concurrent delivery threads</div>
+        <div style="color:#a1a1aa;"><span style="color:#52525b;">delivery.max_retries</span><br>Max retry attempts</div>
+        <div style="color:#a1a1aa;"><span style="color:#52525b;">delivery.helo_name</span><br>Your server hostname</div>
+      </div>
+    </div>
+    <div class="card" style="padding:20px;background:#1c0606;border-color:#450a0a;">
+      <div style="font-size:12px;font-weight:600;color:#f87171;margin-bottom:8px;">⚠ Warning</div>
+      <div style="font-size:12px;color:#fca5a5;">Incorrect YAML syntax will prevent the server from restarting. Keep a backup before editing.</div>
+    </div>
+  </div>
+</div>
+
+</div>
+<script>
+// Tab key inserts spaces in the textarea
+document.getElementById('cfg-editor').addEventListener('keydown', function(e) {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const s = this.selectionStart, end = this.selectionEnd;
+    this.value = this.value.substring(0, s) + '  ' + this.value.substring(end);
+    this.selectionStart = this.selectionEnd = s + 2;
+  }
+});
+</script>
+{{end}}

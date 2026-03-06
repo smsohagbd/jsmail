@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
@@ -14,6 +15,7 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-msgauth/dkim"
@@ -33,6 +35,12 @@ type DeliveryEvent struct {
 	MXHost    string
 }
 
+// domainCooldownEntry holds the cooldown state for a remote domain.
+type domainCooldownEntry struct {
+	until  time.Time
+	streak int // number of consecutive 421s
+}
+
 // Engine delivers queued messages to remote SMTP servers.
 type Engine struct {
 	cfg        config.DeliveryConfig
@@ -41,11 +49,36 @@ type Engine struct {
 	connectTO  time.Duration
 	dkimSigner *dkim.SignOptions
 	OnEvent    func(DeliveryEvent) // optional hook for DB logging
+
+	// DKIMKeyLoader optionally provides per-domain DKIM keys from the DB.
+	// Returns (privKeyPEM, selector, ok).
+	DKIMKeyLoader func(domain string) (privKeyPEM, selector string, ok bool)
+
+	// IPPoolProvider returns the current list of outbound IPs to rotate through.
+	// Return nil or empty to use the system default IP.
+	IPPoolProvider func() []string
+
+	// Per-domain 421 cooldown tracking.
+	cooldownMu sync.Mutex
+	cooldowns  map[string]*domainCooldownEntry
+
+	// Per-MX-host connection semaphores (max 2 concurrent per host).
+	semMu sync.Mutex
+	sems  map[string]chan struct{}
+
+	// IP pool rotation index.
+	ipMu  sync.Mutex
+	ipIdx int
 }
 
 // New creates a delivery Engine.
 func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
-	e := &Engine{cfg: cfg, queue: q}
+	e := &Engine{
+		cfg:       cfg,
+		queue:     q,
+		cooldowns: make(map[string]*domainCooldownEntry),
+		sems:      make(map[string]chan struct{}),
+	}
 
 	if d, err := time.ParseDuration(cfg.RetryInterval); err == nil {
 		e.retryBase = d
@@ -105,8 +138,22 @@ func (e *Engine) deliver(msg *queue.Message) {
 	log.Printf("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
 	data := injectMissingHeaders(msg.Data, e.cfg.HeloName)
-	if e.dkimSigner != nil {
-		signed, err := signDKIM(data, e.dkimSigner)
+
+	// Resolve DKIM signer: prefer per-domain key from DB, fallback to config key.
+	signer := e.dkimSigner
+	if e.DKIMKeyLoader != nil {
+		fromDomain := extractFromDomain(data)
+		if fromDomain != "" {
+			if privPEM, sel, ok := e.DKIMKeyLoader(fromDomain); ok {
+				if dbSigner, err := parseDKIMSignerFromPEM(fromDomain, sel, privPEM); err == nil {
+					signer = dbSigner
+					log.Printf("[DELIVERY]   using DB DKIM key for domain %q selector=%q", fromDomain, sel)
+				}
+			}
+		}
+	}
+	if signer != nil {
+		signed, err := signDKIM(data, signer)
 		if err != nil {
 			log.Printf("[DELIVERY] ⚠ DKIM sign failed (sending unsigned): %v", err)
 		} else {
@@ -148,6 +195,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 						})
 					}
 				}
+			} else if isTempRateLimitError(err) || strings.Contains(err.Error(), "rate-limited") {
+				// 421 rate-limit — defer without counting as a failure attempt,
+				// so MaxRetries is not burned by throttling.
+				log.Printf("[DELIVERY] ⏳ domain %q is rate-limited — will defer (retries not consumed)", domain)
+				lastErr = err
 			} else {
 				lastErr = err
 			}
@@ -167,6 +219,27 @@ func (e *Engine) deliver(msg *queue.Message) {
 					MessageID: msg.ID, Username: msg.Username,
 					From: msg.From, To: to, Status: "delivered",
 					MXHost: recipientMX[to],
+				})
+			}
+		}
+		return
+	}
+
+	// If the failure is purely a 421 rate-limit, defer with a fixed cooldown
+	// without consuming a retry slot so MaxRetries is reserved for real failures.
+	isRateLimit := isTempRateLimitError(lastErr) || strings.Contains(lastErr.Error(), "rate-limited")
+	if isRateLimit {
+		// Use the domain's cooldown + a small buffer.
+		backoff := 35 * time.Minute
+		log.Printf("[DELIVERY] ⏳ message %s DEFERRED (rate-limited) — retry in %v (retries NOT consumed)",
+			msg.ID, backoff)
+		e.queue.DeferNoIncrement(msg, backoff, lastErr.Error())
+		if e.OnEvent != nil {
+			for _, to := range msg.To {
+				e.OnEvent(DeliveryEvent{
+					MessageID: msg.ID, Username: msg.Username,
+					From: msg.From, To: to, Status: "deferred",
+					Error: lastErr.Error(),
 				})
 			}
 		}
@@ -213,8 +286,88 @@ func (e *Engine) deliver(msg *queue.Message) {
 // Port 25 is the standard MTA port; 587 is tried as fallback when 25 is blocked.
 var deliveryPorts = []string{"25", "587"}
 
+// isTempRateLimitError returns true when the SMTP server responded with a
+// 421 temporary rate-limit (e.g. Yahoo TSS04, AOL similar codes).
+func isTempRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "421 4.7") ||
+		strings.Contains(msg, "421 ") ||
+		strings.Contains(msg, "TSS04") ||
+		strings.Contains(msg, "temporarily deferred") ||
+		strings.Contains(msg, "temp") && strings.HasPrefix(msg, "421")
+}
+
+// domainCooldownUntil returns the time until which the domain should not be
+// attempted, or zero if it is allowed.
+func (e *Engine) domainCooldownUntil(domain string) time.Time {
+	e.cooldownMu.Lock()
+	defer e.cooldownMu.Unlock()
+	if c, ok := e.cooldowns[domain]; ok {
+		return c.until
+	}
+	return time.Time{}
+}
+
+// recordRateLimit records a 421 hit for a domain and extends its cooldown.
+// Each consecutive hit doubles the backoff: 15m → 30m → 60m → 120m (cap).
+func (e *Engine) recordRateLimit(domain string) time.Duration {
+	e.cooldownMu.Lock()
+	defer e.cooldownMu.Unlock()
+	c, ok := e.cooldowns[domain]
+	if !ok {
+		c = &domainCooldownEntry{}
+		e.cooldowns[domain] = c
+	}
+	c.streak++
+	backoff := time.Duration(15*c.streak) * time.Minute
+	if backoff > 2*time.Hour {
+		backoff = 2 * time.Hour
+	}
+	c.until = time.Now().Add(backoff)
+	log.Printf("[DELIVERY] ⏳ domain %q rate-limited (421) — cooldown %v until %s (streak=%d)",
+		domain, backoff, c.until.Format("15:04:05"), c.streak)
+	return backoff
+}
+
+// clearCooldown resets the rate-limit streak for a domain after a success.
+func (e *Engine) clearCooldown(domain string) {
+	e.cooldownMu.Lock()
+	defer e.cooldownMu.Unlock()
+	delete(e.cooldowns, domain)
+}
+
+// acquireMXSlot blocks until a connection slot is available for the MX host.
+// Max 2 concurrent connections per MX host (Yahoo/AOL requirement).
+func (e *Engine) acquireMXSlot(mxHost string) {
+	e.semMu.Lock()
+	sem, ok := e.sems[mxHost]
+	if !ok {
+		sem = make(chan struct{}, 2) // max 2 concurrent per MX
+		e.sems[mxHost] = sem
+	}
+	e.semMu.Unlock()
+	sem <- struct{}{}
+}
+
+func (e *Engine) releaseMXSlot(mxHost string) {
+	e.semMu.Lock()
+	sem := e.sems[mxHost]
+	e.semMu.Unlock()
+	<-sem
+}
+
 // deliverToDomain attempts delivery to a domain, returning the successful MX host on success.
 func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte) (string, error) {
+	// Check per-domain 421 cooldown before doing anything.
+	if until := e.domainCooldownUntil(domain); !until.IsZero() && time.Now().Before(until) {
+		wait := time.Until(until).Round(time.Second)
+		log.Printf("[DELIVERY] ⏳ domain %q is rate-limited — skipping for %v", domain, wait)
+		return "", fmt.Errorf("domain rate-limited (421 cooldown), retry after %v", wait)
+	}
+
 	log.Printf("[DELIVERY]   DNS MX lookup for %q", domain)
 	mxRecords, err := lookupMX(domain)
 	if err != nil {
@@ -227,25 +380,84 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 		log.Printf("[DELIVERY]     pref=%d  host=%s", mx.Pref, mx.Host)
 	}
 
+	var lastMXErr error
+	allRateLimited := true
+
 	for _, mx := range mxRecords {
 		for _, port := range deliveryPorts {
 			log.Printf("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
-			if err := e.sendToMX(from, mx.Host, port, rcpts, data); err != nil {
-				log.Printf("[DELIVERY] ✗ MX %s:%s failed: %v", mx.Host, port, err)
-				continue
+
+			// Respect per-MX connection limit.
+			e.acquireMXSlot(mx.Host)
+			mxErr := e.sendToMX(from, mx.Host, port, rcpts, data)
+			e.releaseMXSlot(mx.Host)
+
+			if mxErr == nil {
+				log.Printf("[DELIVERY] ✓ delivered via MX %s:%s", mx.Host, port)
+				e.clearCooldown(domain) // success — reset streak
+				return mx.Host, nil
 			}
-			log.Printf("[DELIVERY] ✓ delivered via MX %s:%s", mx.Host, port)
-			return mx.Host, nil
+			log.Printf("[DELIVERY] ✗ MX %s:%s failed: %v", mx.Host, port, mxErr)
+
+			if isTempRateLimitError(mxErr) {
+				lastMXErr = mxErr
+				// Continue to next MX/port, but remember all were rate-limited.
+			} else {
+				allRateLimited = false
+				lastMXErr = mxErr
+			}
 		}
 	}
-	return "", fmt.Errorf("all MX servers failed for %s", domain)
+
+	// If every MX returned a 421, set a domain-level cooldown and return a
+	// deferred-style error (not a hard bounce — no permanent failure).
+	if allRateLimited && lastMXErr != nil {
+		cooldown := e.recordRateLimit(domain)
+		return "", fmt.Errorf("all MX servers rate-limited (421) for %s — cooling down %v: %w",
+			domain, cooldown, lastMXErr)
+	}
+	return "", fmt.Errorf("all MX servers failed for %s: %w", domain, lastMXErr)
+}
+
+// nextOutboundIP returns the next IP to use from the pool (round-robin),
+// or empty string to use the system default.
+func (e *Engine) nextOutboundIP() string {
+	if e.IPPoolProvider == nil {
+		return ""
+	}
+	ips := e.IPPoolProvider()
+	if len(ips) == 0 {
+		return ""
+	}
+	e.ipMu.Lock()
+	ip := ips[e.ipIdx%len(ips)]
+	e.ipIdx++
+	e.ipMu.Unlock()
+	return ip
 }
 
 func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte) error {
 	addr := net.JoinHostPort(mxHost, port)
 	log.Printf("[DELIVERY]   connecting to %s …", addr)
 
-	conn, err := net.DialTimeout("tcp", addr, e.connectTO)
+	var conn net.Conn
+	var err error
+
+	if outIP := e.nextOutboundIP(); outIP != "" {
+		dialer := &net.Dialer{
+			Timeout:   e.connectTO,
+			LocalAddr: &net.TCPAddr{IP: net.ParseIP(outIP)},
+		}
+		log.Printf("[DELIVERY]   using outbound IP %s", outIP)
+		conn, err = dialer.Dial("tcp", addr)
+		if err != nil {
+			// Fall back to default interface if bound IP fails.
+			log.Printf("[DELIVERY] ⚠ outbound IP %s failed (%v), retrying with default", outIP, err)
+			conn, err = net.DialTimeout("tcp", addr, e.connectTO)
+		}
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, e.connectTO)
+	}
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -412,6 +624,50 @@ func signDKIM(data []byte, opts *dkim.SignOptions) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// extractFromDomain parses the sender domain from the From: header of raw RFC 5322 data.
+func extractFromDomain(data []byte) string {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			break // end of headers
+		}
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "from:") {
+			addr := strings.TrimSpace(line[5:])
+			if s := strings.LastIndex(addr, "<"); s >= 0 {
+				if e := strings.Index(addr[s:], ">"); e >= 0 {
+					addr = addr[s+1 : s+e]
+				}
+			}
+			if at := strings.LastIndex(addr, "@"); at >= 0 {
+				return strings.ToLower(strings.TrimSpace(addr[at+1:]))
+			}
+		}
+	}
+	return ""
+}
+
+// parseDKIMSignerFromPEM builds a dkim.SignOptions from a PEM-encoded PKCS1 private key.
+func parseDKIMSignerFromPEM(domain, selector, privKeyPEM string) (*dkim.SignOptions, error) {
+	block, _ := pem.Decode([]byte(privKeyPEM))
+	if block == nil {
+		return nil, fmt.Errorf("invalid PEM block")
+	}
+	privKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse RSA key: %w", err)
+	}
+	return &dkim.SignOptions{
+		Domain:   domain,
+		Selector: selector,
+		Signer:   privKey,
+		HeaderKeys: []string{
+			"From", "To", "Subject", "Date", "Message-ID", "Content-Type",
+		},
+	}, nil
 }
 
 // isPermanentSMTPError returns true if the error represents a 5xx permanent
