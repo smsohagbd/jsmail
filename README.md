@@ -41,9 +41,12 @@ api:
 ### 2. Build & run
 
 ```bash
+
+git pull
 go build -o smtp-server .
 ./smtp-server -config config.yaml
-```
+
+
 
 
 git add .

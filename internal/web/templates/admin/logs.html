@@ -1,32 +1,42 @@
-{{define "title"}}Send Logs — Admin{{end}}
+{{define "title"}}Logs — Admin{{end}}
 {{define "content"}}
 <div class="page-header" style="padding-bottom:20px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;">
-    <div>
-      <div class="page-title">Send Logs</div>
-      <div class="page-sub">{{.DateLabel}} — {{.Total}} records</div>
-    </div>
-    <form method="POST" action="/admin/logs/delete" onsubmit="return confirm('Delete these logs?')" style="display:flex;gap:8px;">
-      <input type="hidden" name="scope" value="filter"/>
-      {{range $k,$v := .Query}}<input type="hidden" name="{{$k}}" value="{{$v}}"/>{{end}}
-      <button type="submit" class="btn btn-danger">Delete Shown</button>
-    </form>
+  <div>
+    <div class="page-title">Logs</div>
+    <div class="page-sub">Send history and hard bounce suppression list</div>
   </div>
 </div>
 <div class="page-body">
 
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:10px 16px;border-radius:8px;margin-bottom:14px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+
+<!-- Tab switcher -->
+<div style="display:flex;gap:0;border-bottom:1px solid #27272a;margin-bottom:18px;">
+  <a href="/admin/logs" style="padding:10px 20px;font-size:13px;font-weight:600;text-decoration:none;border-bottom:2px solid {{if ne .Tab "bounces"}}#818cf8{{else}}transparent{{end}};color:{{if ne .Tab "bounces"}}#e4e4e7{{else}}#52525b{{end}};transition:color .15s;">
+    Send Logs
+    <span style="margin-left:6px;background:#27272a;color:#71717a;font-size:10px;padding:1px 6px;border-radius:8px;">{{.Total}}</span>
+  </a>
+  <a href="/admin/logs?tab=bounces" style="padding:10px 20px;font-size:13px;font-weight:600;text-decoration:none;border-bottom:2px solid {{if eq .Tab "bounces"}}#f87171{{else}}transparent{{end}};color:{{if eq .Tab "bounces"}}#e4e4e7{{else}}#52525b{{end}};transition:color .15s;">
+    Hard Bounces
+    <span style="margin-left:6px;background:{{if gt .BounceTotal 0}}#450a0a{{else}}#27272a{{end}};color:{{if gt .BounceTotal 0}}#f87171{{else}}#71717a{{end}};font-size:10px;padding:1px 6px;border-radius:8px;">{{.BounceTotal}}</span>
+  </a>
+</div>
+
+{{if ne .Tab "bounces"}}
+<!-- ══════════════════════════ SEND LOGS TAB ══════════════════════════════════ -->
+
 <!-- Filters -->
 <div class="card" style="margin-bottom:16px;">
-  <form method="GET" action="/admin/logs" style="padding:16px 20px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+  <form method="GET" action="/admin/logs" style="padding:14px 20px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
     <div>
       <div class="form-label">Date Range</div>
       <select class="form-input" name="range" style="width:auto;" onchange="document.getElementById('custom').style.display=this.value==='custom'?'flex':'none'">
         <option value="">All Time</option>
-        <option value="today" {{if eq (index .Query "range") "today"}}selected{{end}}>Today</option>
+        <option value="today"     {{if eq (index .Query "range") "today"}}selected{{end}}>Today</option>
         <option value="yesterday" {{if eq (index .Query "range") "yesterday"}}selected{{end}}>Yesterday</option>
-        <option value="7days" {{if eq (index .Query "range") "7days"}}selected{{end}}>Last 7 Days</option>
-        <option value="30days" {{if eq (index .Query "range") "30days"}}selected{{end}}>Last 30 Days</option>
-        <option value="custom" {{if eq (index .Query "range") "custom"}}selected{{end}}>Custom</option>
+        <option value="7days"     {{if eq (index .Query "range") "7days"}}selected{{end}}>Last 7 Days</option>
+        <option value="30days"    {{if eq (index .Query "range") "30days"}}selected{{end}}>Last 30 Days</option>
+        <option value="custom"    {{if eq (index .Query "range") "custom"}}selected{{end}}>Custom</option>
       </select>
     </div>
     <div id="custom" style="display:{{if eq (index .Query "range") "custom"}}flex{{else}}none{{end}};gap:8px;">
@@ -37,20 +47,26 @@
       <div class="form-label">Status</div>
       <select class="form-input" name="status" style="width:auto;">
         <option value="">All</option>
-        <option value="delivered" {{if eq (index .Query "status") "delivered"}}selected{{end}}>Delivered</option>
-        <option value="failed" {{if eq (index .Query "status") "failed"}}selected{{end}}>Failed</option>
-        <option value="deferred" {{if eq (index .Query "status") "deferred"}}selected{{end}}>Deferred</option>
-        <option value="queued" {{if eq (index .Query "status") "queued"}}selected{{end}}>Queued</option>
+        <option value="delivered"  {{if eq (index .Query "status") "delivered"}}selected{{end}}>Delivered</option>
+        <option value="hard_bounce"{{if eq (index .Query "status") "hard_bounce"}}selected{{end}}>Hard Bounce</option>
+        <option value="failed"     {{if eq (index .Query "status") "failed"}}selected{{end}}>Failed</option>
+        <option value="deferred"   {{if eq (index .Query "status") "deferred"}}selected{{end}}>Deferred</option>
+        <option value="queued"     {{if eq (index .Query "status") "queued"}}selected{{end}}>Queued</option>
       </select>
     </div>
-    <div style="flex:1;min-width:200px;">
+    <div style="flex:1;min-width:180px;">
       <div class="form-label">Search</div>
-      <input class="form-input" type="text" name="search" value="{{index .Query "search"}}" placeholder="email, username..."/>
+      <input class="form-input" type="text" name="search" value="{{index .Query "search"}}" placeholder="email, username…"/>
     </div>
     <div style="display:flex;gap:8px;">
       <button type="submit" class="btn btn-primary">Apply</button>
       <a href="/admin/logs" class="btn btn-secondary">Reset</a>
     </div>
+    <form method="POST" action="/admin/logs/delete" onsubmit="return confirm('Delete these logs?')" style="margin-left:auto;">
+      <input type="hidden" name="scope" value="filter"/>
+      {{range $k,$v := .Query}}<input type="hidden" name="{{$k}}" value="{{$v}}"/>{{end}}
+      <button type="submit" class="btn btn-danger">Delete Shown</button>
+    </form>
   </form>
 </div>
 
@@ -73,13 +89,13 @@
             <form method="POST" action="/admin/logs/delete">
               <input type="hidden" name="scope" value="id"/>
               <input type="hidden" name="id" value="{{.ID}}"/>
-              <button type="submit" class="btn btn-danger">Del</button>
+              <button type="submit" class="btn btn-danger" style="font-size:11px;padding:4px 8px;">Del</button>
             </form>
           </td>
         </tr>
         {{if .Error}}
         <tr style="background:#0d0505;">
-          <td colspan="7" style="padding:6px 20px;font-size:11px;color:#f87171;">↳ {{.Error}}</td>
+          <td colspan="7" style="padding:5px 20px;font-size:11px;color:#f87171;">↳ {{.Error}}</td>
         </tr>
         {{end}}
         {{else}}
@@ -88,10 +104,9 @@
       </tbody>
     </table>
   </div>
-
   {{$total := .Total}}{{$perPage := .PerPage}}{{$p := .PageNum}}
   {{if gt $total (int64 $perPage)}}
-  <div style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #18181b;">
+  <div style="padding:12px 20px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #18181b;">
     <span style="font-size:12px;color:#52525b;">{{$total}} total results</span>
     <div style="display:flex;gap:6px;">
       {{if gt $p 1}}<a href="?page={{sub $p 1}}&{{range $k,$v := .Query}}{{if ne $k "page"}}{{$k}}={{$v}}&{{end}}{{end}}" class="btn btn-secondary btn-sm">← Prev</a>{{end}}
@@ -101,5 +116,88 @@
   </div>
   {{end}}
 </div>
+
+{{else}}
+<!-- ══════════════════════════ HARD BOUNCES TAB ═══════════════════════════════ -->
+
+<!-- Search + bulk actions -->
+<div class="card" style="margin-bottom:14px;padding:14px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+  <form method="GET" action="/admin/logs" style="display:flex;gap:8px;flex:1;min-width:200px;">
+    <input type="hidden" name="tab" value="bounces"/>
+    <input class="form-input" name="bsearch" value="{{.BounceSearch}}" placeholder="Search email…" style="flex:1;"/>
+    <button type="submit" class="btn btn-secondary">Search</button>
+    {{if .BounceSearch}}<a href="/admin/logs?tab=bounces" class="btn btn-ghost">Clear</a>{{end}}
+  </form>
+  <div style="display:flex;gap:8px;flex-shrink:0;">
+    {{if .BounceSearch}}
+    <form method="POST" action="/admin/bounces/bulk-remove" onsubmit="return confirm('Remove all matching addresses?')">
+      <input type="hidden" name="scope" value="search"/>
+      <input type="hidden" name="search" value="{{.BounceSearch}}"/>
+      <button type="submit" class="btn btn-secondary" style="font-size:12px;">Remove Matching</button>
+    </form>
+    {{end}}
+    <form method="POST" action="/admin/bounces/bulk-remove" onsubmit="return confirm('Clear ALL hard bounces? Emails will be retried.')">
+      <input type="hidden" name="scope" value="all"/>
+      <button type="submit" class="btn btn-danger" style="font-size:12px;">Clear All ({{.BounceTotal}})</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Email Address</th>
+        <th>Bounces</th>
+        <th>Reason</th>
+        <th>Last Seen</th>
+        <th style="padding-right:20px;text-align:right;">Action</th>
+      </tr></thead>
+      <tbody>
+        {{range .Bounces}}
+        <tr>
+          <td style="padding-left:20px;font-family:monospace;font-size:13px;color:#e4e4e7;">{{.Email}}</td>
+          <td>
+            <span style="background:#1c0606;color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">{{.BounceCount}}×</span>
+          </td>
+          <td style="font-size:12px;color:#71717a;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{.Reason}}">
+            {{if .Reason}}{{.Reason}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}
+          </td>
+          <td style="font-size:12px;color:#52525b;white-space:nowrap;">{{.LastSeenAt.Format "Jan 2, 2006 15:04"}}</td>
+          <td style="padding-right:20px;text-align:right;">
+            <form method="POST" action="/admin/bounces/remove" style="display:inline;">
+              <input type="hidden" name="email" value="{{.Email}}"/>
+              <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#4ade80;"
+                onclick="return confirm('Restore {{.Email}}?\nFuture emails will be attempted again.')">
+                Restore
+              </button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" class="empty-state" style="padding-left:20px;">
+          <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          No hard bounces — great!
+        </td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{if gt .BounceTotal 0}}
+  <div style="padding:12px 20px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #27272a;">
+    <span style="font-size:12px;color:#52525b;">{{.BounceTotal}} suppressed address{{if ne .BounceTotal 1}}es{{end}}</span>
+    <div style="display:flex;gap:6px;">
+      {{if gt .BouncePage 1}}
+      <a href="/admin/logs?tab=bounces&bpage={{sub .BouncePage 1}}{{if .BounceSearch}}&bsearch={{.BounceSearch}}{{end}}" class="btn btn-secondary btn-sm">← Prev</a>
+      {{end}}
+      {{if gt .BounceTotal (int64 (mul .BouncePage .PerPage))}}
+      <a href="/admin/logs?tab=bounces&bpage={{add .BouncePage 1}}{{if .BounceSearch}}&bsearch={{.BounceSearch}}{{end}}" class="btn btn-secondary btn-sm">Next →</a>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
 </div>
 {{end}}

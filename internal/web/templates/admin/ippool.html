@@ -41,6 +41,7 @@
         <th style="text-align:right;">Per Min</th>
         <th style="text-align:right;">Per Hour</th>
         <th style="text-align:right;">Per Day</th>
+        <th>Bind Test</th>
         <th>Note</th>
         <th style="padding-right:12px;"></th>
       </tr></thead>
@@ -56,7 +57,12 @@
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerMin}}{{.PerMin}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerHour}}{{.PerHour}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerDay}}{{.PerDay}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
-          <td style="font-size:12px;color:#52525b;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{.Note}}</td>
+          <td>
+            <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
+              id="test-btn-{{.ID}}" onclick="testIP('{{.IP}}',{{.ID}})">Test</button>
+            <span id="test-result-{{.ID}}" style="font-size:11px;"></span>
+          </td>
+          <td style="font-size:12px;color:#52525b;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{.Note}}</td>
           <td style="padding-right:12px;text-align:right;white-space:nowrap;">
             <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
               onclick="openEdit({{.ID}},'{{.IP}}','{{.Hostname}}',{{.Active}},{{.PerMin}},{{.PerHour}},{{.PerDay}},'{{.Note}}')">Edit</button>
@@ -67,11 +73,20 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="8" style="text-align:center;color:#52525b;padding:32px;">No IPs added yet — click "Add IP" to start</td></tr>
+        <tr><td colspan="9" style="text-align:center;color:#52525b;padding:32px;">No IPs added yet — click "Add IP" to start</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
+</div>
+
+<!-- Diagnostics note -->
+<div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:14px 18px;margin-bottom:16px;font-size:12px;color:#71717a;line-height:1.8;">
+  <strong style="color:#e4e4e7;">⚠ Important:</strong> Adding an IP here <em>does not</em> configure it on the OS.
+  The IP must be assigned to the server's network interface for outbound binding to work.
+  Click <strong style="color:#60a5fa;">Test</strong> on each IP to verify it is bound.<br>
+  On Linux: <code style="background:#18181b;padding:1px 5px;border-radius:3px;color:#a78bfa;">ip addr show</code> to list bound IPs,
+  <code style="background:#18181b;padding:1px 5px;border-radius:3px;color:#a78bfa;">ip addr add &lt;IP&gt;/32 dev eth0</code> to add one temporarily.
 </div>
 
 <!-- How-it-works card -->
@@ -226,6 +241,35 @@ function openEdit(id, ip, hostname, active, perMin, perHour, perDay, note) {
   document.getElementById('edit-active').value = active ? 'on' : 'off';
   document.getElementById('edit-note').value = note;
   document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function testIP(ip, id) {
+  var btn = document.getElementById('test-btn-'+id);
+  var res = document.getElementById('test-result-'+id);
+  btn.disabled = true;
+  btn.textContent = '…';
+  res.textContent = '';
+  var fd = new FormData();
+  fd.append('ip', ip);
+  fetch('/admin/ippool/test-ip', {method:'POST', body:fd})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(j.ok){
+        res.style.color = '#4ade80';
+        res.textContent = '✓ OK';
+      } else {
+        res.style.color = '#f87171';
+        res.textContent = '✗ ' + j.msg;
+      }
+      btn.disabled = false;
+      btn.textContent = 'Test';
+    })
+    .catch(function(){
+      res.style.color = '#f87171';
+      res.textContent = '✗ error';
+      btn.disabled = false;
+      btn.textContent = 'Test';
+    });
 }
 </script>
 {{end}}

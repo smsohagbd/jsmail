@@ -29,6 +29,12 @@ import (
 
 // flatQuery converts url.Values (map[string][]string) to map[string]string
 // so Go templates can compare values with eq without type errors.
+// jsonStr returns a JSON-encoded string literal (with quotes).
+func jsonStr(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 func flatQuery(v url.Values) map[string]string {
 	m := make(map[string]string, len(v))
 	for k, vals := range v {
@@ -189,7 +195,9 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
+	tab := r.URL.Query().Get("tab") // "" | "bounces"
 
+	// ── Send Logs tab ────────────────────────────────────────────────────────
 	q := h.DB.Model(&appdb.EmailLog{})
 	q, dateLabel := applyLogFilters(q, r)
 
@@ -212,15 +220,36 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	var logs []appdb.EmailLog
 	q.Order("created_at desc").Offset((page - 1) * perPage).Limit(perPage).Find(&logs)
 
+	// ── Hard Bounce tab ──────────────────────────────────────────────────────
+	bounceSearch := r.URL.Query().Get("bsearch")
+	bouncePage, _ := strconv.Atoi(r.URL.Query().Get("bpage"))
+	if bouncePage < 1 {
+		bouncePage = 1
+	}
+	bq := h.DB.Model(&appdb.BounceList{})
+	if bounceSearch != "" {
+		bq = bq.Where("email LIKE ?", "%"+bounceSearch+"%")
+	}
+	var bounceTotal int64
+	bq.Count(&bounceTotal)
+	var bounces []appdb.BounceList
+	bq.Order("last_seen_at desc").Offset((bouncePage - 1) * perPage).Limit(perPage).Find(&bounces)
+
 	h.Tmpl.Render(w, "admin/logs", map[string]interface{}{
-		"Page":      "logs",
-		"ActiveUser": claims.Username,
-		"Logs":      logs,
-		"Total":     total,
-		"PageNum":   page,
-		"PerPage":   perPage,
-		"DateLabel": dateLabel,
-		"Query":     flatQuery(r.URL.Query()),
+		"Page":         "logs",
+		"ActiveUser":   claims.Username,
+		"Tab":          tab,
+		"Logs":         logs,
+		"Total":        total,
+		"PageNum":      page,
+		"PerPage":      perPage,
+		"DateLabel":    dateLabel,
+		"Query":        flatQuery(r.URL.Query()),
+		"Bounces":      bounces,
+		"BounceTotal":  bounceTotal,
+		"BouncePage":   bouncePage,
+		"BounceSearch": bounceSearch,
+		"FlashOK":      r.URL.Query().Get("ok"),
 	})
 }
 
@@ -458,73 +487,45 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 
 // ──────────────────────────── Hard Bounce Management ─────────────────────────
 
+// Bounces redirects legacy /admin/bounces URL to the logs page bounce tab.
 func (h *Handler) Bounces(w http.ResponseWriter, r *http.Request) {
-	claims, _ := webauth.GetClaims(r)
-
-	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-	const perPage = 50
-
-	q := h.DB.Model(&appdb.BounceList{})
-	if search != "" {
-		q = q.Where("email LIKE ?", "%"+search+"%")
-	}
-
-	var total int64
-	q.Count(&total)
-
-	var bounces []appdb.BounceList
-	q.Order("last_seen_at desc").Offset((page - 1) * perPage).Limit(perPage).Find(&bounces)
-
-	h.Tmpl.Render(w, "admin/bounces", map[string]interface{}{
-		"Page":       "bounces",
-		"ActiveUser": claims.Username,
-		"Bounces":    bounces,
-		"Total":      total,
-		"PageNum":    page,
-		"PerPage":    perPage,
-		"Search":     search,
-		"FlashOK":    r.URL.Query().Get("ok"),
-	})
+	http.Redirect(w, r, "/admin/logs?tab=bounces", http.StatusFound)
 }
 
-// RemoveBounce removes one or more addresses from the suppression list.
+// RemoveBounce removes one address from the suppression list.
 func (h *Handler) RemoveBounce(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+		http.Redirect(w, r, "/admin/logs?tab=bounces", http.StatusFound)
 		return
 	}
 	email := r.FormValue("email")
 	if email != "" {
 		appdb.RemoveFromBounceList(email)
-		http.Redirect(w, r, "/admin/bounces?ok="+url.QueryEscape(email+" removed from suppression list"), http.StatusFound)
+		http.Redirect(w, r, "/admin/logs?tab=bounces&ok="+url.QueryEscape(email+" removed"), http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+	http.Redirect(w, r, "/admin/logs?tab=bounces", http.StatusFound)
 }
 
-// BulkRemoveBounces removes all addresses from the suppression list (or by search).
+// BulkRemoveBounces removes all addresses (or by search) from the suppression list.
 func (h *Handler) BulkRemoveBounces(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+		http.Redirect(w, r, "/admin/logs?tab=bounces", http.StatusFound)
 		return
 	}
 	scope := r.FormValue("scope")
 	switch scope {
 	case "all":
 		h.DB.Where("1 = 1").Delete(&appdb.BounceList{})
-		http.Redirect(w, r, "/admin/bounces?ok=All+hard+bounces+cleared", http.StatusFound)
+		http.Redirect(w, r, "/admin/logs?tab=bounces&ok=All+hard+bounces+cleared", http.StatusFound)
 	case "search":
 		search := r.FormValue("search")
 		if search != "" {
 			h.DB.Where("email LIKE ?", "%"+search+"%").Delete(&appdb.BounceList{})
 		}
-		http.Redirect(w, r, "/admin/bounces?ok=Matching+addresses+removed", http.StatusFound)
+		http.Redirect(w, r, "/admin/logs?tab=bounces&ok=Matching+addresses+removed", http.StatusFound)
 	default:
-		http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+		http.Redirect(w, r, "/admin/logs?tab=bounces", http.StatusFound)
 	}
 }
 
@@ -690,6 +691,25 @@ func (h *Handler) DeleteIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
 	h.ToggleIPPool(w, r)
+}
+
+// TestIPBinding tries to bind a TCP listener on the given IP to verify it is
+// assigned to a network interface on this server. Returns JSON.
+func (h *Handler) TestIPBinding(w http.ResponseWriter, r *http.Request) {
+	ip := strings.TrimSpace(r.FormValue("ip"))
+	w.Header().Set("Content-Type", "application/json")
+	if ip == "" {
+		w.Write([]byte(`{"ok":false,"msg":"IP required"}`))
+		return
+	}
+	ln, err := net.Listen("tcp4", ip+":0")
+	if err != nil {
+		msg := err.Error()
+		w.Write([]byte(`{"ok":false,"msg":` + jsonStr(msg) + `}`))
+		return
+	}
+	ln.Close()
+	w.Write([]byte(`{"ok":true,"msg":"IP is bound to this server's network interface"}`))
 }
 
 // ──────────────────────────── Config Editor ───────────────────────────────────

@@ -136,6 +136,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/ippool/add", webauth.RequireAdmin(ah.AddIPPoolEntry))
 	mux.HandleFunc("/admin/ippool/update", webauth.RequireAdmin(ah.UpdateIPPoolEntry))
 	mux.HandleFunc("/admin/ippool/delete", webauth.RequireAdmin(ah.DeleteIPPoolEntry))
+	mux.HandleFunc("/admin/ippool/test-ip", webauth.RequireAdmin(ah.TestIPBinding))
 	mux.HandleFunc("/admin/config", webauth.RequireAdmin(ah.ConfigEditor))
 	mux.HandleFunc("/admin/ssl", webauth.RequireAdmin(ah.SSL))
 	mux.HandleFunc("/admin/ssl/save", webauth.RequireAdmin(ah.SaveTLSConfig))

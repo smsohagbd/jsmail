@@ -182,6 +182,53 @@ func (e *Engine) Start() {
 	for i := 0; i < e.cfg.Workers; i++ {
 		go e.worker(i)
 	}
+	// Log IP pool status so it is immediately visible in the console.
+	go e.logIPPoolStatus()
+}
+
+// logIPPoolStatus prints a one-time diagnostic of the configured IP pool.
+func (e *Engine) logIPPoolStatus() {
+	if e.IPPoolProvider == nil {
+		log.Printf("[IPPOOL] provider not configured — all mail uses system default IP")
+		return
+	}
+	entries := e.IPPoolProvider()
+	if len(entries) == 0 {
+		log.Printf("[IPPOOL] pool is DISABLED or empty — all mail uses system default IP")
+		log.Printf("[IPPOOL] ↳ To enable: Admin → IP Pool → check 'Enable IP Pool Rotation'")
+		return
+	}
+	log.Printf("[IPPOOL] pool is ENABLED with %d IP(s):", len(entries))
+	for _, ip := range entries {
+		day := "∞"
+		if ip.WarmupPerDay > 0 {
+			day = fmt.Sprintf("%d (warmup)", ip.WarmupPerDay)
+		} else if ip.PerDay > 0 {
+			day = fmt.Sprintf("%d", ip.PerDay)
+		}
+		log.Printf("[IPPOOL]   %-18s  per-min=%-5v  per-hour=%-5v  per-day=%s",
+			ip.IP,
+			zeroOrInt(ip.PerMin),
+			zeroOrInt(ip.PerHour),
+			day,
+		)
+		// Quick local bind test — catches "IP not assigned to this server" immediately.
+		if ln, err := net.Listen("tcp4", ip.IP+":0"); err != nil {
+			log.Printf("[IPPOOL]   ✗ WARNING: cannot bind to %s: %v", ip.IP, err)
+			log.Printf("[IPPOOL]     ↳ This IP may NOT be configured on the OS network interface.")
+			log.Printf("[IPPOOL]     ↳ Mail sent using this IP will fall back to the system default.")
+		} else {
+			ln.Close()
+			log.Printf("[IPPOOL]   ✓ bind test OK for %s", ip.IP)
+		}
+	}
+}
+
+func zeroOrInt(n int) string {
+	if n == 0 {
+		return "∞"
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func (e *Engine) worker(id int) {
@@ -596,6 +643,8 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 
 // nextOutboundIP selects the next available IP from the pool using round-robin,
 // skipping any IP that has hit its per-minute / per-hour / per-day send limit.
+// It pre-increments the counters as a "reservation"; call undoIPCount(ip) if the
+// connection ultimately fails so the slot is returned.
 // Returns "" to use the system default if the pool is empty or all IPs are limited.
 func (e *Engine) nextOutboundIP() string {
 	if e.IPPoolProvider == nil {
@@ -651,11 +700,11 @@ func (e *Engine) nextOutboundIP() string {
 
 		// Check limits (0 = unlimited).
 		if entry.PerMin > 0 && c.minCount >= entry.PerMin {
-			log.Printf("[DELIVERY]   IP %s: per-min limit %d reached, skipping", entry.IP, entry.PerMin)
+			log.Printf("[IPPOOL]   IP %s: per-min limit %d reached, skipping", entry.IP, entry.PerMin)
 			continue
 		}
 		if entry.PerHour > 0 && c.hourCount >= entry.PerHour {
-			log.Printf("[DELIVERY]   IP %s: per-hour limit %d reached, skipping", entry.IP, entry.PerHour)
+			log.Printf("[IPPOOL]   IP %s: per-hour limit %d reached, skipping", entry.IP, entry.PerHour)
 			continue
 		}
 		if effectivePerDay > 0 && c.dayCount >= effectivePerDay {
@@ -663,11 +712,11 @@ func (e *Engine) nextOutboundIP() string {
 			if entry.WarmupPerDay > 0 {
 				src = "warmup"
 			}
-			log.Printf("[DELIVERY]   IP %s: %s limit %d reached, skipping", entry.IP, src, effectivePerDay)
+			log.Printf("[IPPOOL]   IP %s: %s limit %d reached, skipping", entry.IP, src, effectivePerDay)
 			continue
 		}
 
-		// This IP is available — consume a slot and return it.
+		// Reserve a slot and advance the round-robin index.
 		c.minCount++
 		c.hourCount++
 		c.dayCount++
@@ -675,8 +724,26 @@ func (e *Engine) nextOutboundIP() string {
 		return entry.IP
 	}
 
-	log.Printf("[DELIVERY] ⚠ all pool IPs are at their rate limits — using system default")
+	log.Printf("[IPPOOL] ⚠ all pool IPs are at their rate limits — using system default")
 	return ""
+}
+
+// undoIPCount returns a previously reserved rate-limit slot for an IP.
+// Call this when the OS-level bind to the IP failed so counters stay accurate.
+func (e *Engine) undoIPCount(ip string) {
+	e.ipMu.Lock()
+	defer e.ipMu.Unlock()
+	if c, ok := e.ipCounters[ip]; ok {
+		if c.minCount > 0 {
+			c.minCount--
+		}
+		if c.hourCount > 0 {
+			c.hourCount--
+		}
+		if c.dayCount > 0 {
+			c.dayCount--
+		}
+	}
 }
 
 // checkThrottle checks whether the user is within rate limits for the given domain.
@@ -859,22 +926,30 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 
 	var conn net.Conn
 	var err error
+	var usedIP string // the outbound IP that actually connected
 
 	if outIP := e.nextOutboundIP(); outIP != "" {
 		dialer := &net.Dialer{
 			Timeout:   e.connectTO,
 			LocalAddr: &net.TCPAddr{IP: net.ParseIP(outIP)},
 		}
-		log.Printf("[DELIVERY]   using outbound IP %s", outIP)
+		log.Printf("[IPPOOL]   selected outbound IP %s → %s", outIP, addr)
 		conn, err = dialer.Dial("tcp4", addr)
 		if err != nil {
-			// Fall back to default interface if bound IP fails.
-			log.Printf("[DELIVERY] ⚠ outbound IP %s failed (%v), retrying with default", outIP, err)
+			// Binding to this pool IP failed (IP not assigned to interface, or OS error).
+			// Return the reservation so the counter stays accurate.
+			e.undoIPCount(outIP)
+			log.Printf("[IPPOOL] ✗ bind to %s FAILED: %v", outIP, err)
+			log.Printf("[IPPOOL]   ↳ This IP may not be assigned to a network interface on this server.")
+			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
 			conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
+		} else {
+			usedIP = outIP
 		}
 	} else {
 		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
 	}
+	_ = usedIP // tracked for logging only
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
