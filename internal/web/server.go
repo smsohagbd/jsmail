@@ -160,6 +160,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/ssl/generate", webauth.RequireAdmin(ah.GenerateSelfSigned))
 	mux.HandleFunc("/admin/ssl/verify", webauth.RequireAdmin(ah.VerifyCert))
 	mux.HandleFunc("/admin/ssl/letsencrypt", webauth.RequireAdmin(ah.RequestLetsEncrypt))
+	mux.HandleFunc("/admin/blacklist", webauth.RequireAdmin(ah.BlacklistCheck))
+	mux.HandleFunc("/admin/blacklist/scan", webauth.RequireAdmin(ah.BlacklistScan))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer}

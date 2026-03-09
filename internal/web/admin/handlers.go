@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -19,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -1268,4 +1270,168 @@ func (h *Handler) VerifyCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin/ssl?ok=cert+and+key+match+✓", http.StatusFound)
+}
+
+// ─────────────────────────── Blacklist Checker ───────────────────────────────
+
+var ipDNSBLs = []struct{ Name, Zone string }{
+	{"Spamhaus ZEN", "zen.spamhaus.org"},
+	{"SpamCop", "bl.spamcop.net"},
+	{"Barracuda", "b.barracuda.com"},
+	{"SORBS", "dnsbl.sorbs.net"},
+	{"Abusix", "combined.mail.abusix.zone"},
+}
+
+var domainDNSBLs = []struct{ Name, Zone string }{
+	{"Spamhaus DBL", "dbl.spamhaus.org"},
+	{"SURBL", "multi.surbl.org"},
+	{"URIBL", "multi.uribl.com"},
+}
+
+func checkIPOnDNSBL(ctx context.Context, ip, zone string) (listed bool, detail string) {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false, ""
+	}
+	reversed := parts[3] + "." + parts[2] + "." + parts[1] + "." + parts[0]
+	addrs, err := net.DefaultResolver.LookupHost(ctx, reversed+"."+zone)
+	if err != nil {
+		return false, "" // NXDOMAIN = not listed
+	}
+	return true, strings.Join(addrs, ",")
+}
+
+func checkDomainOnDNSBL(ctx context.Context, domain, zone string) (listed bool, detail string) {
+	addrs, err := net.DefaultResolver.LookupHost(ctx, domain+"."+zone)
+	if err != nil {
+		return false, "" // NXDOMAIN = not listed
+	}
+	return true, strings.Join(addrs, ",")
+}
+
+type blResult struct {
+	Name   string `json:"name"`
+	Zone   string `json:"zone"`
+	Listed bool   `json:"listed"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type blSubject struct {
+	Value   string     `json:"value"`
+	Type    string     `json:"type"`  // "ip" or "domain"
+	Extra   string     `json:"extra"` // hostname for IPs, "(manual)" for custom entries
+	Results []blResult `json:"results"`
+	Score   int        `json:"score"`
+}
+
+// BlacklistCheck renders the blacklist status page.
+func (h *Handler) BlacklistCheck(w http.ResponseWriter, r *http.Request) {
+	poolEntries := appdb.GetAllIPPool()
+	domains := appdb.GetAllDomains()
+
+	// Ensure the HELO/server domain is also checked even if not in domains table.
+	helo := h.ConfigSnapshot["smtp_domain"]
+	if helo != "" {
+		found := false
+		for _, d := range domains {
+			if d.Name == helo {
+				found = true
+				break
+			}
+		}
+		if !found {
+			domains = append(domains, appdb.Domain{Name: helo})
+		}
+	}
+
+	h.Tmpl.Render(w, "admin/blacklist", map[string]interface{}{
+		"Page":         "blacklist",
+		"PoolIPs":      poolEntries,
+		"Domains":      domains,
+		"IPDNSBLs":     ipDNSBLs,
+		"DomainDNSBLs": domainDNSBLs,
+	})
+}
+
+// BlacklistScan performs DNS-based blacklist checks and returns JSON results.
+func (h *Handler) BlacklistScan(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	poolEntries := appdb.GetAllIPPool()
+	domains := appdb.GetAllDomains()
+
+	helo := h.ConfigSnapshot["smtp_domain"]
+	if helo != "" {
+		found := false
+		for _, d := range domains {
+			if d.Name == helo {
+				found = true
+				break
+			}
+		}
+		if !found {
+			domains = append(domains, appdb.Domain{Name: helo})
+		}
+	}
+
+	// Accept extra IPs/domains for ad-hoc checks.
+	for _, ip := range strings.Fields(r.URL.Query().Get("ips")) {
+		if ip = strings.TrimSpace(ip); ip != "" {
+			poolEntries = append(poolEntries, appdb.IPPool{IP: ip, Hostname: "(manual)"})
+		}
+	}
+	for _, d := range strings.Fields(r.URL.Query().Get("domains")) {
+		if d = strings.TrimSpace(d); d != "" {
+			domains = append(domains, appdb.Domain{Name: d})
+		}
+	}
+
+	var (
+		results []blSubject
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+	)
+
+	for _, entry := range poolEntries {
+		entry := entry
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sub := blSubject{Value: entry.IP, Type: "ip", Extra: entry.Hostname}
+			for _, bl := range ipDNSBLs {
+				listed, detail := checkIPOnDNSBL(ctx, entry.IP, bl.Zone)
+				sub.Results = append(sub.Results, blResult{Name: bl.Name, Zone: bl.Zone, Listed: listed, Detail: detail})
+				if listed {
+					sub.Score++
+				}
+			}
+			mu.Lock()
+			results = append(results, sub)
+			mu.Unlock()
+		}()
+	}
+
+	for _, d := range domains {
+		d := d
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sub := blSubject{Value: d.Name, Type: "domain"}
+			for _, bl := range domainDNSBLs {
+				listed, detail := checkDomainOnDNSBL(ctx, d.Name, bl.Zone)
+				sub.Results = append(sub.Results, blResult{Name: bl.Name, Zone: bl.Zone, Listed: listed, Detail: detail})
+				if listed {
+					sub.Score++
+				}
+			}
+			mu.Lock()
+			results = append(results, sub)
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
 }
