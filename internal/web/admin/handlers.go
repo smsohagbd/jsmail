@@ -1288,6 +1288,34 @@ var domainDNSBLs = []struct{ Name, Zone string }{
 	{"URIBL", "multi.uribl.com"},
 }
 
+// isValidDNSBLHit returns true only when the response address represents a genuine
+// listing. It filters out the special error / quota-exceeded codes that Spamhaus,
+// URIBL and others return when they reject a query (e.g. from a public resolver):
+//
+//   127.255.x.x  – Spamhaus "blocked / error" range  (252=blocked, 254=temp, 255=bad)
+//   127.0.0.255  – URIBL / SURBL test/error sentinel
+//
+// A real listing is always 127.0.x.x or 127.0.1.x with a small last-octet.
+func isValidDNSBLHit(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	ip4 := ip.To4()
+	if ip4 == nil || ip4[0] != 127 {
+		return false
+	}
+	// 127.255.x.x → Spamhaus error / query-blocked codes; not a real listing.
+	if ip4[1] == 255 {
+		return false
+	}
+	// 127.0.0.255 → test/sentinel record used by URIBL and SURBL.
+	if ip4[1] == 0 && ip4[2] == 0 && ip4[3] == 255 {
+		return false
+	}
+	return true
+}
+
 func checkIPOnDNSBL(ctx context.Context, ip, zone string) (listed bool, detail string) {
 	parts := strings.Split(ip, ".")
 	if len(parts) != 4 {
@@ -1298,7 +1326,16 @@ func checkIPOnDNSBL(ctx context.Context, ip, zone string) (listed bool, detail s
 	if err != nil {
 		return false, "" // NXDOMAIN = not listed
 	}
-	return true, strings.Join(addrs, ",")
+	var valid []string
+	for _, a := range addrs {
+		if isValidDNSBLHit(a) {
+			valid = append(valid, a)
+		}
+	}
+	if len(valid) == 0 {
+		return false, ""
+	}
+	return true, strings.Join(valid, ",")
 }
 
 func checkDomainOnDNSBL(ctx context.Context, domain, zone string) (listed bool, detail string) {
@@ -1306,7 +1343,16 @@ func checkDomainOnDNSBL(ctx context.Context, domain, zone string) (listed bool, 
 	if err != nil {
 		return false, "" // NXDOMAIN = not listed
 	}
-	return true, strings.Join(addrs, ",")
+	var valid []string
+	for _, a := range addrs {
+		if isValidDNSBLHit(a) {
+			valid = append(valid, a)
+		}
+	}
+	if len(valid) == 0 {
+		return false, ""
+	}
+	return true, strings.Join(valid, ",")
 }
 
 type blResult struct {
