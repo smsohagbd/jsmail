@@ -111,10 +111,11 @@ func main() {
 		entries := make([]delivery.IPEntry, 0, len(pool))
 		for _, p := range pool {
 			entries = append(entries, delivery.IPEntry{
-				IP:      p.IP,
-				PerMin:  p.PerMin,
-				PerHour: p.PerHour,
-				PerDay:  p.PerDay,
+				IP:           p.IP,
+				PerMin:       p.PerMin,
+				PerHour:      p.PerHour,
+				PerDay:       p.PerDay,
+				WarmupPerDay: p.WarmupDayLimit(),
 			})
 		}
 		return entries

@@ -95,6 +95,34 @@ type IPPool struct {
 	PerHour  int    `gorm:"default:0"`
 	PerDay   int    `gorm:"default:0"`
 	Note     string
+
+	// Warmup: gradually increase sending volume over N days.
+	WarmupEnabled   bool      `gorm:"default:false"`
+	WarmupStartedAt time.Time // when warmup began (zero = not started)
+	WarmupDays      int       `gorm:"default:14"` // total warmup period
+}
+
+// WarmupDayLimit returns the maximum emails/day this IP may send today based on
+// its warmup schedule.  Returns 0 (unlimited) when warmup is inactive or complete.
+// Schedule doubles each day: 50 → 100 → 200 → 400 → ... capped at PerDay.
+func (ip *IPPool) WarmupDayLimit() int {
+	if !ip.WarmupEnabled || ip.WarmupStartedAt.IsZero() {
+		return 0
+	}
+	day := int(time.Since(ip.WarmupStartedAt).Hours()/24) + 1 // day 1, 2, ...
+	if day > ip.WarmupDays {
+		return 0 // warmup complete, use PerDay (or unlimited)
+	}
+	// Doubling schedule starting at 50/day.
+	limit := 50
+	for i := 1; i < day; i++ {
+		limit *= 2
+	}
+	// Cap at user-configured PerDay if set.
+	if ip.PerDay > 0 && limit > ip.PerDay {
+		limit = ip.PerDay
+	}
+	return limit
 }
 
 // Domain represents a verified sending domain with its DKIM keys and DNS records.

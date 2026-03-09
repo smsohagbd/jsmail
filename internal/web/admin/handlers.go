@@ -456,13 +456,76 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RemoveBounce removes an address from the suppression list.
+// ──────────────────────────── Hard Bounce Management ─────────────────────────
+
+func (h *Handler) Bounces(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	const perPage = 50
+
+	q := h.DB.Model(&appdb.BounceList{})
+	if search != "" {
+		q = q.Where("email LIKE ?", "%"+search+"%")
+	}
+
+	var total int64
+	q.Count(&total)
+
+	var bounces []appdb.BounceList
+	q.Order("last_seen_at desc").Offset((page - 1) * perPage).Limit(perPage).Find(&bounces)
+
+	h.Tmpl.Render(w, "admin/bounces", map[string]interface{}{
+		"Page":       "bounces",
+		"ActiveUser": claims.Username,
+		"Bounces":    bounces,
+		"Total":      total,
+		"PageNum":    page,
+		"PerPage":    perPage,
+		"Search":     search,
+		"FlashOK":    r.URL.Query().Get("ok"),
+	})
+}
+
+// RemoveBounce removes one or more addresses from the suppression list.
 func (h *Handler) RemoveBounce(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+		return
+	}
 	email := r.FormValue("email")
 	if email != "" {
 		appdb.RemoveFromBounceList(email)
+		http.Redirect(w, r, "/admin/bounces?ok="+url.QueryEscape(email+" removed from suppression list"), http.StatusFound)
+		return
 	}
-	http.Redirect(w, r, "/admin/reports", http.StatusFound)
+	http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+}
+
+// BulkRemoveBounces removes all addresses from the suppression list (or by search).
+func (h *Handler) BulkRemoveBounces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+		return
+	}
+	scope := r.FormValue("scope")
+	switch scope {
+	case "all":
+		h.DB.Where("1 = 1").Delete(&appdb.BounceList{})
+		http.Redirect(w, r, "/admin/bounces?ok=All+hard+bounces+cleared", http.StatusFound)
+	case "search":
+		search := r.FormValue("search")
+		if search != "" {
+			h.DB.Where("email LIKE ?", "%"+search+"%").Delete(&appdb.BounceList{})
+		}
+		http.Redirect(w, r, "/admin/bounces?ok=Matching+addresses+removed", http.StatusFound)
+	default:
+		http.Redirect(w, r, "/admin/bounces", http.StatusFound)
+	}
 }
 
 // ──────────────────────────── Domains ────────────────────────────────────────
@@ -554,14 +617,24 @@ func (h *Handler) AddIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
 	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
 	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
+	warmupEnabled := r.FormValue("warmup_enabled") == "on"
+	warmupDays, _ := strconv.Atoi(r.FormValue("warmup_days"))
+	if warmupDays == 0 {
+		warmupDays = 14
+	}
 	entry := &appdb.IPPool{
-		IP:       ip,
-		Hostname: strings.TrimSpace(r.FormValue("hostname")),
-		Active:   r.FormValue("active") != "off",
-		PerMin:   perMin,
-		PerHour:  perHour,
-		PerDay:   perDay,
-		Note:     strings.TrimSpace(r.FormValue("note")),
+		IP:            ip,
+		Hostname:      strings.TrimSpace(r.FormValue("hostname")),
+		Active:        r.FormValue("active") != "off",
+		PerMin:        perMin,
+		PerHour:       perHour,
+		PerDay:        perDay,
+		Note:          strings.TrimSpace(r.FormValue("note")),
+		WarmupEnabled: warmupEnabled,
+		WarmupDays:    warmupDays,
+	}
+	if warmupEnabled {
+		entry.WarmupStartedAt = time.Now()
 	}
 	if err := appdb.SaveIPPoolEntry(entry); err != nil {
 		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
@@ -584,6 +657,11 @@ func (h *Handler) UpdateIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/ippool?err=not+found", http.StatusFound)
 		return
 	}
+	warmupEnabled := r.FormValue("warmup_enabled") == "on"
+	warmupDays, _ := strconv.Atoi(r.FormValue("warmup_days"))
+	if warmupDays == 0 {
+		warmupDays = 14
+	}
 	entry.IP = strings.TrimSpace(r.FormValue("ip"))
 	entry.Hostname = strings.TrimSpace(r.FormValue("hostname"))
 	entry.Active = r.FormValue("active") == "on"
@@ -591,6 +669,12 @@ func (h *Handler) UpdateIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 	entry.PerHour = perHour
 	entry.PerDay = perDay
 	entry.Note = strings.TrimSpace(r.FormValue("note"))
+	entry.WarmupDays = warmupDays
+	// Only reset warmup start time if toggling warmup on.
+	if warmupEnabled && !entry.WarmupEnabled {
+		entry.WarmupStartedAt = time.Now()
+	}
+	entry.WarmupEnabled = warmupEnabled
 	if err := appdb.SaveIPPoolEntry(entry); err != nil {
 		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
 		return

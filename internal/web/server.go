@@ -41,7 +41,14 @@ func (r *tmplRenderer) Render(w http.ResponseWriter, name string, data map[strin
 		Funcs(template.FuncMap{
 			"add":   func(a, b int) int { return a + b },
 			"sub":   func(a, b int) int { return a - b },
+			"mul":   func(a, b int) int { return a * b },
 			"int64": func(n int) int64 { return int64(n) },
+			"min": func(a, b int64) int64 {
+				if a < b {
+					return a
+				}
+				return b
+			},
 		}).
 		ParseFS(r.fs, files...)
 	if err != nil {
@@ -117,7 +124,10 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/throttle/delete", webauth.RequireAdmin(ah.DeleteThrottle))
 	mux.HandleFunc("/admin/settings", webauth.RequireAdmin(ah.Settings))
 	mux.HandleFunc("/admin/reports", webauth.RequireAdmin(ah.Reports))
-	mux.HandleFunc("/admin/bounce/remove", webauth.RequireAdmin(ah.RemoveBounce))
+	mux.HandleFunc("/admin/bounces", webauth.RequireAdmin(ah.Bounces))
+	mux.HandleFunc("/admin/bounces/remove", webauth.RequireAdmin(ah.RemoveBounce))
+	mux.HandleFunc("/admin/bounces/bulk-remove", webauth.RequireAdmin(ah.BulkRemoveBounces))
+	mux.HandleFunc("/admin/bounce/remove", webauth.RequireAdmin(ah.RemoveBounce)) // legacy
 	mux.HandleFunc("/admin/domains", webauth.RequireAdmin(ah.Domains))
 	mux.HandleFunc("/admin/domains/add", webauth.RequireAdmin(ah.AddDomain))
 	mux.HandleFunc("/admin/domains/delete", webauth.RequireAdmin(ah.DeleteDomain))

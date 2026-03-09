@@ -66,10 +66,11 @@ type throttleCounter struct {
 
 // IPEntry describes one outbound IP in the pool with optional rate limits.
 type IPEntry struct {
-	IP      string
-	PerMin  int // 0 = unlimited
-	PerHour int
-	PerDay  int
+	IP           string
+	PerMin       int // 0 = unlimited
+	PerHour      int
+	PerDay       int
+	WarmupPerDay int // >0 when IP is in warmup phase; overrides PerDay
 }
 
 // SMTPRelay describes a custom outbound SMTP relay server.
@@ -639,6 +640,15 @@ func (e *Engine) nextOutboundIP() string {
 			c.dayReset = now.Add(24 * time.Hour)
 		}
 
+		// Effective daily limit: warmup overrides static PerDay when active.
+		effectivePerDay := entry.PerDay
+		if entry.WarmupPerDay > 0 {
+			effectivePerDay = entry.WarmupPerDay
+			if entry.PerDay > 0 && entry.PerDay < effectivePerDay {
+				effectivePerDay = entry.PerDay
+			}
+		}
+
 		// Check limits (0 = unlimited).
 		if entry.PerMin > 0 && c.minCount >= entry.PerMin {
 			log.Printf("[DELIVERY]   IP %s: per-min limit %d reached, skipping", entry.IP, entry.PerMin)
@@ -648,8 +658,12 @@ func (e *Engine) nextOutboundIP() string {
 			log.Printf("[DELIVERY]   IP %s: per-hour limit %d reached, skipping", entry.IP, entry.PerHour)
 			continue
 		}
-		if entry.PerDay > 0 && c.dayCount >= entry.PerDay {
-			log.Printf("[DELIVERY]   IP %s: per-day limit %d reached, skipping", entry.IP, entry.PerDay)
+		if effectivePerDay > 0 && c.dayCount >= effectivePerDay {
+			src := "per-day"
+			if entry.WarmupPerDay > 0 {
+				src = "warmup"
+			}
+			log.Printf("[DELIVERY]   IP %s: %s limit %d reached, skipping", entry.IP, src, effectivePerDay)
 			continue
 		}
 

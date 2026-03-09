@@ -1,0 +1,126 @@
+{{define "title"}}Hard Bounces — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Hard Bounce Suppression</div>
+    <div class="page-sub">Addresses that permanently rejected delivery — auto-blocked at RCPT TO</div>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <form method="POST" action="/admin/bounces/bulk-remove" onsubmit="return confirm('Clear ALL hard bounces? Emails to these addresses will be attempted again.')">
+      <input type="hidden" name="scope" value="all"/>
+      <button type="submit" class="btn btn-danger">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        Clear All
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+
+<!-- Search + stats bar -->
+<div class="card" style="margin-bottom:16px;padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+  <form method="GET" action="/admin/bounces" style="display:flex;gap:8px;flex:1;min-width:200px;">
+    <input class="form-input" name="search" value="{{.Search}}" placeholder="Search email address…" style="flex:1;"/>
+    <button type="submit" class="btn btn-secondary" style="flex-shrink:0;">Search</button>
+    {{if .Search}}
+    <a href="/admin/bounces" class="btn btn-ghost" style="flex-shrink:0;">Clear</a>
+    <form method="POST" action="/admin/bounces/bulk-remove" style="display:inline;">
+      <input type="hidden" name="scope" value="search"/>
+      <input type="hidden" name="search" value="{{.Search}}"/>
+      <button type="submit" class="btn btn-danger" style="font-size:11px;"
+        onclick="return confirm('Remove all matching addresses?')">Remove Matching</button>
+    </form>
+    {{end}}
+  </form>
+  <div style="font-size:13px;color:#52525b;flex-shrink:0;">
+    <span style="color:#f87171;font-weight:600;">{{.Total}}</span> suppressed address{{if ne .Total 1}}es{{end}}
+  </div>
+</div>
+
+<!-- Table -->
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Email Address</th>
+        <th>Bounce Count</th>
+        <th>Reason</th>
+        <th>Last Seen</th>
+        <th style="padding-right:20px;text-align:right;">Action</th>
+      </tr></thead>
+      <tbody>
+        {{range .Bounces}}
+        <tr>
+          <td style="padding-left:20px;">
+            <span style="font-family:monospace;font-size:13px;color:#e4e4e7;">{{.Email}}</span>
+          </td>
+          <td>
+            <span style="background:#1c0606;color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">
+              {{.BounceCount}}x
+            </span>
+          </td>
+          <td style="font-size:12px;color:#71717a;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            {{if .Reason}}{{.Reason}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}
+          </td>
+          <td style="font-size:12px;color:#52525b;">{{.LastSeenAt.Format "Jan 2, 2006 15:04"}}</td>
+          <td style="padding-right:20px;text-align:right;">
+            <form method="POST" action="/admin/bounces/remove" style="display:inline;">
+              <input type="hidden" name="email" value="{{.Email}}"/>
+              <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#4ade80;"
+                onclick="return confirm('Remove {{.Email}} from suppression list?\nEmails to this address will be attempted again.')">
+                ✓ Restore
+              </button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" class="empty-state" style="padding-left:20px;">
+          <svg width="32" height="32" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          No hard bounces — great inbox health!
+        </td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if gt .Total 0}}
+  <!-- Pagination -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-top:1px solid #27272a;">
+    <div style="font-size:12px;color:#52525b;">
+      Showing {{add (mul (sub .PageNum 1) .PerPage) 1}}–{{min (mul .PageNum .PerPage) .Total}} of {{.Total}}
+    </div>
+    <div style="display:flex;gap:6px;">
+      {{if gt .PageNum 1}}
+      <a href="?page={{sub .PageNum 1}}{{if .Search}}&search={{.Search}}{{end}}" class="btn btn-ghost" style="font-size:12px;padding:4px 10px;">← Prev</a>
+      {{end}}
+      {{if lt (mul .PageNum .PerPage) .Total}}
+      <a href="?page={{add .PageNum 1}}{{if .Search}}&search={{.Search}}{{end}}" class="btn btn-ghost" style="font-size:12px;padding:4px 10px;">Next →</a>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+</div>
+
+<!-- Info box -->
+<div class="card" style="margin-top:16px;padding:16px 20px;">
+  <div style="font-size:13px;font-weight:600;color:#e4e4e7;margin-bottom:8px;">How hard bounces work</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;font-size:12px;color:#71717a;">
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:10px 12px;">
+      <div style="color:#f87171;font-weight:600;margin-bottom:3px;">5xx SMTP Error</div>
+      Delivery engine receives 552/550 "mailbox not found" → automatically added here
+    </div>
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:10px 12px;">
+      <div style="color:#fbbf24;font-weight:600;margin-bottom:3px;">Auto-blocked</div>
+      Future submissions to this address are rejected at RCPT TO with "550 5.1.1 permanently bounced"
+    </div>
+    <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:10px 12px;">
+      <div style="color:#4ade80;font-weight:600;margin-bottom:3px;">Restore</div>
+      Click Restore to remove from suppression — use carefully, only if you're sure the address is valid again
+    </div>
+  </div>
+</div>
+</div>
+{{end}}
