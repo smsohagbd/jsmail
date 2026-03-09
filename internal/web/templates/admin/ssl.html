@@ -187,7 +187,56 @@
   </div>
 </div>
 
-<!-- === SECTION 3: Generate self-signed === -->
+<!-- === SECTION 3: Free Let's Encrypt Certificate === -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <div>
+      <span class="card-title" style="color:#4ade80;">
+        <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="vertical-align:-2px;margin-right:5px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        Get Free Certificate (Let's Encrypt)
+      </span>
+      <div style="font-size:12px;color:#52525b;margin-top:2px;">Trusted by all mail clients — uses certbot or acme.sh. <strong style="color:#fbbf24;">Port 80 must be open</strong> for the HTTP-01 challenge.</div>
+    </div>
+  </div>
+  <div class="card-body" style="padding:20px;">
+    <form method="POST" action="/admin/ssl/letsencrypt">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div class="form-group">
+          <label class="form-label">Hostname / Domain <span style="color:#f87171;">*</span></label>
+          <input class="form-input" name="le_hostname" value="{{.HeloName}}" placeholder="mail.example.com" required/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email (for renewal notices) <span style="color:#f87171;">*</span></label>
+          <input class="form-input" name="le_email" type="email" placeholder="admin@example.com" required/>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button type="submit" class="btn btn-primary" style="background:#16a34a;border-color:#16a34a;">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+          Issue Free Certificate
+        </button>
+        <div style="font-size:12px;color:#52525b;line-height:1.6;">
+          Requires <strong style="color:#a1a1aa;">certbot</strong> or <strong style="color:#a1a1aa;">acme.sh</strong> installed on the server.
+          Auto-updates config.yaml — <strong style="color:#fbbf24;">restart server after issuing</strong>.
+        </div>
+      </div>
+    </form>
+    <!-- Install instructions (collapsed) -->
+    <div style="margin-top:14px;border-top:1px solid #27272a;padding-top:12px;">
+      <button type="button" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'"
+        class="btn btn-ghost" style="font-size:11px;color:#52525b;">▸ Show install instructions for certbot / acme.sh</button>
+      <div style="display:none;margin-top:10px;font-size:12px;color:#a1a1aa;line-height:1.8;">
+        <strong style="color:#e4e4e7;">Install certbot (Ubuntu/Debian):</strong><br>
+        <code style="background:#09090b;padding:6px 10px;border-radius:6px;display:block;margin:4px 0;font-size:11px;color:#a78bfa;">apt install certbot</code>
+        <strong style="color:#e4e4e7;">Install acme.sh (any Linux):</strong><br>
+        <code style="background:#09090b;padding:6px 10px;border-radius:6px;display:block;margin:4px 0;font-size:11px;color:#a78bfa;">curl https://get.acme.sh | sh -s email=your@email.com</code>
+        <span style="color:#52525b;">After install, come back here and click "Issue Free Certificate".</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- === SECTION 4: Generate self-signed (testing only) === -->
 <div class="card">
   <div class="card-header">
     <div>
@@ -201,9 +250,9 @@
         <label class="form-label">Hostname</label>
         <input class="form-input" name="hostname" value="{{.HeloName}}" placeholder="mail.example.com"/>
       </div>
-      <button type="submit" class="btn btn-primary">
+      <button type="submit" class="btn btn-secondary">
         <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-        Generate
+        Generate Self-Signed
       </button>
     </form>
     <p style="font-size:12px;color:#52525b;margin-top:10px;">

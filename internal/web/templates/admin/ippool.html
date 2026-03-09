@@ -3,17 +3,50 @@
 <div class="page-header">
   <div>
     <div class="page-title">IP Pool</div>
-    <div class="page-sub">Manage outbound IPs with per-IP rate limits</div>
+    <div class="page-sub">Manage outbound IPs with per-IP rate limits and live send counters</div>
   </div>
-  <button class="btn btn-primary" onclick="document.getElementById('add-modal').style.display='flex'">
-    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
-    Add IP
-  </button>
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-ghost" onclick="toggleView('bulk')" id="btn-bulk">
+      <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h8"/></svg>
+      Bulk Import
+    </button>
+    <button class="btn btn-primary" onclick="toggleView('add')" id="btn-add">
+      <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+      Add IP
+    </button>
+  </div>
 </div>
 <div class="page-body">
 
 {{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
 {{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<!-- Bulk import panel (hidden by default) -->
+<div id="bulk-panel" style="display:none;margin-bottom:16px;">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Bulk Import IPs</span>
+      <button type="button" class="btn btn-ghost" style="font-size:11px;" onclick="toggleView(null)">✕ Close</button>
+    </div>
+    <div class="card-body" style="padding:20px;">
+      <form method="POST" action="/admin/ippool/bulk-add">
+        <div class="form-group" style="margin-bottom:14px;">
+          <label class="form-label">One IP per line — format: <code style="color:#a78bfa;">ip:hostname</code> (hostname optional)</label>
+          <textarea class="form-input" name="ips" rows="8"
+            style="font-family:monospace;font-size:13px;resize:vertical;"
+            placeholder="135.148.120.163:mail1.example.com
+15.204.179.1:mail2.example.com
+192.168.1.5
+# lines starting with # are ignored"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button type="submit" class="btn btn-primary">Import IPs</button>
+          <span style="font-size:12px;color:#52525b;">Existing IPs are updated; new IPs are added with no rate limits (Active ON). Edit individual limits after import.</span>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 
 <!-- Master toggle -->
 <div class="card" style="margin-bottom:16px;padding:16px 20px;">
@@ -25,7 +58,7 @@
       <span style="font-size:14px;font-weight:600;color:#e4e4e7;">Enable IP Pool Rotation</span>
     </label>
     <span style="font-size:12px;color:#52525b;">
-      {{if .Enabled}}<span style="color:#4ade80;">● Active</span> — outbound connections rotate through IPs below{{else}}<span style="color:#71717a;">● Inactive</span> — all mail uses the system default IP{{end}}
+      {{if .Enabled}}<span style="color:#4ade80;">● Active</span> — outbound connections rotate through the IPs below{{else}}<span style="color:#71717a;">● Inactive</span> — all mail uses the system default IP{{end}}
     </span>
   </form>
 </div>
@@ -38,11 +71,13 @@
         <th style="padding-left:20px;">IP Address</th>
         <th>Hostname / Label</th>
         <th style="text-align:center;">Active</th>
-        <th style="text-align:right;">Per Min</th>
-        <th style="text-align:right;">Per Hour</th>
-        <th style="text-align:right;">Per Day</th>
-        <th>Bind Test</th>
-        <th>Note</th>
+        <th style="text-align:right;">Limit/Min</th>
+        <th style="text-align:right;">Limit/Hour</th>
+        <th style="text-align:right;">Limit/Day</th>
+        <th style="text-align:right;color:#60a5fa;">Sent/Min</th>
+        <th style="text-align:right;color:#60a5fa;">Sent/Hour</th>
+        <th style="text-align:right;color:#60a5fa;">Sent Today</th>
+        <th>Bind</th>
         <th style="padding-right:12px;"></th>
       </tr></thead>
       <tbody>
@@ -57,12 +92,15 @@
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerMin}}{{.PerMin}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerHour}}{{.PerHour}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerDay}}{{.PerDay}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
+          <!-- Live send counters (in-memory, resets on restart) -->
+          <td style="text-align:right;font-family:monospace;font-size:12px;color:{{if gt .MinSent 0}}#34d399{{else}}#3f3f46{{end}};">{{.MinSent}}</td>
+          <td style="text-align:right;font-family:monospace;font-size:12px;color:{{if gt .HourSent 0}}#60a5fa{{else}}#3f3f46{{end}};">{{.HourSent}}</td>
+          <td style="text-align:right;font-family:monospace;font-size:12px;color:{{if gt .DaySent 0}}#818cf8{{else}}#3f3f46{{end}};">{{.DaySent}}</td>
           <td>
             <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
               id="test-btn-{{.ID}}" onclick="testIP('{{.IP}}',{{.ID}})">Test</button>
             <span id="test-result-{{.ID}}" style="font-size:11px;"></span>
           </td>
-          <td style="font-size:12px;color:#52525b;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{.Note}}</td>
           <td style="padding-right:12px;text-align:right;white-space:nowrap;">
             <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
               onclick="openEdit({{.ID}},'{{.IP}}','{{.Hostname}}',{{.Active}},{{.PerMin}},{{.PerHour}},{{.PerDay}},'{{.Note}}')">Edit</button>
@@ -73,23 +111,26 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="9" style="text-align:center;color:#52525b;padding:32px;">No IPs added yet — click "Add IP" to start</td></tr>
+        <tr><td colspan="11" style="text-align:center;color:#52525b;padding:32px;">No IPs yet — click "Add IP" or "Bulk Import"</td></tr>
         {{end}}
       </tbody>
     </table>
+  </div>
+  <div style="padding:10px 20px;font-size:11px;color:#3f3f46;border-top:1px solid #18181b;">
+    Sent/Min, Sent/Hour, Sent Today counters are in-memory and reset on server restart. Limit columns show per-IP caps (∞ = unlimited).
   </div>
 </div>
 
 <!-- Diagnostics note -->
 <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:14px 18px;margin-bottom:16px;font-size:12px;color:#71717a;line-height:1.8;">
-  <strong style="color:#e4e4e7;">⚠ Important:</strong> Adding an IP here <em>does not</em> configure it on the OS.
-  The IP must be assigned to the server's network interface for outbound binding to work.
-  Click <strong style="color:#60a5fa;">Test</strong> on each IP to verify it is bound.<br>
-  On Linux: <code style="background:#18181b;padding:1px 5px;border-radius:3px;color:#a78bfa;">ip addr show</code> to list bound IPs,
-  <code style="background:#18181b;padding:1px 5px;border-radius:3px;color:#a78bfa;">ip addr add &lt;IP&gt;/32 dev eth0</code> to add one temporarily.
+  <strong style="color:#e4e4e7;">⚠ Important:</strong> Adding an IP here does <em>not</em> configure it on the OS.
+  The IP must already be assigned to the server's network interface.
+  Click <strong style="color:#60a5fa;">Test</strong> per IP to verify it is bindable.<br>
+  On Linux: <code style="background:#18181b;padding:1px 5px;border-radius:3px;color:#a78bfa;">ip addr show</code> lists bound IPs,
+  <code style="background:#18181b;padding:1px 5px;border-radius:3px;color:#a78bfa;">ip addr add &lt;IP&gt;/32 dev eth0</code> adds one.
 </div>
 
-<!-- How-it-works card -->
+<!-- Rate limit guide -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">How concurrent users are handled</div>
@@ -97,16 +138,15 @@
       <p style="margin:0 0 8px;">If 10 users each submit 5 emails (50 total):</p>
       <ol style="padding-left:18px;margin:0;display:flex;flex-direction:column;gap:4px;">
         <li>All 50 messages land in the queue <strong style="color:#e4e4e7;">instantly</strong></li>
-        <li>Up to 150 workers pick them up <strong style="color:#e4e4e7;">simultaneously</strong></li>
-        <li>All 50 can deliver in <strong style="color:#4ade80;">parallel</strong> — no waiting</li>
+        <li>Workers pick them up <strong style="color:#e4e4e7;">simultaneously</strong> in round-robin order</li>
         <li>IP rotation distributes load across pool IPs</li>
         <li>Each IP respects its own per-min/hour/day limits</li>
-        <li>If all IPs hit limits, falls back to system IP</li>
+        <li>If all IPs hit limits, falls back to system default IP</li>
       </ol>
     </div>
   </div>
   <div class="card" style="padding:20px;">
-    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Rate limit guide</div>
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">Recommended rate limits</div>
     <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;">
       <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:8px 12px;">
         <div style="color:#fbbf24;font-weight:600;margin-bottom:2px;">Yahoo / AOL</div>
@@ -120,7 +160,7 @@
         <div style="color:#a78bfa;font-weight:600;margin-bottom:2px;">New IP (warm-up)</div>
         <div style="color:#71717a;">Per min: <span style="color:#e4e4e7;">5</span> · Per hour: <span style="color:#e4e4e7;">100</span> · Per day: <span style="color:#e4e4e7;">500</span></div>
       </div>
-      <p style="margin:4px 0 0;color:#52525b;font-size:11px;">0 = unlimited. Per-domain throttle rules (Throttling page) also apply.</p>
+      <p style="margin:4px 0 0;color:#52525b;font-size:11px;">0 = unlimited. Per-domain throttle rules also apply.</p>
     </div>
   </div>
 </div>
@@ -132,7 +172,7 @@
   <div class="card" style="width:480px;max-width:95vw;">
     <div class="card-header">
       <span class="card-title">Add IP Address</span>
-      <button onclick="document.getElementById('add-modal').style.display='none'" class="btn btn-ghost" style="font-size:11px;">✕</button>
+      <button onclick="toggleView(null)" class="btn btn-ghost" style="font-size:11px;">✕</button>
     </div>
     <div class="card-body" style="padding:20px;">
       <form method="POST" action="/admin/ippool/add">
@@ -170,7 +210,7 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
-          <button type="button" class="btn btn-ghost" onclick="document.getElementById('add-modal').style.display='none'">Cancel</button>
+          <button type="button" class="btn btn-ghost" onclick="toggleView(null)">Cancel</button>
           <button type="submit" class="btn btn-primary">Add IP</button>
         </div>
       </form>
@@ -231,45 +271,41 @@
 </div>
 
 <script>
+var currentView = null;
+function toggleView(v) {
+  document.getElementById('add-modal').style.display  = 'none';
+  document.getElementById('bulk-panel').style.display = 'none';
+  if (v === 'add')  { document.getElementById('add-modal').style.display  = 'flex'; currentView = 'add'; }
+  if (v === 'bulk') { document.getElementById('bulk-panel').style.display = 'block'; currentView = 'bulk'; }
+  if (v === null)   { currentView = null; }
+}
+
 function openEdit(id, ip, hostname, active, perMin, perHour, perDay, note) {
-  document.getElementById('edit-id').value = id;
-  document.getElementById('edit-ip').value = ip;
+  document.getElementById('edit-id').value      = id;
+  document.getElementById('edit-ip').value       = ip;
   document.getElementById('edit-hostname').value = hostname;
-  document.getElementById('edit-permin').value = perMin;
-  document.getElementById('edit-perhour').value = perHour;
-  document.getElementById('edit-perday').value = perDay;
-  document.getElementById('edit-active').value = active ? 'on' : 'off';
-  document.getElementById('edit-note').value = note;
+  document.getElementById('edit-permin').value   = perMin;
+  document.getElementById('edit-perhour').value  = perHour;
+  document.getElementById('edit-perday').value   = perDay;
+  document.getElementById('edit-active').value   = active ? 'on' : 'off';
+  document.getElementById('edit-note').value     = note;
   document.getElementById('edit-modal').style.display = 'flex';
 }
 
 function testIP(ip, id) {
   var btn = document.getElementById('test-btn-'+id);
   var res = document.getElementById('test-result-'+id);
-  btn.disabled = true;
-  btn.textContent = '…';
-  res.textContent = '';
-  var fd = new FormData();
-  fd.append('ip', ip);
+  btn.disabled = true; btn.textContent = '…'; res.textContent = '';
+  var fd = new FormData(); fd.append('ip', ip);
   fetch('/admin/ippool/test-ip', {method:'POST', body:fd})
     .then(function(r){ return r.json(); })
     .then(function(j){
-      if(j.ok){
-        res.style.color = '#4ade80';
-        res.textContent = '✓ OK';
-      } else {
-        res.style.color = '#f87171';
-        res.textContent = '✗ ' + j.msg;
-      }
-      btn.disabled = false;
-      btn.textContent = 'Test';
+      res.style.color   = j.ok ? '#4ade80' : '#f87171';
+      res.textContent   = j.ok ? '✓ OK' : '✗ Not bound';
+      res.title         = j.msg;
+      btn.disabled = false; btn.textContent = 'Test';
     })
-    .catch(function(){
-      res.style.color = '#f87171';
-      res.textContent = '✗ error';
-      btn.disabled = false;
-      btn.textContent = 'Test';
-    });
+    .catch(function(){ res.style.color='#f87171'; res.textContent='✗ err'; btn.disabled=false; btn.textContent='Test'; });
 }
 </script>
 {{end}}

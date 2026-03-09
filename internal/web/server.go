@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	appdb "smtp-server/internal/db"
+	delivery "smtp-server/internal/delivery"
 	"smtp-server/internal/queue"
 	"smtp-server/internal/verifier"
 	webadmin "smtp-server/internal/web/admin"
@@ -66,17 +67,19 @@ type Server struct {
 	addr       string
 	db         *gorm.DB
 	queue      *queue.Queue
+	engine     *delivery.Engine
 	verifier   *verifier.Verifier
 	renderer   *tmplRenderer
 	cfg        map[string]string // snapshot of config values for settings page
 	configPath string            // path to config.yaml for the editor
 }
 
-func NewServer(addr string, db *gorm.DB, q *queue.Queue, v *verifier.Verifier, cfgSnapshot map[string]string, configPath string) *Server {
+func NewServer(addr string, db *gorm.DB, q *queue.Queue, eng *delivery.Engine, v *verifier.Verifier, cfgSnapshot map[string]string, configPath string) *Server {
 	return &Server{
 		addr:       addr,
 		db:         db,
 		queue:      q,
+		engine:     eng,
 		verifier:   v,
 		renderer:   &tmplRenderer{fs: templateFS},
 		cfg:        cfgSnapshot,
@@ -109,7 +112,19 @@ func (s *Server) Start() {
 	})
 
 	// Admin routes
-	ah := &webadmin.Handler{DB: s.db, Queue: s.queue, Tmpl: s.renderer, ConfigSnapshot: s.cfg, ConfigPath: s.configPath}
+	ah := &webadmin.Handler{
+		DB:             s.db,
+		Queue:          s.queue,
+		Tmpl:           s.renderer,
+		ConfigSnapshot: s.cfg,
+		ConfigPath:     s.configPath,
+		IPStatsProvider: func() map[string]delivery.IPCounterSnapshot {
+			if s.engine == nil {
+				return nil
+			}
+			return s.engine.GetIPStats()
+		},
+	}
 	mux.HandleFunc("/admin", webauth.RequireAdmin(ah.Dashboard))
 	mux.HandleFunc("/admin/users", webauth.RequireAdmin(ah.Users))
 	mux.HandleFunc("/admin/users/create", webauth.RequireAdmin(ah.CreateUser))
@@ -137,12 +152,14 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/ippool/update", webauth.RequireAdmin(ah.UpdateIPPoolEntry))
 	mux.HandleFunc("/admin/ippool/delete", webauth.RequireAdmin(ah.DeleteIPPoolEntry))
 	mux.HandleFunc("/admin/ippool/test-ip", webauth.RequireAdmin(ah.TestIPBinding))
+	mux.HandleFunc("/admin/ippool/bulk-add", webauth.RequireAdmin(ah.BulkAddIPPool))
 	mux.HandleFunc("/admin/config", webauth.RequireAdmin(ah.ConfigEditor))
 	mux.HandleFunc("/admin/ssl", webauth.RequireAdmin(ah.SSL))
 	mux.HandleFunc("/admin/ssl/save", webauth.RequireAdmin(ah.SaveTLSConfig))
 	mux.HandleFunc("/admin/ssl/scan", webauth.RequireAdmin(ah.ScanCerts))
 	mux.HandleFunc("/admin/ssl/generate", webauth.RequireAdmin(ah.GenerateSelfSigned))
 	mux.HandleFunc("/admin/ssl/verify", webauth.RequireAdmin(ah.VerifyCert))
+	mux.HandleFunc("/admin/ssl/letsencrypt", webauth.RequireAdmin(ah.RequestLetsEncrypt))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer}

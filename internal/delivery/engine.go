@@ -1162,6 +1162,29 @@ func parseDKIMSignerFromPEM(domain, selector, privKeyPEM string) (*dkim.SignOpti
 	}, nil
 }
 
+// IPCounterSnapshot holds a point-in-time view of send counters for one IP.
+type IPCounterSnapshot struct {
+	MinCount  int
+	HourCount int
+	DayCount  int
+}
+
+// GetIPStats returns the current in-memory send counters for every tracked IP.
+// Counters automatically reset at the end of each time window.
+func (e *Engine) GetIPStats() map[string]IPCounterSnapshot {
+	e.ipMu.Lock()
+	defer e.ipMu.Unlock()
+	result := make(map[string]IPCounterSnapshot, len(e.ipCounters))
+	for ip, c := range e.ipCounters {
+		result[ip] = IPCounterSnapshot{
+			MinCount:  c.minCount,
+			HourCount: c.hourCount,
+			DayCount:  c.dayCount,
+		}
+	}
+	return result
+}
+
 // isPermanentSMTPError returns true if the error represents a 5xx permanent
 // SMTP rejection (hard bounce). 4xx errors are temporary (soft bounce).
 func isPermanentSMTPError(err error) bool {

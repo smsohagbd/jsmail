@@ -9,11 +9,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"gorm.io/gorm"
 
 	appdb "smtp-server/internal/db"
+	delivery "smtp-server/internal/delivery"
 	"smtp-server/internal/queue"
 	webauth "smtp-server/internal/web/auth"
 )
@@ -52,6 +55,16 @@ type Handler struct {
 	Tmpl           TemplateRenderer
 	ConfigSnapshot map[string]string
 	ConfigPath     string // path to config.yaml for the editor
+	// IPStatsProvider returns the current in-memory send counters per pool IP.
+	IPStatsProvider func() map[string]delivery.IPCounterSnapshot
+}
+
+// ipEntryView combines a DB pool entry with live send counters.
+type ipEntryView struct {
+	appdb.IPPool
+	MinSent  int
+	HourSent int
+	DaySent  int
 }
 
 type TemplateRenderer interface {
@@ -585,11 +598,23 @@ func getOutboundIP() string {
 
 func (h *Handler) IPPool(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
+
+	entries := appdb.GetAllIPPool()
+	stats := map[string]delivery.IPCounterSnapshot{}
+	if h.IPStatsProvider != nil {
+		stats = h.IPStatsProvider()
+	}
+	views := make([]ipEntryView, len(entries))
+	for i, e := range entries {
+		s := stats[e.IP]
+		views[i] = ipEntryView{IPPool: e, MinSent: s.MinCount, HourSent: s.HourCount, DaySent: s.DayCount}
+	}
+
 	h.Tmpl.Render(w, "admin/ippool", map[string]interface{}{
 		"Page":       "ippool",
 		"ActiveUser": claims.Username,
 		"Enabled":    appdb.GetSetting("ip_pool_enabled", "false") == "true",
-		"Entries":    appdb.GetAllIPPool(),
+		"Entries":    views,
 		"FlashOK":    r.URL.Query().Get("ok"),
 		"FlashErr":   r.URL.Query().Get("err"),
 	})
@@ -691,6 +716,130 @@ func (h *Handler) DeleteIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
 	h.ToggleIPPool(w, r)
+}
+
+// BulkAddIPPool imports multiple IPs from a textarea in "ip:hostname" format.
+// Lines starting with # are treated as comments and skipped.
+// Existing IPs are updated with the new hostname (if provided); new IPs are created.
+func (h *Handler) BulkAddIPPool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	text := r.FormValue("ips")
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	added, updated, skipped := 0, 0, 0
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		ip := strings.TrimSpace(parts[0])
+		hostname := ""
+		if len(parts) == 2 {
+			hostname = strings.TrimSpace(parts[1])
+		}
+		if net.ParseIP(ip) == nil {
+			skipped++
+			continue
+		}
+		var existing appdb.IPPool
+		if err := h.DB.Where("ip = ?", ip).First(&existing).Error; err != nil {
+			// New entry — active, no rate limits.
+			entry := &appdb.IPPool{IP: ip, Hostname: hostname, Active: true}
+			if err := appdb.SaveIPPoolEntry(entry); err == nil {
+				added++
+			} else {
+				skipped++
+			}
+		} else {
+			if hostname != "" {
+				existing.Hostname = hostname
+				appdb.SaveIPPoolEntry(&existing)
+			}
+			updated++
+		}
+	}
+	msg := fmt.Sprintf("Imported %d new, %d updated", added, updated)
+	if skipped > 0 {
+		msg += fmt.Sprintf(", %d skipped (invalid)", skipped)
+	}
+	http.Redirect(w, r, "/admin/ippool?ok="+url.QueryEscape(msg), http.StatusFound)
+}
+
+// RequestLetsEncrypt issues a free Let's Encrypt certificate via certbot (preferred)
+// or acme.sh. Both tools use the HTTP-01 standalone challenge on port 80.
+func (h *Handler) RequestLetsEncrypt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ssl", http.StatusFound)
+		return
+	}
+	hostname := strings.TrimSpace(r.FormValue("le_hostname"))
+	email := strings.TrimSpace(r.FormValue("le_email"))
+	if hostname == "" || email == "" {
+		http.Redirect(w, r, "/admin/ssl?err=Hostname+and+email+are+required", http.StatusFound)
+		return
+	}
+
+	// Try certbot first (most common on Linux servers).
+	certPath, keyPath, out, err := issueCertbot(hostname, email)
+	if err != nil {
+		// Fall back to acme.sh.
+		certPath, keyPath, out, err = issueAcmeSh(hostname, email)
+	}
+	if err != nil {
+		errMsg := "Certificate issuance failed. Make sure port 80 is open and not in use.\n\n" + out
+		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape(errMsg), http.StatusFound)
+		return
+	}
+
+	// Auto-update config.yaml to use the new cert.
+	if perr := patchConfigTLS(h.ConfigPath, true, certPath, keyPath, "starttls"); perr != nil {
+		http.Redirect(w, r, "/admin/ssl?err="+url.QueryEscape("Cert issued but config update failed: "+perr.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ssl?ok="+url.QueryEscape("Certificate issued for "+hostname+"! Restart the server to apply."), http.StatusFound)
+}
+
+func issueCertbot(hostname, email string) (certFile, keyFile, output string, err error) {
+	cmd := exec.Command("certbot", "certonly",
+		"--standalone", "--non-interactive", "--agree-tos",
+		"--email", email, "-d", hostname,
+	)
+	out, runErr := cmd.CombinedOutput()
+	output = string(out)
+	if runErr != nil {
+		err = runErr
+		return
+	}
+	certFile = "/etc/letsencrypt/live/" + hostname + "/fullchain.pem"
+	keyFile = "/etc/letsencrypt/live/" + hostname + "/privkey.pem"
+	return
+}
+
+func issueAcmeSh(hostname, email string) (certFile, keyFile, output string, err error) {
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/root"
+	}
+	acmeBin := filepath.Join(home, ".acme.sh/acme.sh")
+	if _, statErr := os.Stat(acmeBin); statErr != nil {
+		err = fmt.Errorf("acme.sh not found at %s and certbot failed", acmeBin)
+		return
+	}
+	cmd := exec.Command(acmeBin, "--issue", "--standalone",
+		"--domain", hostname, "--accountemail", email,
+	)
+	out, runErr := cmd.CombinedOutput()
+	output = string(out)
+	if runErr != nil {
+		err = runErr
+		return
+	}
+	certFile = filepath.Join(home, ".acme.sh", hostname, "fullchain.cer")
+	keyFile = filepath.Join(home, ".acme.sh", hostname, hostname+".key")
+	return
 }
 
 // TestIPBinding tries to bind a TCP listener on the given IP to verify it is

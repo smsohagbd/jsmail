@@ -151,7 +151,7 @@ func main() {
 		"web_listen":      cfg.Web.ListenAddr,
 		"db_path":         cfg.Web.DBPath,
 	}
-	go web.NewServer(cfg.Web.ListenAddr, appdb.DB, q, v, cfgSnapshot, *configPath).Start()
+	go web.NewServer(cfg.Web.ListenAddr, appdb.DB, q, eng, v, cfgSnapshot, *configPath).Start()
 
 	log.Printf("=== smtp-server started ===")
 	log.Printf("  SMTP  : %s  (domain: %s)", cfg.SMTP.ListenAddr, cfg.SMTP.Domain)
