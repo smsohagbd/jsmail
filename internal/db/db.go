@@ -352,6 +352,50 @@ func SetUserSMTPMode(username, mode string, rotation bool, maxSMTP int) {
 	})
 }
 
+// ──────────────────────────── Throttle ───────────────────────────────────────
+
+// ThrottleLimit holds effective send-rate limits for one user+domain combination.
+type ThrottleLimit struct {
+	PerSec   int
+	PerMin   int
+	PerHour  int
+	PerDay   int
+	PerMonth int
+}
+
+// GetEffectiveThrottle returns the most restrictive applicable throttle rule for
+// a user sending to a given recipient domain.
+// Priority: user+domain > user (all domains) > global+domain > global (all domains).
+func GetEffectiveThrottle(username, domain string) ThrottleLimit {
+	var rules []ThrottleRule
+	DB.Where("(username = ? OR username = '') AND (domain = ? OR domain = '')",
+		username, domain).Find(&rules)
+
+	// Score each rule: user-specific wins over global, domain-specific wins over wildcard.
+	best := ThrottleLimit{}
+	bestScore := -1
+	for _, r := range rules {
+		score := 0
+		if r.Username == username {
+			score += 2
+		}
+		if r.Domain == domain {
+			score += 1
+		}
+		if score > bestScore {
+			bestScore = score
+			best = ThrottleLimit{
+				PerSec:   r.PerSec,
+				PerMin:   r.PerMin,
+				PerHour:  r.PerHour,
+				PerDay:   r.PerDay,
+				PerMonth: r.PerMonth,
+			}
+		}
+	}
+	return best
+}
+
 // CheckPassword verifies a user's password and returns the user if valid.
 func CheckPassword(username, password string) (*User, bool) {
 	var user User

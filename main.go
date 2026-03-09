@@ -68,6 +68,18 @@ func main() {
 		return "", "", false
 	}
 
+	// Per-user throttling: look up the most specific throttle rule from the DB.
+	eng.ThrottleProvider = func(username, domain string) delivery.ThrottleLimit {
+		lim := appdb.GetEffectiveThrottle(username, domain)
+		return delivery.ThrottleLimit{
+			PerSec:   lim.PerSec,
+			PerMin:   lim.PerMin,
+			PerHour:  lim.PerHour,
+			PerDay:   lim.PerDay,
+			PerMonth: lim.PerMonth,
+		}
+	}
+
 	// Custom SMTP relay: returns delivery mode + active relay list for a user.
 	eng.UserSMTPProvider = func(username string) (mode string, relays []delivery.SMTPRelay) {
 		mode, _ = appdb.GetUserSMTPMode(username)

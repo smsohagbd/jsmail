@@ -41,6 +41,29 @@ type domainCooldownEntry struct {
 	streak int // number of consecutive 421s
 }
 
+// ThrottleLimit holds per-user per-domain send-rate limits.
+type ThrottleLimit struct {
+	PerSec   int
+	PerMin   int
+	PerHour  int
+	PerDay   int
+	PerMonth int
+}
+
+// throttleCounter tracks rolling send counts for one user+domain window.
+type throttleCounter struct {
+	secCount   int
+	minCount   int
+	hourCount  int
+	dayCount   int
+	monthCount int
+	secReset   time.Time
+	minReset   time.Time
+	hourReset  time.Time
+	dayReset   time.Time
+	monthReset time.Time
+}
+
 // IPEntry describes one outbound IP in the pool with optional rate limits.
 type IPEntry struct {
 	IP      string
@@ -91,6 +114,14 @@ type Engine struct {
 	// relays: active custom SMTP servers for the user (may be empty)
 	UserSMTPProvider func(username string) (mode string, relays []SMTPRelay)
 
+	// ThrottleProvider returns the effective send-rate limits for a user+domain pair.
+	// Return a zero ThrottleLimit to skip throttling.
+	ThrottleProvider func(username, domain string) ThrottleLimit
+
+	// throttle counters: key is "username|domain"
+	throttleMu       sync.Mutex
+	throttleCounters map[string]*throttleCounter
+
 	// Per-user relay rotation tracking (guarded by userRelayMu).
 	userRelayMu  sync.Mutex
 	userRelayIdx map[string]int
@@ -112,12 +143,13 @@ type Engine struct {
 // New creates a delivery Engine.
 func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 	e := &Engine{
-		cfg:          cfg,
-		queue:        q,
-		cooldowns:    make(map[string]*domainCooldownEntry),
-		sems:         make(map[string]chan struct{}),
-		ipCounters:   make(map[string]*ipCounter),
-		userRelayIdx: make(map[string]int),
+		cfg:              cfg,
+		queue:            q,
+		cooldowns:        make(map[string]*domainCooldownEntry),
+		sems:             make(map[string]chan struct{}),
+		ipCounters:       make(map[string]*ipCounter),
+		userRelayIdx:     make(map[string]int),
+		throttleCounters: make(map[string]*throttleCounter),
 	}
 
 	if d, err := time.ParseDuration(cfg.RetryInterval); err == nil {
@@ -160,7 +192,7 @@ func (e *Engine) worker(id int) {
 		case <-ticker.C:
 		}
 		for {
-			msg := e.queue.Pop()
+			msg := e.queue.PopFair() // round-robin across users, not pure FIFO
 			if msg == nil {
 				break
 			}
@@ -293,6 +325,27 @@ func (e *Engine) deliver(msg *queue.Message) {
 
 	for domain, rcpts := range byDomain {
 		log.Printf("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
+
+		// ── Per-user throttle check ───────────────────────────────────────────
+		if reason, retryAfter := e.checkThrottle(msg.Username, domain, true); reason != "" {
+			log.Printf("[DELIVERY] ⏳ %s", reason)
+			// Defer without consuming a retry slot — throttling is not a failure.
+			if retryAfter < 5*time.Second {
+				retryAfter = 5 * time.Second
+			}
+			e.queue.DeferNoIncrement(msg, retryAfter, reason)
+			if e.OnEvent != nil {
+				for _, rcpt := range rcpts {
+					e.OnEvent(DeliveryEvent{
+						MessageID: msg.ID, Username: msg.Username,
+						From: msg.From, To: rcpt, Status: "deferred",
+						Error: reason,
+					})
+				}
+			}
+			return // stop processing this message; it's been re-queued
+		}
+
 		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data)
 		if err != nil {
 			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
@@ -610,6 +663,75 @@ func (e *Engine) nextOutboundIP() string {
 
 	log.Printf("[DELIVERY] ⚠ all pool IPs are at their rate limits — using system default")
 	return ""
+}
+
+// checkThrottle checks whether the user is within rate limits for the given domain.
+// Returns ("", 0) if allowed, or (reason, retryAfter) if throttled.
+// Also increments counters when allowed (consume = true).
+func (e *Engine) checkThrottle(username, domain string, consume bool) (reason string, retryAfter time.Duration) {
+	if e.ThrottleProvider == nil || username == "" {
+		return "", 0
+	}
+	lim := e.ThrottleProvider(username, domain)
+	if lim.PerSec == 0 && lim.PerMin == 0 && lim.PerHour == 0 && lim.PerDay == 0 && lim.PerMonth == 0 {
+		return "", 0 // no limits configured
+	}
+
+	key := username + "|" + domain
+	e.throttleMu.Lock()
+	defer e.throttleMu.Unlock()
+
+	now := time.Now()
+	c, ok := e.throttleCounters[key]
+	if !ok {
+		c = &throttleCounter{
+			secReset:   now.Add(time.Second),
+			minReset:   now.Add(time.Minute),
+			hourReset:  now.Add(time.Hour),
+			dayReset:   now.Add(24 * time.Hour),
+			monthReset: now.Add(30 * 24 * time.Hour),
+		}
+		e.throttleCounters[key] = c
+	}
+
+	// Reset expired windows.
+	if now.After(c.secReset)   { c.secCount = 0;   c.secReset   = now.Add(time.Second)         }
+	if now.After(c.minReset)   { c.minCount = 0;   c.minReset   = now.Add(time.Minute)          }
+	if now.After(c.hourReset)  { c.hourCount = 0;  c.hourReset  = now.Add(time.Hour)            }
+	if now.After(c.dayReset)   { c.dayCount = 0;   c.dayReset   = now.Add(24 * time.Hour)       }
+	if now.After(c.monthReset) { c.monthCount = 0; c.monthReset = now.Add(30 * 24 * time.Hour)  }
+
+	// Check limits.
+	if lim.PerSec > 0 && c.secCount >= lim.PerSec {
+		return fmt.Sprintf("user %q throttled to %d/sec for domain %s", username, lim.PerSec, domain),
+			time.Until(c.secReset)
+	}
+	if lim.PerMin > 0 && c.minCount >= lim.PerMin {
+		return fmt.Sprintf("user %q throttled to %d/min for domain %s", username, lim.PerMin, domain),
+			time.Until(c.minReset)
+	}
+	if lim.PerHour > 0 && c.hourCount >= lim.PerHour {
+		return fmt.Sprintf("user %q throttled to %d/hr for domain %s", username, lim.PerHour, domain),
+			time.Until(c.hourReset)
+	}
+	if lim.PerDay > 0 && c.dayCount >= lim.PerDay {
+		return fmt.Sprintf("user %q throttled to %d/day for domain %s", username, lim.PerDay, domain),
+			time.Until(c.dayReset)
+	}
+	if lim.PerMonth > 0 && c.monthCount >= lim.PerMonth {
+		return fmt.Sprintf("user %q throttled to %d/month for domain %s", username, lim.PerMonth, domain),
+			time.Until(c.monthReset)
+	}
+
+	// Allowed — consume a slot.
+	if consume {
+		c.secCount++
+		c.minCount++
+		c.hourCount++
+		c.dayCount++
+		c.monthCount++
+	}
+	return "", 0
 }
 
 // pickRelay selects the next relay for a user using round-robin rotation.

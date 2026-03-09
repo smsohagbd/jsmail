@@ -40,10 +40,12 @@ type Message struct {
 
 // Queue is a file-based persistent message queue.
 type Queue struct {
-	dir      string
-	mu       sync.Mutex
-	inflight map[string]bool
-	ready    chan struct{}
+	dir          string
+	mu           sync.Mutex
+	inflight     map[string]bool
+	ready        chan struct{}
+	rrUsers      []string // round-robin user order
+	rrIdx        int      // next user index to serve
 }
 
 // New creates a Queue backed by the given directory.
@@ -131,6 +133,93 @@ func (q *Queue) Pop() *Message {
 // Ready returns a channel that receives a signal when messages may be ready.
 func (q *Queue) Ready() <-chan struct{} {
 	return q.ready
+}
+
+// PopFair returns the next message using round-robin user scheduling so that
+// no single user monopolises the workers when multiple users have queued mail.
+// Falls back to FIFO if all users have only one message or no username is set.
+func (q *Queue) PopFair() *Message {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return nil
+	}
+
+	now := time.Now()
+
+	// Collect all ready messages grouped by username.
+	type candidate struct {
+		msg      Message
+		filename string
+	}
+	byUser := make(map[string][]candidate)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		id := entry.Name()[:len(entry.Name())-5]
+		if q.inflight[id] {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+		if msg.Status == StatusPending ||
+			(msg.Status == StatusDeferred && now.After(msg.NextRetry)) {
+			user := msg.Username
+			if user == "" {
+				user = "__system__"
+			}
+			byUser[user] = append(byUser[user], candidate{msg: msg, filename: entry.Name()})
+		}
+	}
+
+	if len(byUser) == 0 {
+		return nil
+	}
+
+	// Build a deterministic sorted list of users present in the queue.
+	users := make([]string, 0, len(byUser))
+	for u := range byUser {
+		users = append(users, u)
+	}
+	// Sort for determinism.
+	for i := 1; i < len(users); i++ {
+		for j := i; j > 0 && users[j] < users[j-1]; j-- {
+			users[j], users[j-1] = users[j-1], users[j]
+		}
+	}
+
+	// Pick next user in round-robin order.
+	if q.rrIdx >= len(users) {
+		q.rrIdx = 0
+	}
+	picked := users[q.rrIdx]
+	q.rrIdx = (q.rrIdx + 1) % len(users)
+
+	// From that user's candidates pick the oldest (smallest CreatedAt).
+	cands := byUser[picked]
+	best := cands[0]
+	for _, c := range cands[1:] {
+		if c.msg.CreatedAt.Before(best.msg.CreatedAt) {
+			best = c
+		}
+	}
+
+	msg := best.msg
+	msg.Status = StatusInflight
+	if err := q.save(&msg); err != nil {
+		return nil
+	}
+	q.inflight[msg.ID] = true
+	return &msg
 }
 
 // Complete removes a successfully delivered message from the queue.

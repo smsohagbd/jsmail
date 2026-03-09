@@ -1,6 +1,6 @@
 smtp:
   listen_addr: ":1069"
-  domain: "server.arrowmarketingesp.com"
+  domain: "server.feddatabase.com"
   tls:
     enabled: false
     cert_file: "certs/cert.pem"
@@ -17,7 +17,7 @@ delivery:
   retry_interval: "5m"
   connect_timeout: "30s"
   send_timeout: "5m"
-  helo_name: "server.arrowmarketingesp.com"
+  helo_name: "server.feddatabase.com"
   dkim:
     enabled: false
     selector: "default"
