@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -370,6 +371,9 @@ func (e *Engine) deliver(msg *queue.Message) {
 	var lastErr error
 	// recipientMX tracks which MX host delivered each recipient.
 	recipientMX := make(map[string]string)
+	// hardBouncedRcpts tracks recipients that permanently failed (5xx).
+	// These must never receive a "delivered" event.
+	hardBouncedRcpts := make(map[string]bool)
 
 	for domain, rcpts := range byDomain {
 		log.Printf("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
@@ -377,7 +381,6 @@ func (e *Engine) deliver(msg *queue.Message) {
 		// ── Per-user throttle check ───────────────────────────────────────────
 		if reason, retryAfter := e.checkThrottle(msg.Username, domain, true); reason != "" {
 			log.Printf("[DELIVERY] ⏳ %s", reason)
-			// Defer without consuming a retry slot — throttling is not a failure.
 			if retryAfter < 5*time.Second {
 				retryAfter = 5 * time.Second
 			}
@@ -391,15 +394,52 @@ func (e *Engine) deliver(msg *queue.Message) {
 					})
 				}
 			}
-			return // stop processing this message; it's been re-queued
+			return
 		}
 
-		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data)
+		// onRcptBounce fires immediately when a single recipient gets a 5xx
+		// during the RCPT TO phase — before DATA is ever sent.
+		onRcptBounce := func(rcpt, reason string) {
+			hardBouncedRcpts[rcpt] = true
+			if e.OnEvent != nil {
+				e.OnEvent(DeliveryEvent{
+					MessageID: msg.ID, Username: msg.Username,
+					From: msg.From, To: rcpt, Status: "hard_bounce",
+					Error: reason,
+				})
+			}
+		}
+
+		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data, onRcptBounce)
 		if err != nil {
 			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
+
+			// IP pool exhausted — defer without burning a retry slot.
+			if isIPPoolLimited(err) {
+				var poolErr *ipPoolLimitedError
+				errors.As(err, &poolErr)
+				wait := poolErr.waitFor
+				log.Printf("[IPPOOL] ⏳ message %s queued — waiting %v for an IP slot", msg.ID, wait)
+				e.queue.DeferNoIncrement(msg, wait, err.Error())
+				if e.OnEvent != nil {
+					for _, rcpt := range rcpts {
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: rcpt, Status: "deferred",
+							Error: err.Error(),
+						})
+					}
+				}
+				return
+			}
+
 			if isPermanentSMTPError(err) {
-				// Hard bounce — emit event per recipient, do NOT set lastErr (skip retry)
-				log.Printf("[DELIVERY] ✗ hard bounce detected for domain %q", domain)
+				// Hard bounce — log event and remember these recipients so the
+				// final "delivered" sweep never fires for them.
+				log.Printf("[DELIVERY] ✗ hard bounce for domain %q", domain)
+				for _, rcpt := range rcpts {
+					hardBouncedRcpts[rcpt] = true
+				}
 				if e.OnEvent != nil {
 					for _, rcpt := range rcpts {
 						e.OnEvent(DeliveryEvent{
@@ -409,9 +449,9 @@ func (e *Engine) deliver(msg *queue.Message) {
 						})
 					}
 				}
+				// Do NOT set lastErr — hard bounces are terminal per-recipient
+				// and must not trigger global retries.
 			} else if isTempRateLimitError(err) || strings.Contains(err.Error(), "rate-limited") {
-				// 421 rate-limit — defer without counting as a failure attempt,
-				// so MaxRetries is not burned by throttling.
 				log.Printf("[DELIVERY] ⏳ domain %q is rate-limited — will defer (retries not consumed)", domain)
 				lastErr = err
 			} else {
@@ -425,10 +465,31 @@ func (e *Engine) deliver(msg *queue.Message) {
 	}
 
 	if lastErr == nil {
-		log.Printf("[DELIVERY] ✓ message %s DELIVERED SUCCESSFULLY", msg.ID)
+		// Count recipients that were actually delivered (not hard-bounced).
+		deliveredRcpts := 0
+		for _, to := range msg.To {
+			if !hardBouncedRcpts[to] {
+				deliveredRcpts++
+			}
+		}
+
+		if deliveredRcpts > 0 {
+			log.Printf("[DELIVERY] ✓ message %s DELIVERED SUCCESSFULLY (%d/%d recipients)",
+				msg.ID, deliveredRcpts, len(msg.To))
+		} else {
+			log.Printf("[DELIVERY] ✗ message %s — all %d recipient(s) hard-bounced, removing from queue",
+				msg.ID, len(msg.To))
+		}
+
+		// Remove from queue regardless — all recipients are definitively handled
+		// (delivered or hard-bounced).
 		e.queue.Complete(msg.ID)
+
 		if e.OnEvent != nil {
 			for _, to := range msg.To {
+				if hardBouncedRcpts[to] {
+					continue // hard_bounce event already emitted above
+				}
 				e.OnEvent(DeliveryEvent{
 					MessageID: msg.ID, Username: msg.Username,
 					From: msg.From, To: to, Status: "delivered",
@@ -574,7 +635,10 @@ func (e *Engine) releaseMXSlot(mxHost string) {
 }
 
 // deliverToDomain attempts delivery to a domain, returning the successful MX host on success.
-func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte) (string, error) {
+// onRcptBounce is called for each recipient that receives a permanent 5xx during RCPT TO.
+// Those recipients are skipped from DATA; the remaining valid recipients are delivered.
+func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte,
+	onRcptBounce func(rcpt, reason string)) (string, error) {
 	// Check per-domain 421 cooldown before doing anything.
 	if until := e.domainCooldownUntil(domain); !until.IsZero() && time.Now().Before(until) {
 		wait := time.Until(until).Round(time.Second)
@@ -603,7 +667,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 
 			// Respect per-MX connection limit.
 			e.acquireMXSlot(mx.Host)
-			mxErr := e.sendToMX(from, mx.Host, port, rcpts, data)
+			mxErr := e.sendToMX(from, mx.Host, port, rcpts, data, onRcptBounce)
 			e.releaseMXSlot(mx.Host)
 
 			if mxErr == nil {
@@ -616,6 +680,12 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 			// 5xx permanent failure (mailbox not found, user rejected, etc.) —
 			// all MX hosts will give the same answer, so stop immediately and
 			// return the 5xx error so the caller can hard-bounce.
+			// IP pool limited — all our outbound IPs are at capacity.
+			// Return immediately; no point trying other MX hosts.
+			if isIPPoolLimited(mxErr) {
+				return "", mxErr
+			}
+
 			if isPermanentSMTPError(mxErr) {
 				log.Printf("[DELIVERY] ✗ permanent 5xx from %s — stopping MX attempts for %q", mx.Host, domain)
 				return "", mxErr
@@ -641,18 +711,29 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 	return "", fmt.Errorf("all MX servers failed for %s: %w", domain, lastMXErr)
 }
 
-// nextOutboundIP selects the next available IP from the pool using round-robin,
-// skipping any IP that has hit its per-minute / per-hour / per-day send limit.
-// It pre-increments the counters as a "reservation"; call undoIPCount(ip) if the
-// connection ultimately fails so the slot is returned.
-// Returns "" to use the system default if the pool is empty or all IPs are limited.
-func (e *Engine) nextOutboundIP() string {
+// ipPoolLimitedError is returned when the IP pool is active but every IP has
+// reached its rate limit. The embedded waitFor is the shortest time until any
+// IP's counter window resets, so the message can be deferred precisely.
+type ipPoolLimitedError struct {
+	waitFor time.Duration
+}
+
+func (e *ipPoolLimitedError) Error() string {
+	return fmt.Sprintf("ip pool: all IPs rate-limited — retry in %v", e.waitFor)
+}
+
+// nextOutboundIP selects the next available IP from the pool using round-robin.
+// Returns:
+//   - (ip, nil)        — ip is selected; counters have been reserved (call undoIPCount if dial fails)
+//   - ("", nil)        — pool is disabled/empty; caller should use the system default IP
+//   - ("", limitedErr) — pool is active but ALL IPs are at their rate limits; caller must defer
+func (e *Engine) nextOutboundIP() (string, error) {
 	if e.IPPoolProvider == nil {
-		return ""
+		return "", nil
 	}
 	entries := e.IPPoolProvider()
 	if len(entries) == 0 {
-		return ""
+		return "", nil // pool disabled or empty → fall through to system default
 	}
 
 	e.ipMu.Lock()
@@ -721,11 +802,39 @@ func (e *Engine) nextOutboundIP() string {
 		c.hourCount++
 		c.dayCount++
 		e.ipIdx = (e.ipIdx + i + 1) % n
-		return entry.IP
+		return entry.IP, nil
 	}
 
-	log.Printf("[IPPOOL] ⚠ all pool IPs are at their rate limits — using system default")
-	return ""
+	// Pool is active but every IP is at its limit.
+	// Calculate the minimum wait until the earliest counter window resets.
+	minWait := 24 * time.Hour
+	for _, entry := range entries {
+		c, ok := e.ipCounters[entry.IP]
+		if !ok {
+			minWait = time.Minute
+			break
+		}
+		if entry.PerMin > 0 && c.minCount >= entry.PerMin {
+			if w := time.Until(c.minReset); w > 0 && w < minWait {
+				minWait = w
+			}
+		}
+		if entry.PerHour > 0 && c.hourCount >= entry.PerHour {
+			if w := time.Until(c.hourReset); w > 0 && w < minWait {
+				minWait = w
+			}
+		}
+		if entry.PerDay > 0 && c.dayCount >= entry.PerDay {
+			if w := time.Until(c.dayReset); w > 0 && w < minWait {
+				minWait = w
+			}
+		}
+	}
+	if minWait <= 0 {
+		minWait = time.Minute
+	}
+	log.Printf("[IPPOOL] ⏳ all pool IPs rate-limited — deferring message, retry in %v", minWait)
+	return "", &ipPoolLimitedError{waitFor: minWait}
 }
 
 // undoIPCount returns a previously reserved rate-limit slot for an IP.
@@ -920,15 +1029,20 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 	return nil
 }
 
-func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte) error {
+func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte,
+	onRcptBounce func(rcpt, reason string)) error {
 	addr := net.JoinHostPort(mxHost, port)
 	log.Printf("[DELIVERY]   connecting to %s …", addr)
 
 	var conn net.Conn
 	var err error
-	var usedIP string // the outbound IP that actually connected
 
-	if outIP := e.nextOutboundIP(); outIP != "" {
+	outIP, ipErr := e.nextOutboundIP()
+	if ipErr != nil {
+		// Pool is active but ALL IPs are rate-limited — signal the caller to defer.
+		return ipErr
+	}
+	if outIP != "" {
 		dialer := &net.Dialer{
 			Timeout:   e.connectTO,
 			LocalAddr: &net.TCPAddr{IP: net.ParseIP(outIP)},
@@ -936,20 +1050,18 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 		log.Printf("[IPPOOL]   selected outbound IP %s → %s", outIP, addr)
 		conn, err = dialer.Dial("tcp4", addr)
 		if err != nil {
-			// Binding to this pool IP failed (IP not assigned to interface, or OS error).
-			// Return the reservation so the counter stays accurate.
+			// Binding to this pool IP failed (not assigned to interface or OS error).
+			// Undo the reservation so the counter stays accurate, then fall back.
 			e.undoIPCount(outIP)
 			log.Printf("[IPPOOL] ✗ bind to %s FAILED: %v", outIP, err)
-			log.Printf("[IPPOOL]   ↳ This IP may not be assigned to a network interface on this server.")
+			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
 			conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
-		} else {
-			usedIP = outIP
 		}
 	} else {
+		// Pool is disabled/empty — use system default IP.
 		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
 	}
-	_ = usedIP // tracked for logging only
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -992,12 +1104,48 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 	}
 	log.Printf("[DELIVERY]   MAIL FROM <%s> → ok", from)
 
+	// ── RCPT TO — per-recipient handling ──────────────────────────────────
+	// A 5xx on RCPT TO is a permanent per-recipient rejection (mailbox not
+	// found, user suspended, etc.).  We call the bounce callback for that
+	// recipient and continue trying the remaining ones so a single bad
+	// address never blocks a valid one in the same batch.
+	// If ALL recipients are rejected we abort immediately; DATA is never sent.
+	var accepted []string
+	var lastRcptBounceErr error
 	for _, rcpt := range rcpts {
 		if err := client.Rcpt(rcpt); err != nil {
+			if isPermanentSMTPError(err) {
+				reason := fmt.Sprintf("RCPT TO <%s>: %v", rcpt, err)
+				log.Printf("[DELIVERY] ✗ RCPT TO <%s> → hard bounce (5xx) — aborting for this recipient: %v",
+					rcpt, err)
+				if onRcptBounce != nil {
+					onRcptBounce(rcpt, reason)
+				}
+				lastRcptBounceErr = fmt.Errorf("%s: %w", reason, err)
+				continue // skip to next recipient — do NOT abort the whole session yet
+			}
+			// Temporary RCPT error — abort and retry later.
+			log.Printf("[DELIVERY] ✗ RCPT TO <%s> → temp error (will retry): %v", rcpt, err)
+			client.Quit()
 			return fmt.Errorf("RCPT TO <%s>: %w", rcpt, err)
 		}
 		log.Printf("[DELIVERY]   RCPT TO <%s> → ok", rcpt)
+		accepted = append(accepted, rcpt)
 	}
+
+	if len(accepted) == 0 {
+		// Every recipient was permanently rejected — abort without sending DATA.
+		log.Printf("[DELIVERY] ✗ all %d recipient(s) hard-bounced during RCPT — session aborted, DATA not sent",
+			len(rcpts))
+		client.Quit()
+		// Return the last bounce error so isPermanentSMTPError fires in the caller.
+		return lastRcptBounceErr
+	}
+	if len(accepted) < len(rcpts) {
+		log.Printf("[DELIVERY]   %d/%d recipient(s) accepted for DATA (rest hard-bounced)",
+			len(accepted), len(rcpts))
+	}
+	// ── end RCPT TO ────────────────────────────────────────────────────────
 
 	w, err := client.Data()
 	if err != nil {
@@ -1008,9 +1156,10 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 		return fmt.Errorf("write body: %w", err)
 	}
 	if err := w.Close(); err != nil {
+		// A 5xx DATA close is also a permanent rejection.
 		return fmt.Errorf("DATA close: %w", err)
 	}
-	log.Printf("[DELIVERY]   DATA sent (%d bytes) → ok", n)
+	log.Printf("[DELIVERY]   DATA sent (%d bytes) to %d recipient(s) → ok", n, len(accepted))
 
 	if err := client.Quit(); err != nil {
 		log.Printf("[DELIVERY] ⚠ QUIT error (message was accepted): %v", err)
@@ -1183,6 +1332,13 @@ func (e *Engine) GetIPStats() map[string]IPCounterSnapshot {
 		}
 	}
 	return result
+}
+
+// isIPPoolLimited returns true when the error was caused by all pool IPs being
+// at their rate limit (the message should be deferred, not failed).
+func isIPPoolLimited(err error) bool {
+	var e *ipPoolLimitedError
+	return errors.As(err, &e)
 }
 
 // isPermanentSMTPError returns true if the error represents a 5xx permanent
