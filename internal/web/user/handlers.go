@@ -684,3 +684,36 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 		"ChartBounced":   string(bouncedJSON),
 	}))
 }
+
+// ─────────────────────── Suppression list (user) ─────────────────────────────
+
+func (h *Handler) SuppressionPage(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	list := appdb.GetSuppressionsByUser(claims.Username)
+	h.Tmpl.Render(w, "user/suppression", merge(h.base(claims.Username), map[string]interface{}{
+		"Page": "suppression",
+		"List": list,
+	}))
+}
+
+func (h *Handler) AddUserSuppression(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method == http.MethodPost {
+		email := strings.TrimSpace(r.FormValue("email"))
+		if email != "" {
+			appdb.AddSuppression(claims.Username, email, "manual", "user")
+		}
+	}
+	http.Redirect(w, r, "/user/suppression", http.StatusFound)
+}
+
+func (h *Handler) RemoveUserSuppression(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method == http.MethodPost {
+		id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+		if id > 0 {
+			appdb.RemoveSuppression(uint(id), claims.Username)
+		}
+	}
+	http.Redirect(w, r, "/user/suppression", http.StatusFound)
+}

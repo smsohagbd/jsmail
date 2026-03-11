@@ -125,6 +125,16 @@ func (ip *IPPool) WarmupDayLimit() int {
 	return limit
 }
 
+// Suppression records email addresses that have opted out of receiving mail
+// from a specific user's account. Checked at delivery time.
+type Suppression struct {
+	gorm.Model
+	Username string `gorm:"index;not null"` // the sending user's username
+	Email    string `gorm:"not null"`       // suppressed address (stored lowercase)
+	Reason   string                          // "unsubscribed" | "manual" | "bounce"
+	Source   string                          // "link" | "user" | "admin" | "api"
+}
+
 // Domain represents a verified sending domain with its DKIM keys and DNS records.
 type Domain struct {
 	gorm.Model

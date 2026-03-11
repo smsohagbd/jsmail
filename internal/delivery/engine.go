@@ -124,6 +124,16 @@ type Engine struct {
 	throttleMu       sync.Mutex
 	throttleCounters map[string]*throttleCounter
 
+	// SuppressionChecker returns true if the recipient has unsubscribed from this user's mail.
+	SuppressionChecker func(username, email string) bool
+
+	// UnsubBaseURL is the public base URL used to build List-Unsubscribe headers
+	// (e.g. "https://mail.example.com"). Empty = feature disabled.
+	UnsubBaseURL string
+
+	// UnsubTokenFn generates a user-level HMAC token given a username.
+	UnsubTokenFn func(username string) string
+
 	// Per-user relay rotation tracking (guarded by userRelayMu).
 	userRelayMu  sync.Mutex
 	userRelayIdx map[string]int
@@ -259,6 +269,43 @@ func (e *Engine) deliver(msg *queue.Message) {
 	log.Printf("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
 	data := injectMissingHeaders(msg.Data, e.cfg.HeloName)
+
+	// ── Unsubscribe header injection ───────────────────────────────────────
+	if e.UnsubBaseURL != "" && e.UnsubTokenFn != nil {
+		token := e.UnsubTokenFn(msg.Username)
+		unsubURL := e.UnsubBaseURL + "/unsub?t=" + token
+		data = injectUnsubHeaders(data, unsubURL)
+	}
+
+	// ── Suppression filter — skip opted-out recipients ─────────────────────
+	if e.SuppressionChecker != nil {
+		var active []string
+		for _, rcpt := range msg.To {
+			if e.SuppressionChecker(msg.Username, rcpt) {
+				log.Printf("[DELIVERY] ⏭ %s suppressed — skipping", rcpt)
+				if e.OnEvent != nil {
+					e.OnEvent(DeliveryEvent{
+						MessageID: msg.ID, Username: msg.Username,
+						From: msg.From, To: rcpt, Status: "suppressed",
+						Error: "address is on unsubscribe/suppression list",
+					})
+				}
+			} else {
+				active = append(active, rcpt)
+			}
+		}
+		if len(active) == 0 {
+			log.Printf("[DELIVERY] ✓ message %s: all %d recipient(s) suppressed — done", msg.ID, len(msg.To))
+			e.queue.Complete(msg.ID)
+			return
+		}
+		if len(active) < len(msg.To) {
+			// Replace msg with a filtered copy so remaining code uses active list.
+			filtered := *msg
+			filtered.To = active
+			msg = &filtered
+		}
+	}
 
 	// ── Custom SMTP relay routing ──────────────────────────────────────────
 	// If a UserSMTPProvider is registered, check whether this user's messages
@@ -1207,6 +1254,32 @@ func injectMissingHeaders(data []byte, domain string) []byte {
 		sep = "\n\n"
 	}
 	return []byte(inject.String() + headerStr + sep + string(body))
+}
+
+// injectUnsubHeaders prepends List-Unsubscribe and List-Unsubscribe-Post headers
+// if they are not already present. This makes the message compliant with Gmail/Yahoo
+// bulk sender requirements (Feb 2024).
+func injectUnsubHeaders(data []byte, unsubURL string) []byte {
+	header, body, found := bytes.Cut(data, []byte("\r\n\r\n"))
+	if !found {
+		header, body, found = bytes.Cut(data, []byte("\n\n"))
+		if !found {
+			return data
+		}
+	}
+	headerStr := string(header)
+	if containsHeader(headerStr, "List-Unsubscribe") {
+		return data // already present, respect sender's own header
+	}
+	inject := fmt.Sprintf(
+		"List-Unsubscribe: <%s>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n",
+		unsubURL,
+	)
+	sep := "\r\n\r\n"
+	if !found {
+		sep = "\n\n"
+	}
+	return []byte(inject + headerStr + sep + string(body))
 }
 
 func containsHeader(header, name string) bool {

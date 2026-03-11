@@ -1,10 +1,13 @@
 package db
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -47,6 +50,7 @@ func Init(path, adminUser, adminPass string) error {
 		&Domain{},
 		&IPPool{},
 		&UserSMTP{},
+		&Suppression{},
 	); err != nil {
 		return err
 	}
@@ -406,4 +410,109 @@ func CheckPassword(username, password string) (*User, bool) {
 		return nil, false
 	}
 	return &user, true
+}
+
+// ─────────────────────────── Unsubscribe / Suppression ───────────────────────
+
+// getUnsubSecret returns the HMAC secret for unsubscribe tokens, generating and
+// persisting one on first call.
+func getUnsubSecret() string {
+	s := GetSetting("unsub_secret", "")
+	if s != "" {
+		return s
+	}
+	b := make([]byte, 32)
+	rand.Read(b)
+	s = hex.EncodeToString(b)
+	SetSetting("unsub_secret", s)
+	return s
+}
+
+// GenerateUnsubToken creates a tamper-proof, URL-safe token that encodes username.
+// Format: base64url(username) + "." + base64url(HMAC-SHA256(username, secret))
+func GenerateUnsubToken(username string) string {
+	secret := getUnsubSecret()
+	payload := base64.RawURLEncoding.EncodeToString([]byte(username))
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(payload))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return payload + "." + sig
+}
+
+// ValidateUnsubToken validates the token and returns the username if valid.
+func ValidateUnsubToken(token string) (username string, ok bool) {
+	idx := strings.LastIndex(token, ".")
+	if idx < 0 {
+		return "", false
+	}
+	payload, sig := token[:idx], token[idx+1:]
+	secret := getUnsubSecret()
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(payload))
+	expectedSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(sig), []byte(expectedSig)) {
+		return "", false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return "", false
+	}
+	return string(decoded), true
+}
+
+// AddSuppression adds an email to a user's suppression list (idempotent).
+func AddSuppression(username, email, reason, source string) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return
+	}
+	var existing Suppression
+	if DB.Where("username = ? AND email = ?", username, email).First(&existing).Error != nil {
+		DB.Create(&Suppression{Username: username, Email: email, Reason: reason, Source: source})
+	}
+}
+
+// IsSuppressed returns true if the address is on the user's suppression list.
+func IsSuppressed(username, email string) bool {
+	var count int64
+	DB.Model(&Suppression{}).
+		Where("username = ? AND email = ?", username, strings.ToLower(strings.TrimSpace(email))).
+		Count(&count)
+	return count > 0
+}
+
+// GetSuppressionsByUser returns all suppression entries for a user, newest first.
+func GetSuppressionsByUser(username string) []Suppression {
+	var list []Suppression
+	DB.Where("username = ?", username).Order("created_at desc").Find(&list)
+	return list
+}
+
+// GetAllSuppressions returns all suppression entries across all users with pagination.
+func GetAllSuppressions(page, perPage int) ([]Suppression, int64) {
+	var list []Suppression
+	var total int64
+	DB.Model(&Suppression{}).Count(&total)
+	DB.Order("created_at desc").Offset((page - 1) * perPage).Limit(perPage).Find(&list)
+	return list, total
+}
+
+// RemoveSuppression deletes an entry by ID, restricted to the owning user.
+func RemoveSuppression(id uint, username string) {
+	DB.Where("id = ? AND username = ?", id, username).Delete(&Suppression{})
+}
+
+// RemoveSuppressionAdmin deletes any entry by ID (admin use).
+func RemoveSuppressionAdmin(id uint) {
+	DB.Delete(&Suppression{}, id)
+}
+
+// LogSuppressed updates an email log entry status to "suppressed".
+func LogSuppressed(msgID, recipient, reason string) {
+	DB.Model(&EmailLog{}).
+		Where("message_id = ? AND recipient = ?", msgID, recipient).
+		Updates(map[string]interface{}{
+			"status": "suppressed",
+			"error":  reason,
+		})
 }

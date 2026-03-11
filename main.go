@@ -57,8 +57,18 @@ func main() {
 			appdb.LogDeferred(evt.MessageID, evt.To, evt.Error)
 		case "hard_bounce":
 			appdb.LogHardBounce(evt.MessageID, evt.To, evt.Error)
+		case "suppressed":
+			appdb.LogSuppressed(evt.MessageID, evt.To, evt.Error)
 		}
 	}
+
+	// Suppression list: skip opted-out recipients at delivery time.
+	eng.SuppressionChecker = appdb.IsSuppressed
+
+	// Unsubscribe header injection: use the SMTP domain as the public base URL.
+	// Admins can override this via Settings → unsub_base_url.
+	eng.UnsubBaseURL = appdb.GetSetting("unsub_base_url", "https://"+cfg.SMTP.Domain)
+	eng.UnsubTokenFn = appdb.GenerateUnsubToken
 
 	// Per-domain DKIM: load key from DB based on the From: domain.
 	eng.DKIMKeyLoader = func(domain string) (privKeyPEM, selector string, ok bool) {

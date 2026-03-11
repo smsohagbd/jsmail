@@ -1,0 +1,106 @@
+{{define "title"}}Suppression List — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Suppression List</div>
+    <div class="page-sub">Addresses that have unsubscribed or been manually blocked — emails to these addresses are silently skipped</div>
+  </div>
+</div>
+
+<div class="page-body">
+
+  <!-- Add manually -->
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header" style="cursor:pointer;user-select:none;" onclick="togglePanel('add-panel','add-caret')">
+      <span class="card-title">+ Add Address Manually</span>
+      <svg id="add-caret" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="transition:transform .2s;flex-shrink:0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </div>
+    <div id="add-panel" style="display:none;padding:16px 20px;border-top:1px solid #27272a;">
+      <form method="POST" action="/user/suppression/add" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:220px;">
+          <label class="form-label">Email Address to Suppress</label>
+          <input class="form-input" type="email" name="email" required placeholder="bad@example.com" style="width:100%;box-sizing:border-box;"/>
+        </div>
+        <button type="submit" class="btn btn-primary">Add to List</button>
+      </form>
+      <p style="font-size:11px;color:#52525b;margin:10px 0 0;">Future emails to this address will be silently skipped (logged as "suppressed").</p>
+    </div>
+  </div>
+
+  <!-- List -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Suppressed Addresses ({{len .List}})</span>
+    </div>
+    {{if .List}}
+    <div style="overflow-x:auto;">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="padding-left:20px;">Email</th>
+            <th>Reason</th>
+            <th>Source</th>
+            <th>Added</th>
+            <th style="padding-right:20px;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .List}}
+          <tr>
+            <td style="padding-left:20px;font-weight:500;color:#e4e4e7;">{{.Email}}</td>
+            <td>
+              {{if eq .Reason "unsubscribed"}}
+                <span class="badge" style="background:#1c1501;color:#fbbf24;border:1px solid #451a01;">unsubscribed</span>
+              {{else if eq .Reason "manual"}}
+                <span class="badge" style="background:#18181b;color:#a1a1aa;border:1px solid #27272a;">manual</span>
+              {{else}}
+                <span class="badge" style="background:#18181b;color:#a1a1aa;border:1px solid #27272a;">{{.Reason}}</span>
+              {{end}}
+            </td>
+            <td style="font-size:12px;color:#71717a;">{{.Source}}</td>
+            <td style="font-size:12px;color:#52525b;white-space:nowrap;">{{.CreatedAt.Format "Jan 2, 2006"}}</td>
+            <td style="padding-right:20px;">
+              <form method="POST" action="/user/suppression/remove" style="display:inline;">
+                <input type="hidden" name="id" value="{{.ID}}"/>
+                <button type="submit" class="btn btn-ghost btn-sm" style="color:#f87171;"
+                  onclick="return confirm('Remove {{.Email}} from suppression list?')">Remove</button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="empty-state" style="padding:48px;">
+      <svg width="36" height="36" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+      <div style="margin-top:12px;font-weight:600;color:#e4e4e7;">No suppressed addresses</div>
+      <div style="font-size:12px;margin-top:4px;">When recipients click the unsubscribe link in your emails, they appear here.</div>
+    </div>
+    {{end}}
+  </div>
+
+  <div style="margin-top:16px;background:#18181b;border:1px solid #27272a;border-radius:8px;padding:14px 18px;font-size:12px;color:#71717a;line-height:1.6;">
+    <strong style="color:#a1a1aa;">How unsubscribes work:</strong>
+    Every email sent through this server automatically includes a
+    <code style="color:#818cf8;">List-Unsubscribe</code> header with a unique link.
+    When a recipient clicks it, they enter their address and it's added here.
+    Gmail and Yahoo also support one-click unsubscribe via this header automatically.
+    <br><br>
+    <strong style="color:#a1a1aa;">Removing an address:</strong>
+    Only remove an address if the person has explicitly re-opted-in to receive your emails.
+    Sending to someone who unsubscribed risks spam complaints.
+  </div>
+
+</div>
+
+<script>
+function togglePanel(id, caretId) {
+  const el = document.getElementById(id);
+  const caret = document.getElementById(caretId);
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'block';
+  if (caret) caret.style.transform = open ? '' : 'rotate(180deg)';
+}
+</script>
+{{end}}

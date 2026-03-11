@@ -30,6 +30,8 @@
         <option value="delivered" {{if eq (index .Query "status") "delivered"}}selected{{end}}>Delivered</option>
         <option value="failed" {{if eq (index .Query "status") "failed"}}selected{{end}}>Failed</option>
         <option value="deferred" {{if eq (index .Query "status") "deferred"}}selected{{end}}>Deferred</option>
+        <option value="hard_bounce" {{if eq (index .Query "status") "hard_bounce"}}selected{{end}}>Hard Bounce</option>
+        <option value="suppressed" {{if eq (index .Query "status") "suppressed"}}selected{{end}}>Suppressed</option>
       </select>
     </div>
     <div style="flex:1;min-width:180px;">

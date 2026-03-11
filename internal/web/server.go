@@ -94,6 +94,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/register", s.handleRegister)
+	mux.HandleFunc("/unsub", s.handleUnsub)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -162,6 +163,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/ssl/letsencrypt", webauth.RequireAdmin(ah.RequestLetsEncrypt))
 	mux.HandleFunc("/admin/blacklist", webauth.RequireAdmin(ah.BlacklistCheck))
 	mux.HandleFunc("/admin/blacklist/scan", webauth.RequireAdmin(ah.BlacklistScan))
+	mux.HandleFunc("/admin/suppression", webauth.RequireAdmin(ah.Suppression))
+	mux.HandleFunc("/admin/suppression/delete", webauth.RequireAdmin(ah.DeleteSuppression))
+	mux.HandleFunc("/admin/suppression/add", webauth.RequireAdmin(ah.AddSuppressionAdmin))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer}
@@ -184,6 +188,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/smtp/rotation", webauth.RequireUser(uh.ToggleSMTPRotation))
 	mux.HandleFunc("/user/smtp/test", webauth.RequireUser(uh.TestSMTP))
 	mux.HandleFunc("/user/smtp/bulk", webauth.RequireUser(uh.BulkAddSMTP))
+	mux.HandleFunc("/user/suppression", webauth.RequireUser(uh.SuppressionPage))
+	mux.HandleFunc("/user/suppression/add", webauth.RequireUser(uh.AddUserSuppression))
+	mux.HandleFunc("/user/suppression/remove", webauth.RequireUser(uh.RemoveUserSuppression))
 
 	log.Printf("web: UI server listening on %s", s.addr)
 	if err := http.ListenAndServe(s.addr, mux); err != nil {
@@ -226,6 +233,49 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	webauth.ClearCookie(w)
 	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+// handleUnsub is a public (no-auth) endpoint that processes unsubscribe requests.
+// GET  /unsub?t=TOKEN          → show confirmation form
+// POST /unsub  (t + email)     → add to suppression list, show success page
+func (s *Server) handleUnsub(w http.ResponseWriter, r *http.Request) {
+	token := r.FormValue("t")
+	if token == "" {
+		token = r.URL.Query().Get("t")
+	}
+	if token == "" {
+		s.renderer.Render(w, "unsub", map[string]interface{}{
+			"Error": "Invalid or missing unsubscribe link.",
+		})
+		return
+	}
+	username, ok := appdb.ValidateUnsubToken(token)
+	if !ok {
+		s.renderer.Render(w, "unsub", map[string]interface{}{
+			"Error": "This unsubscribe link is invalid or has expired.",
+		})
+		return
+	}
+	if r.Method == http.MethodPost {
+		email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+		if email == "" {
+			s.renderer.Render(w, "unsub", map[string]interface{}{
+				"Token": token, "Username": username,
+				"Error": "Please enter your email address.",
+			})
+			return
+		}
+		appdb.AddSuppression(username, email, "unsubscribed", "link")
+		s.renderer.Render(w, "unsub", map[string]interface{}{
+			"Success": true,
+			"Email":   email,
+		})
+		return
+	}
+	s.renderer.Render(w, "unsub", map[string]interface{}{
+		"Token":    token,
+		"Username": username,
+	})
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {

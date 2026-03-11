@@ -1272,6 +1272,54 @@ func (h *Handler) VerifyCert(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/ssl?ok=cert+and+key+match+✓", http.StatusFound)
 }
 
+// ─────────────────────────── Suppression (admin) ─────────────────────────────
+
+// Suppression shows all suppression entries across all users.
+func (h *Handler) Suppression(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	const perPage = 50
+	list, total := appdb.GetAllSuppressions(page, perPage)
+	h.Tmpl.Render(w, "admin/suppression", map[string]interface{}{
+		"Page":     "suppression",
+		"List":     list,
+		"Total":    total,
+		"PageNum":  page,
+		"PerPage":  perPage,
+		"HasPrev":  page > 1,
+		"HasNext":  int64(page*perPage) < total,
+	})
+}
+
+// DeleteSuppression removes a suppression entry (admin can remove any).
+func (h *Handler) DeleteSuppression(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/suppression", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	if id > 0 {
+		appdb.RemoveSuppressionAdmin(uint(id))
+	}
+	http.Redirect(w, r, "/admin/suppression", http.StatusFound)
+}
+
+// AddSuppressionAdmin allows admin to manually suppress an address for a user.
+func (h *Handler) AddSuppressionAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/suppression", http.StatusFound)
+		return
+	}
+	username := strings.TrimSpace(r.FormValue("username"))
+	email := strings.TrimSpace(r.FormValue("email"))
+	if username != "" && email != "" {
+		appdb.AddSuppression(username, email, "manual", "admin")
+	}
+	http.Redirect(w, r, "/admin/suppression", http.StatusFound)
+}
+
 // ─────────────────────────── Blacklist Checker ───────────────────────────────
 
 var ipDNSBLs = []struct{ Name, Zone string }{
