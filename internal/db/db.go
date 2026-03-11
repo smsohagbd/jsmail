@@ -158,7 +158,7 @@ func IsHardBounced(email string) bool {
 
 // RemoveFromBounceList removes an address from the suppression list.
 func RemoveFromBounceList(email string) {
-	DB.Where("email = ?", strings.ToLower(email)).Delete(&BounceList{})
+	DB.Unscoped().Where("email = ?", strings.ToLower(email)).Delete(&BounceList{})
 }
 
 // ──────────────────────────── Domains ────────────────────────────────────────
@@ -169,6 +169,9 @@ func CreateDomain(ownerUsername, name, selector string) (*Domain, error) {
 	if selector == "" {
 		selector = "sm"
 	}
+	// Permanently purge any soft-deleted record with the same name so the
+	// unique index doesn't block re-creation.
+	DB.Unscoped().Where("name = ?", name).Delete(&Domain{})
 
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -230,9 +233,11 @@ func GetDomainByID(id uint) (*Domain, bool) {
 	return &d, true
 }
 
-// DeleteDomain removes a domain record.
+// DeleteDomain permanently removes a domain record.
+// Hard-delete is required because the unique index on `name` would block
+// re-adding the same domain after a soft-delete.
 func DeleteDomain(id uint) {
-	DB.Delete(&Domain{}, id)
+	DB.Unscoped().Delete(&Domain{}, id)
 }
 
 // ──────────────────────────── IP Pool ────────────────────────────────────────
@@ -257,7 +262,7 @@ func SaveIPPoolEntry(e *IPPool) error {
 }
 
 func DeleteIPPoolEntry(id uint) {
-	DB.Delete(&IPPool{}, id)
+	DB.Unscoped().Delete(&IPPool{}, id)
 }
 
 // ──────────────────────────── Settings ───────────────────────────────────────
