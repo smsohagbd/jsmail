@@ -3,6 +3,7 @@ package db
 import (
 	"crypto/hmac"
 	"crypto/rand"
+	"errors"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -292,12 +293,18 @@ func GetSetting(key, def string) string {
 }
 
 // SetSetting upserts a setting. Returns error on DB failure.
+// Uses Unscoped so we find soft-deleted rows and update them instead of hitting "duplicate key".
 func SetSetting(key, value string) error {
 	var s Setting
-	if err := DB.Where("key = ?", key).First(&s).Error; err != nil {
-		return DB.Create(&Setting{Key: key, Value: value}).Error
+	err := DB.Unscoped().Where("key = ?", key).First(&s).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return DB.Create(&Setting{Key: key, Value: value}).Error
+		}
+		return err
 	}
-	return DB.Model(&s).Update("value", value).Error
+	// Found (including soft-deleted) — update value and restore if deleted
+	return DB.Unscoped().Model(&s).Updates(map[string]interface{}{"value": value, "deleted_at": nil}).Error
 }
 
 // ──────────────────────────── UserSMTP ───────────────────────────────────────
