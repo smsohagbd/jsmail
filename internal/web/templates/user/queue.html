@@ -5,7 +5,20 @@
   <div class="page-sub">Pending and deferred messages</div>
 </div>
 <div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+
 <div class="card">
+  {{if .Logs}}
+  <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+    <span class="card-title">Active Queue</span>
+    <form method="POST" action="/user/queue/delete-all" onsubmit="return confirm('Clear your entire queue?');" style="margin:0;">
+      <button type="submit" class="btn btn-danger" style="font-size:12px;">Delete all</button>
+    </form>
+  </div>
+  {{else}}
+  <div class="card-header"><span class="card-title">Active Queue</span></div>
+  {{end}}
   <div style="overflow-x:auto;">
     <table class="data-table">
       <thead><tr>

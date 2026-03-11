@@ -663,9 +663,16 @@ type AggregateStats struct {
 // GetAggregateStatsAdmin returns system-wide stats, preferring DailyStats when available.
 func GetAggregateStatsAdmin() AggregateStats {
 	var s AggregateStats
+	// Prefer admin-wide (username="") rows; fallback to SUM of all usernames
 	DB.Model(&DailyStats{}).Where("username = ?", "").
 		Select("COALESCE(SUM(sent),0) as sent, COALESCE(SUM(delivered),0) as delivered, COALESCE(SUM(failed),0) as failed, COALESCE(SUM(deferred),0) as deferred, COALESCE(SUM(hard_bounce),0) as hard_bounce, COALESCE(SUM(soft_bounce),0) as soft_bounce, COALESCE(SUM(suppressed),0) as suppressed").
 		Scan(&s)
+	if s.Sent == 0 && s.Delivered == 0 {
+		// Fallback: sum across all usernames (for when only per-user rows exist)
+		DB.Model(&DailyStats{}).
+			Select("COALESCE(SUM(sent),0) as sent, COALESCE(SUM(delivered),0) as delivered, COALESCE(SUM(failed),0) as failed, COALESCE(SUM(deferred),0) as deferred, COALESCE(SUM(hard_bounce),0) as hard_bounce, COALESCE(SUM(soft_bounce),0) as soft_bounce, COALESCE(SUM(suppressed),0) as suppressed").
+			Scan(&s)
+	}
 	if s.Sent == 0 && s.Delivered == 0 {
 		DB.Model(&EmailLog{}).Count(&s.Sent)
 		DB.Model(&EmailLog{}).Where("status = ?", "delivered").Count(&s.Delivered)
@@ -765,8 +772,15 @@ func GetDailyCountsAdmin(days int) (labels []string, delivered, bounced []int64)
 			delivered[days-1-i] = d.Delivered
 			bounced[days-1-i] = d.HardBounce
 		} else {
-			DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "delivered").Count(&delivered[days-1-i])
-			DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "hard_bounce").Count(&bounced[days-1-i])
+			// Fallback: sum across all usernames for this date
+			var sumD, sumB int64
+			DB.Raw("SELECT COALESCE(SUM(delivered),0), COALESCE(SUM(hard_bounce),0) FROM daily_stats WHERE stat_date = ? AND deleted_at IS NULL", dateStr).
+				Row().Scan(&sumD, &sumB)
+			delivered[days-1-i], bounced[days-1-i] = sumD, sumB
+			if delivered[days-1-i] == 0 && bounced[days-1-i] == 0 {
+				DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "delivered").Count(&delivered[days-1-i])
+				DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "hard_bounce").Count(&bounced[days-1-i])
+			}
 		}
 	}
 	return labels, delivered, bounced
@@ -846,7 +860,6 @@ func AggregateEmailLogToDailyStats() error {
 				Suppressed: r.Suppressed,
 			})
 		} else {
-			// Use the greater of existing (from incremental writes) or aggregated
 			DB.Model(&d).Updates(map[string]interface{}{
 				"sent":        maxInt64(d.Sent, r.Sent),
 				"delivered":   maxInt64(d.Delivered, r.Delivered),
@@ -855,6 +868,59 @@ func AggregateEmailLogToDailyStats() error {
 				"hard_bounce": maxInt64(d.HardBounce, r.HardBounce),
 				"soft_bounce": maxInt64(d.SoftBounce, r.SoftBounce),
 				"suppressed":  maxInt64(d.Suppressed, r.Suppressed),
+			})
+		}
+	}
+
+	// Create admin-wide rows (username="") by summing all users per date.
+	type adminRow struct {
+		StatDate   string
+		Sent       int64
+		Delivered  int64
+		Failed     int64
+		Deferred   int64
+		HardBounce int64
+		SoftBounce int64
+		Suppressed int64
+	}
+	var adminRows []adminRow
+	DB.Raw(`SELECT stat_date,
+		COALESCE(SUM(sent),0) as sent,
+		COALESCE(SUM(delivered),0) as delivered,
+		COALESCE(SUM(failed),0) as failed,
+		COALESCE(SUM(deferred),0) as deferred,
+		COALESCE(SUM(hard_bounce),0) as hard_bounce,
+		COALESCE(SUM(soft_bounce),0) as soft_bounce,
+		COALESCE(SUM(suppressed),0) as suppressed
+		FROM daily_stats WHERE deleted_at IS NULL
+		GROUP BY stat_date`).Scan(&adminRows)
+	for _, ar := range adminRows {
+		if ar.StatDate == "" {
+			continue
+		}
+		var d DailyStats
+		err := DB.Where("stat_date = ? AND username = ?", ar.StatDate, "").First(&d).Error
+		if err != nil {
+			DB.Create(&DailyStats{
+				StatDate:   ar.StatDate,
+				Username:   "",
+				Sent:       ar.Sent,
+				Delivered:  ar.Delivered,
+				Failed:     ar.Failed,
+				Deferred:   ar.Deferred,
+				HardBounce: ar.HardBounce,
+				SoftBounce: ar.SoftBounce,
+				Suppressed: ar.Suppressed,
+			})
+		} else {
+			DB.Model(&d).Updates(map[string]interface{}{
+				"sent":        ar.Sent,
+				"delivered":   ar.Delivered,
+				"failed":      ar.Failed,
+				"deferred":    ar.Deferred,
+				"hard_bounce": ar.HardBounce,
+				"soft_bounce": ar.SoftBounce,
+				"suppressed":  ar.Suppressed,
 			})
 		}
 	}

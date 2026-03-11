@@ -134,10 +134,22 @@ func (h *Handler) QueuePage(w http.ResponseWriter, r *http.Request) {
 		claims.Username, []string{"queued", "deferred"}).
 		Order("created_at desc").Limit(100).Find(&logs)
 
-	h.Tmpl.Render(w, "user/queue", merge(h.base(claims.Username), map[string]interface{}{
-		"Page": "queue",
-		"Logs": logs,
-	}))
+	data := map[string]interface{}{"Page": "queue", "Logs": logs}
+	if ok := r.URL.Query().Get("ok"); ok != "" {
+		data["FlashOK"] = ok
+	}
+	h.Tmpl.Render(w, "user/queue", merge(h.base(claims.Username), data))
+}
+
+func (h *Handler) DeleteQueueAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/queue", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	count := h.Queue.ClearByUser(claims.Username)
+	h.DB.Where("username = ? AND status IN ?", claims.Username, []string{"queued", "deferred"}).Delete(&appdb.EmailLog{})
+	http.Redirect(w, r, "/user/queue?ok="+url.QueryEscape(fmt.Sprintf("Cleared %d messages from your queue", count)), http.StatusFound)
 }
 
 func (h *Handler) DeleteQueueItem(w http.ResponseWriter, r *http.Request) {

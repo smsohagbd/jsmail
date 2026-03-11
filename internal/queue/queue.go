@@ -281,6 +281,92 @@ func (q *Queue) CancelByMessageID(msgID string) {
 	os.Remove(q.msgPath(msgID))
 }
 
+// ClearAll removes all messages from the queue (pending, deferred, failed).
+// Returns the number of messages removed.
+func (q *Queue) ClearAll() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.inflight = make(map[string]bool)
+	count := 0
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return 0
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		if err := os.Remove(filepath.Join(q.dir, entry.Name())); err == nil {
+			count++
+		}
+	}
+	failedDir := filepath.Join(q.dir, "failed")
+	if failedEntries, err := os.ReadDir(failedDir); err == nil {
+		for _, e := range failedEntries {
+			if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+				if err := os.Remove(filepath.Join(failedDir, e.Name())); err == nil {
+					count++
+				}
+			}
+		}
+	}
+	return count
+}
+
+// ClearByUser removes all messages for that username from the queue.
+// Returns the number of messages removed.
+func (q *Queue) ClearByUser(username string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	count := 0
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return 0
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		id := entry.Name()[:len(entry.Name())-5]
+		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+		if msg.Username == username {
+			delete(q.inflight, id)
+			if err := os.Remove(q.msgPath(id)); err == nil {
+				count++
+			}
+		}
+	}
+	failedDir := filepath.Join(q.dir, "failed")
+	if failedEntries, err := os.ReadDir(failedDir); err == nil {
+		for _, e := range failedEntries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(failedDir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var msg Message
+			if err := json.Unmarshal(data, &msg); err != nil {
+				continue
+			}
+			if msg.Username == username {
+				if err := os.Remove(filepath.Join(failedDir, e.Name())); err == nil {
+					count++
+				}
+			}
+		}
+	}
+	return count
+}
+
 // resetInflight resets any in-flight messages from a previous run to pending.
 func (q *Queue) resetInflight() {
 	entries, err := os.ReadDir(q.dir)

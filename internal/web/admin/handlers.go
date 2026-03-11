@@ -318,12 +318,16 @@ func (h *Handler) QueuePage(w http.ResponseWriter, r *http.Request) {
 	var logs []appdb.EmailLog
 	h.DB.Where("status IN ?", []string{"queued", "deferred"}).Order("created_at desc").Limit(100).Find(&logs)
 
-	h.Tmpl.Render(w, "admin/queue", map[string]interface{}{
+	data := map[string]interface{}{
 		"Page":       "queue",
 		"ActiveUser": claims.Username,
 		"QueueStats": qStats,
 		"Logs":       logs,
-	})
+	}
+	if ok := r.URL.Query().Get("ok"); ok != "" {
+		data["FlashOK"] = ok
+	}
+	h.Tmpl.Render(w, "admin/queue", data)
 }
 
 func (h *Handler) DeleteQueueItem(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +337,16 @@ func (h *Handler) DeleteQueueItem(w http.ResponseWriter, r *http.Request) {
 		h.DB.Where("message_id = ?", msgID).Delete(&appdb.EmailLog{})
 	}
 	http.Redirect(w, r, "/admin/queue", http.StatusFound)
+}
+
+func (h *Handler) DeleteQueueAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/queue", http.StatusFound)
+		return
+	}
+	count := h.Queue.ClearAll()
+	h.DB.Where("status IN ?", []string{"queued", "deferred"}).Delete(&appdb.EmailLog{})
+	http.Redirect(w, r, "/admin/queue?ok="+url.QueryEscape(fmt.Sprintf("Cleared %d messages from queue", count)), http.StatusFound)
 }
 
 // ──────────────────────────── Data Management ─────────────────────────────────
