@@ -230,7 +230,11 @@ function renderCFResults(domain, data) {
   document.getElementById('cf-result-title').textContent = '☁ Cloudflare — ' + domain;
   let html = '';
   if (data.error) {
-    html = '<div style="background:#1c0606;border:1px solid #450a0a;border-radius:8px;padding:14px;color:#f87171;font-size:13px;">✗ ' + esc(data.error) + '</div>';
+    html = '<div style="background:#1c0606;border:1px solid #450a0a;border-radius:8px;padding:14px;color:#f87171;font-size:13px;">';
+    html += '<div style="font-weight:600;margin-bottom:6px;">✗ ' + esc(data.error) + '</div>';
+    if (data.code) html += '<div style="font-size:11px;color:#fca5a5;margin-bottom:4px;">Code: ' + esc(data.code) + '</div>';
+    if (data.detail) html += '<div style="font-size:11px;color:#fca5a5;opacity:.9;">' + esc(data.detail) + '</div>';
+    html += '</div>';
   } else {
     const actionColor = {created:'#4ade80', updated:'#fbbf24', skipped:'#52525b', error:'#f87171'};
     const actionIcon  = {created:'✓', updated:'↑', skipped:'–', error:'✗'};

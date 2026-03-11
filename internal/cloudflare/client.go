@@ -5,11 +5,14 @@ package cloudflare
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const apiBase = "https://api.cloudflare.com/client/v4"
@@ -22,7 +25,10 @@ type Client struct {
 
 // New creates a new Client using the provided API token.
 func New(token string) *Client {
-	return &Client{token: token, http: &http.Client{}}
+	return &Client{
+		token: token,
+		http:  &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
 // ─────────────────────────────── raw types ───────────────────────────────────
@@ -58,6 +64,110 @@ type RecordResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// ─────────────────────────────── Error classification ────────────────────────
+
+// ErrCode describes why the Cloudflare request failed.
+const (
+	ErrCodeTimeout       = "TIMEOUT"
+	ErrCodeNoConnection  = "NO_CONNECTION"
+	ErrCodeDNS           = "DNS_FAILED"
+	ErrCodeTLS           = "TLS_ERROR"
+	ErrCodeAuth          = "AUTH_FAILED"
+	ErrCodeForbidden     = "FORBIDDEN"
+	ErrCodeRateLimit     = "RATE_LIMIT"
+	ErrCodeNotFound      = "NOT_FOUND"
+	ErrCodeCloudflare    = "CLOUDFLARE_API"
+	ErrCodeUnknown       = "UNKNOWN"
+)
+
+// ClassifiedError holds a user-friendly error code and message.
+type ClassifiedError struct {
+	Code    string
+	Message string
+	Detail  string
+}
+
+func (e *ClassifiedError) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("[%s] %s — %s", e.Code, e.Message, e.Detail)
+	}
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+}
+
+// classifyError turns raw errors into user-friendly codes and messages.
+func classifyError(err error) *ClassifiedError {
+	if err == nil {
+		return nil
+	}
+	detail := err.Error()
+
+	// Timeout
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return &ClassifiedError{
+			Code:    ErrCodeTimeout,
+			Message: "Connection to Cloudflare timed out (30s)",
+			Detail:  "Your server cannot reach api.cloudflare.com. Check firewall allows outbound HTTPS (port 443).",
+		}
+	}
+
+	// Connection refused, no route, etc.
+	if strings.Contains(detail, "connection refused") ||
+		strings.Contains(detail, "connection reset") ||
+		strings.Contains(detail, "no such host") ||
+		strings.Contains(detail, "network is unreachable") {
+		return &ClassifiedError{
+			Code:    ErrCodeNoConnection,
+			Message: "Cannot connect to Cloudflare API",
+			Detail:  detail + " — Check firewall/DNS. Server must reach api.cloudflare.com:443.",
+		}
+	}
+
+	// DNS
+	if strings.Contains(detail, "no such host") || strings.Contains(detail, "Temporary failure in name resolution") {
+		return &ClassifiedError{
+			Code:    ErrCodeDNS,
+			Message: "DNS lookup failed for api.cloudflare.com",
+			Detail:  "Server cannot resolve Cloudflare. Check /etc/resolv.conf or network DNS.",
+		}
+	}
+
+	// TLS
+	if strings.Contains(detail, "x509") || strings.Contains(detail, "tls:") || strings.Contains(detail, "certificate") {
+		return &ClassifiedError{
+			Code:    ErrCodeTLS,
+			Message: "TLS/SSL error connecting to Cloudflare",
+			Detail:  detail,
+		}
+	}
+
+	// Cloudflare API errors (from our do() - these come as "message (code N)")
+	if strings.Contains(detail, "Invalid request") || strings.Contains(detail, "code 6003") {
+		return &ClassifiedError{Code: ErrCodeAuth, Message: "Invalid API token", Detail: detail}
+	}
+	if strings.Contains(detail, "code 9103") || strings.Contains(detail, "Unknown X-Auth-Key") {
+		return &ClassifiedError{Code: ErrCodeAuth, Message: "Invalid or expired API token", Detail: detail}
+	}
+	if strings.Contains(detail, "code 9109") || strings.Contains(detail, "Missing X-Auth") {
+		return &ClassifiedError{Code: ErrCodeAuth, Message: "API token required", Detail: detail}
+	}
+	if strings.Contains(detail, "code 9100") || strings.Contains(detail, "Unknown X-Auth-Key") {
+		return &ClassifiedError{Code: ErrCodeAuth, Message: "Invalid API token", Detail: detail}
+	}
+	if strings.Contains(detail, "code 9101") {
+		return &ClassifiedError{Code: ErrCodeForbidden, Message: "Token lacks Zone:DNS:Edit permission", Detail: detail}
+	}
+	if strings.Contains(detail, "code 429") || strings.Contains(detail, "rate limit") {
+		return &ClassifiedError{Code: ErrCodeRateLimit, Message: "Cloudflare rate limit exceeded", Detail: "Wait a few minutes and try again."}
+	}
+	if strings.Contains(detail, "code 404") || strings.Contains(detail, "not found") {
+		return &ClassifiedError{Code: ErrCodeNotFound, Message: "Zone or record not found", Detail: detail}
+	}
+
+	// Generic
+	return &ClassifiedError{Code: ErrCodeUnknown, Message: "Cloudflare request failed", Detail: detail}
+}
+
 // ─────────────────────────────── HTTP helpers ─────────────────────────────────
 
 func (c *Client) do(method, path string, body interface{}) (*cfResp, error) {
@@ -71,26 +181,60 @@ func (c *Client) do(method, path string, body interface{}) (*cfResp, error) {
 	}
 	req, err := http.NewRequest(method, apiBase+path, bodyReader)
 	if err != nil {
-		return nil, err
+		return nil, classifyError(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http: %w", err)
+		if ce := classifyError(err); ce != nil {
+			return nil, ce
+		}
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
 	var cfr cfResp
-	if err := json.NewDecoder(resp.Body).Decode(&cfr); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+	if err := json.Unmarshal(bodyBytes, &cfr); err != nil {
+		return nil, &ClassifiedError{Code: ErrCodeUnknown, Message: "Invalid response from Cloudflare", Detail: err.Error()}
 	}
+
 	if !cfr.Success {
 		if len(cfr.Errors) > 0 {
-			return nil, fmt.Errorf("%s (code %d)", cfr.Errors[0].Message, cfr.Errors[0].Code)
+			e := cfr.Errors[0]
+			msg := e.Message
+			// Map common Cloudflare error codes
+			switch e.Code {
+			case 6003:
+				msg = "Invalid request — check API token"
+			case 9100, 9103:
+				msg = "Invalid or expired API token"
+			case 9101:
+				msg = "Token lacks Zone:DNS:Edit permission"
+			case 9109:
+				msg = "API token missing"
+			case 1049:
+				msg = "Rate limit exceeded — wait and retry"
+			}
+			return nil, &ClassifiedError{
+				Code:    ErrCodeCloudflare,
+				Message: msg,
+				Detail:  fmt.Sprintf("Cloudflare error %d: %s", e.Code, e.Message),
+			}
 		}
-		return nil, fmt.Errorf("cloudflare: unknown error")
+		// Non-2xx without JSON errors
+		if resp.StatusCode == 401 {
+			return nil, &ClassifiedError{Code: ErrCodeAuth, Message: "Unauthorized — invalid API token", Detail: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		}
+		if resp.StatusCode == 403 {
+			return nil, &ClassifiedError{Code: ErrCodeForbidden, Message: "Forbidden — token lacks permission", Detail: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		}
+		if resp.StatusCode == 429 {
+			return nil, &ClassifiedError{Code: ErrCodeRateLimit, Message: "Rate limit exceeded", Detail: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		}
+		return nil, &ClassifiedError{Code: ErrCodeCloudflare, Message: "Cloudflare API error", Detail: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))}
 	}
 	return &cfr, nil
 }

@@ -1319,8 +1319,18 @@ func (h *Handler) CloudflarePushDNS(w http.ResponseWriter, r *http.Request) {
 	client := cf.New(apiToken)
 	records, err := client.PushDNS(opts)
 	if err != nil {
-		b, _ := json.Marshal(map[string]string{"error": err.Error()})
-		w.Write(b)
+		ce, ok := err.(*cf.ClassifiedError)
+		if ok {
+			b, _ := json.Marshal(map[string]string{
+				"error":   ce.Message,
+				"code":    ce.Code,
+				"detail":  ce.Detail,
+			})
+			w.Write(b)
+		} else {
+			b, _ := json.Marshal(map[string]string{"error": err.Error(), "code": "UNKNOWN"})
+			w.Write(b)
+		}
 		return
 	}
 	b, _ := json.Marshal(map[string]interface{}{"records": records})
