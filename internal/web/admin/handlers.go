@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	cf "smtp-server/internal/cloudflare"
 	"crypto/elliptic"
+	"log"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -416,7 +417,11 @@ func (h *Handler) SaveCloudflareToken(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, _ := webauth.GetClaims(r)
 	token := strings.TrimSpace(r.FormValue("cf_token"))
-	appdb.SetCFToken(claims.Username, token)
+	if err := appdb.SetCFToken(claims.Username, token); err != nil {
+		log.Printf("cloudflare: failed to save token: %v", err)
+		http.Redirect(w, r, "/admin/settings?err=Failed+to+save+token", http.StatusFound)
+		return
+	}
 	if token == "" {
 		http.Redirect(w, r, "/admin/settings?ok=cloudflare+token+cleared", http.StatusFound)
 	} else {
@@ -646,10 +651,14 @@ func (h *Handler) IPPool(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ToggleIPPool(w http.ResponseWriter, r *http.Request) {
 	enabled := r.FormValue("enabled") == "on"
+	val := "false"
 	if enabled {
-		appdb.SetSetting("ip_pool_enabled", "true")
-	} else {
-		appdb.SetSetting("ip_pool_enabled", "false")
+		val = "true"
+	}
+	if err := appdb.SetSetting("ip_pool_enabled", val); err != nil {
+		log.Printf("ippool: failed to save setting: %v", err)
+		http.Redirect(w, r, "/admin/ippool?err=Failed+to+save", http.StatusFound)
+		return
 	}
 	http.Redirect(w, r, "/admin/ippool?ok=updated", http.StatusFound)
 }
@@ -1300,8 +1309,13 @@ func (h *Handler) VerifyCert(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CloudflareSetToken(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	token := strings.TrimSpace(r.FormValue("token"))
-	appdb.SetCFToken(claims.Username, token)
 	w.Header().Set("Content-Type", "application/json")
+	if err := appdb.SetCFToken(claims.Username, token); err != nil {
+		log.Printf("cloudflare: failed to save token: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":"Failed to save token","code":"DB_ERROR"}`)
+		return
+	}
 	fmt.Fprintf(w, `{"ok":true}`)
 }
 

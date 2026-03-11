@@ -291,14 +291,13 @@ func GetSetting(key, def string) string {
 	return s.Value
 }
 
-// SetSetting upserts a setting.
-func SetSetting(key, value string) {
+// SetSetting upserts a setting. Returns error on DB failure.
+func SetSetting(key, value string) error {
 	var s Setting
 	if err := DB.Where("key = ?", key).First(&s).Error; err != nil {
-		DB.Create(&Setting{Key: key, Value: value})
-	} else {
-		DB.Model(&s).Update("value", value)
+		return DB.Create(&Setting{Key: key, Value: value}).Error
 	}
+	return DB.Model(&s).Update("value", value).Error
 }
 
 // ──────────────────────────── UserSMTP ───────────────────────────────────────
@@ -452,7 +451,7 @@ func getUnsubSecret() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	s = hex.EncodeToString(b)
-	SetSetting("unsub_secret", s)
+	_ = SetSetting("unsub_secret", s)
 	return s
 }
 
@@ -548,8 +547,8 @@ func GetCFToken(username string) string {
 
 // SetCFToken persists a Cloudflare API token for a user.
 // Pass username = "__global" to set the platform-wide fallback token.
-func SetCFToken(username, token string) {
-	SetSetting("cf_token:"+username, token)
+func SetCFToken(username, token string) error {
+	return SetSetting("cf_token:"+username, token)
 }
 
 // ─────────────────────────── Suppression ────────────────────────────────────

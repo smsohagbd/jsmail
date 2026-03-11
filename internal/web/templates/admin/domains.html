@@ -232,11 +232,21 @@ function showCFLoading(name) {
 async function saveCFToken() {
   const token = document.getElementById('cf-token-input').value.trim();
   if (!token) { alert('Please enter an API token'); return; }
-  await fetch('/admin/domains/cloudflare/token', {
+  const res = await fetch('/admin/domains/cloudflare/token', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     body: 'token=' + encodeURIComponent(token)
   });
+  if (!res.ok) {
+    let msg = 'Failed to save token';
+    try {
+      const d = await res.json();
+      if (d.error) msg = d.error;
+    } catch (_) {}
+    renderCFResults(cfPendingDomainName || 'Domain', { error: msg, code: 'DB_ERROR', detail: 'Check server logs.' });
+    document.getElementById('cf-token-modal').style.display = 'none';
+    return;
+  }
   document.getElementById('cf-token-modal').style.display = 'none';
   cfPush();
 }

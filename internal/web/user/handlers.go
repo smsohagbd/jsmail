@@ -726,8 +726,12 @@ func (h *Handler) RemoveUserSuppression(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) CloudflareSetToken(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	token := strings.TrimSpace(r.FormValue("token"))
-	appdb.SetCFToken(claims.Username, token)
 	w.Header().Set("Content-Type", "application/json")
+	if err := appdb.SetCFToken(claims.Username, token); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":"Failed to save token","code":"DB_ERROR"}`)
+		return
+	}
 	fmt.Fprintf(w, `{"ok":true}`)
 }
 
