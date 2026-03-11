@@ -8,7 +8,7 @@ import (
 
 type User struct {
 	gorm.Model
-	Username      string `gorm:"uniqueIndex;not null"`
+	Username      string `gorm:"uniqueIndex;size:191;not null"`
 	Email         string
 	Password      string `gorm:"not null"`      // bcrypt hash
 	Role          string `gorm:"default:user"`  // admin | user
@@ -23,7 +23,7 @@ type User struct {
 // UserSMTP stores a user's custom outbound SMTP relay credentials.
 type UserSMTP struct {
 	gorm.Model
-	OwnerUsername string `gorm:"index;not null"`
+	OwnerUsername string `gorm:"index;size:191;not null"`
 	Label         string // friendly name, e.g. "SendGrid", "Mailgun"
 	Host          string `gorm:"not null"`
 	Port          int    `gorm:"default:587"`
@@ -71,7 +71,7 @@ type UpstreamSMTP struct {
 
 type Setting struct {
 	gorm.Model
-	Key   string `gorm:"uniqueIndex"`
+	Key   string `gorm:"uniqueIndex;size:191"`
 	Value string
 }
 
@@ -79,7 +79,7 @@ type Setting struct {
 // Addresses in this list are rejected at RCPT TO time.
 type BounceList struct {
 	gorm.Model
-	Email       string `gorm:"uniqueIndex;not null"`
+	Email       string `gorm:"uniqueIndex;size:191;not null"`
 	Reason      string
 	BounceCount int
 	LastSeenAt  time.Time
@@ -88,7 +88,7 @@ type BounceList struct {
 // IPPool holds outbound IP addresses with optional per-IP send rate limits.
 type IPPool struct {
 	gorm.Model
-	IP       string `gorm:"uniqueIndex;not null"`
+	IP       string `gorm:"uniqueIndex;size:45;not null"`
 	Hostname string // optional label / rDNS name
 	Active   bool   `gorm:"default:true"`
 	PerMin   int    `gorm:"default:0"` // 0 = unlimited
@@ -129,8 +129,8 @@ func (ip *IPPool) WarmupDayLimit() int {
 // from a specific user's account. Checked at delivery time.
 type Suppression struct {
 	gorm.Model
-	Username string `gorm:"index;not null"` // the sending user's username
-	Email    string `gorm:"not null"`       // suppressed address (stored lowercase)
+	Username string `gorm:"index;size:191;not null"` // the sending user's username
+	Email    string `gorm:"size:191;not null"`       // suppressed address (stored lowercase)
 	Reason   string                          // "unsubscribed" | "manual" | "bounce"
 	Source   string                          // "link" | "user" | "admin" | "api"
 }
@@ -138,8 +138,8 @@ type Suppression struct {
 // Domain represents a verified sending domain with its DKIM keys and DNS records.
 type Domain struct {
 	gorm.Model
-	OwnerUsername string `gorm:"index"`           // empty = global/admin domain
-	Name          string `gorm:"uniqueIndex;not null"` // e.g. "example.com"
+	OwnerUsername string `gorm:"index;size:191"`        // empty = global/admin domain
+	Name          string `gorm:"uniqueIndex;size:191;not null"` // e.g. "example.com"
 	DKIMSelector  string                          // e.g. "mail"
 	DKIMPrivKey   string `gorm:"type:text"`        // PEM PKCS1 RSA private key
 	DKIMPubKeyDNS string `gorm:"type:text"`        // "v=DKIM1; k=rsa; p=..." for DNS TXT
