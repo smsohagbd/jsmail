@@ -1,23 +1,23 @@
 smtp:
-  listen_addr: ":1069"
-  domain: "server.feddatabase.com"
+  listen_addr: ":1025"
+  domain: "mail.inboxdaily360.com"
   tls:
     enabled: false
     cert_file: "certs/cert.pem"
     key_file: "certs/key.pem"
   auth:
     users:
-      - username: "smsohag"
-        password: "sohag999"
+      - username: "smsohag1"
+        password: "SOhag999@#"
   max_message_size: 26214400  # 25 MB
 
 delivery:
-  workers: 5
-  max_retries: 5
+  workers: 50
+  max_retries: 1
   retry_interval: "5m"
   connect_timeout: "30s"
   send_timeout: "5m"
-  helo_name: "server.feddatabase.com"
+  helo_name: "mail.inboxdaily360.com"
   dkim:
     enabled: false
     selector: "default"
@@ -32,11 +32,11 @@ api:
   auth_token: "change-this-secret-token"
 
 admin:
-  username: "admin"
-  password: "admin123"      # change this!
+  username: "smsohag"
+  password: "SOhag999@#"      # change this!
 
 web:
-  listen_addr: ":8069"
+  listen_addr: ":5000"
   secret_key: "change-this-32-char-secret-key!!"
 
 # Database: sqlite (default) or mysql
