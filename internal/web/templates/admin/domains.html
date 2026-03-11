@@ -204,16 +204,22 @@ async function cfPush(btnOrId) {
       signal: ctrl.signal
     });
     clearTimeout(t);
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      renderCFResults(name, { error: 'Invalid response from server', code: 'PARSE_ERROR', detail: 'HTTP ' + res.status });
+      return;
+    }
     if (data.need_token) {
       document.getElementById('cf-result-modal').style.display = 'none';
       document.getElementById('cf-token-modal').style.display = 'flex';
       return;
     }
-    renderCFResults(domainName, data);
+    renderCFResults(name, data);
   } catch (e) {
     const msg = e.name === 'AbortError' ? 'Request timed out (35s)' : (e.message || String(e));
-    renderCFResults(domainName, { error: msg, code: 'TIMEOUT', detail: 'Server may be unable to reach api.cloudflare.com. Check firewall.' });
+    renderCFResults(name, { error: msg, code: 'TIMEOUT', detail: 'Server may be unable to reach api.cloudflare.com. Check firewall.' });
   }
 }
 

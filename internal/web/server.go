@@ -139,6 +139,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/throttle/save", webauth.RequireAdmin(ah.SaveThrottle))
 	mux.HandleFunc("/admin/throttle/delete", webauth.RequireAdmin(ah.DeleteThrottle))
 	mux.HandleFunc("/admin/settings", webauth.RequireAdmin(ah.Settings))
+	mux.HandleFunc("/admin/settings/cloudflare-token", webauth.RequireAdmin(ah.SaveCloudflareToken))
 	mux.HandleFunc("/admin/reports", webauth.RequireAdmin(ah.Reports))
 	mux.HandleFunc("/admin/bounces", webauth.RequireAdmin(ah.Bounces))
 	mux.HandleFunc("/admin/bounces/remove", webauth.RequireAdmin(ah.RemoveBounce))

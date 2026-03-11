@@ -396,11 +396,32 @@ func (h *Handler) DeleteThrottle(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Settings(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
+	cfToken := appdb.GetCFToken(claims.Username)
+	hasCFToken := cfToken != ""
 	h.Tmpl.Render(w, "admin/settings", map[string]interface{}{
 		"Page":       "settings",
 		"ActiveUser": claims.Username,
 		"Settings":   h.ConfigSnapshot,
+		"HasCFToken": hasCFToken,
+		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   r.URL.Query().Get("err"),
 	})
+}
+
+// SaveCloudflareToken saves the Cloudflare API token from the Settings page.
+func (h *Handler) SaveCloudflareToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/settings", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	token := strings.TrimSpace(r.FormValue("cf_token"))
+	appdb.SetCFToken(claims.Username, token)
+	if token == "" {
+		http.Redirect(w, r, "/admin/settings?ok=cloudflare+token+cleared", http.StatusFound)
+	} else {
+		http.Redirect(w, r, "/admin/settings?ok=cloudflare+token+saved", http.StatusFound)
+	}
 }
 
 // ──────────────────────────── Reports ────────────────────────────────────────

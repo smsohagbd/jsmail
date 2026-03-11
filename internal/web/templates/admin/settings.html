@@ -5,6 +5,10 @@
   <div class="page-sub">Server configuration — edit <code style="background:#111113;border:1px solid #27272a;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:12px;">config.yaml</code> and restart to apply</div>
 </div>
 <div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
 
   <div class="card">
@@ -38,6 +42,22 @@
     <div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid #18181b;"><span style="font-size:13px;color:#71717a;">Listen Address</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "web_listen"}}</code></div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 20px;"><span style="font-size:13px;color:#71717a;">Database</span><code style="font-size:12px;color:#e4e4e7;background:#09090b;padding:2px 8px;border-radius:4px;">{{index .Settings "db_path"}}</code></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">☁ Cloudflare API</span></div>
+    <div style="padding:16px 20px;">
+      <p style="font-size:12px;color:#71717a;margin:0 0 12px;">API token for one-click DNS push from Domains page. Needs Zone:DNS:Edit permission.</p>
+      <p style="font-size:12px;color:#a1a1aa;margin:0 0 12px;">{{if .HasCFToken}}<span style="color:#4ade80;">✓ Token saved</span>{{else}}<span style="color:#f87171;">Not set</span>{{end}}</p>
+      <form method="POST" action="/admin/settings/cloudflare-token" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:200px;">
+          <label class="form-label">API Token</label>
+          <input class="form-input" type="password" name="cf_token" placeholder="{{if .HasCFToken}}Enter new token to replace{{else}}Paste your Cloudflare API token{{end}}" style="font-family:monospace;font-size:12px;"/>
+        </div>
+        <button type="submit" class="btn btn-primary" style="background:#f97316;">Save</button>
+      </form>
+      <p style="font-size:11px;color:#52525b;margin:10px 0 0;"><a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" style="color:#818cf8;">Create token →</a> Leave empty to clear.</p>
     </div>
   </div>
 
