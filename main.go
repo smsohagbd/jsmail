@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -34,8 +35,9 @@ func main() {
 		}
 	}
 
-	// Initialize SQLite database and JWT auth.
-	if err := appdb.Init(cfg.Web.DBPath, cfg.Admin.Username, cfg.Admin.Password); err != nil {
+	// Initialize database (SQLite or MySQL) and JWT auth.
+	driver, dsn := dbDSN(cfg)
+	if err := appdb.Init(driver, dsn, cfg.Admin.Username, cfg.Admin.Password); err != nil {
 		log.Fatalf("main: DB init failed: %v", err)
 	}
 	webauth.Init(cfg.Web.SecretKey)
@@ -122,6 +124,7 @@ func main() {
 		for _, p := range pool {
 			entries = append(entries, delivery.IPEntry{
 				IP:           p.IP,
+				Hostname:     p.Hostname,
 				PerMin:       p.PerMin,
 				PerHour:      p.PerHour,
 				PerDay:       p.PerDay,
@@ -145,6 +148,10 @@ func main() {
 
 	// Start the web UI server.
 	v := verifier.New(verifier.Config{HeloName: cfg.Delivery.HeloName})
+	dbDisplay := cfg.Database.Path
+	if cfg.Database.Driver == "mysql" {
+		dbDisplay = fmt.Sprintf("mysql:%s:%d/%s", cfg.Database.Host, cfg.Database.Port, cfg.Database.Database)
+	}
 	cfgSnapshot := map[string]string{
 		"smtp_listen":     cfg.SMTP.ListenAddr,
 		"smtp_domain":     cfg.SMTP.Domain,
@@ -159,7 +166,7 @@ func main() {
 		"api_listen":      cfg.API.ListenAddr,
 		"api_token":       cfg.API.AuthToken,
 		"web_listen":      cfg.Web.ListenAddr,
-		"db_path":         cfg.Web.DBPath,
+		"db_path":         dbDisplay,
 	}
 	go web.NewServer(cfg.Web.ListenAddr, appdb.DB, q, eng, v, cfgSnapshot, *configPath).Start()
 
@@ -182,4 +189,16 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// dbDSN returns (driver, dsnOrPath) for appdb.Init.
+func dbDSN(cfg *config.Config) (string, string) {
+	if cfg.Database.Driver == "mysql" {
+		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local",
+			cfg.Database.User, cfg.Database.Password,
+			cfg.Database.Host, cfg.Database.Port,
+			cfg.Database.Database, cfg.Database.Charset)
+		return "mysql", dsn
+	}
+	return "sqlite", cfg.Database.Path
 }

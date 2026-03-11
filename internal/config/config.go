@@ -13,7 +13,20 @@ type Config struct {
 	API      APIConfig      `yaml:"api"`
 	Admin    AdminConfig    `yaml:"admin"`
 	Web      WebConfig      `yaml:"web"`
+	Database DatabaseConfig `yaml:"database"`
 	Logging  LoggingConfig  `yaml:"logging"`
+}
+
+// DatabaseConfig supports SQLite (default) or MySQL.
+type DatabaseConfig struct {
+	Driver   string `yaml:"driver"`   // "sqlite" or "mysql"
+	Path     string `yaml:"path"`     // SQLite: file path (e.g. smtp-server.db)
+	Host     string `yaml:"host"`     // MySQL: host
+	Port     int    `yaml:"port"`     // MySQL: port (default 3306)
+	User     string `yaml:"user"`     // MySQL: username
+	Password string `yaml:"password"`  // MySQL: password
+	Database string `yaml:"database"` // MySQL: database name
+	Charset  string `yaml:"charset"`  // MySQL: charset (default utf8mb4)
 }
 
 type AdminConfig struct {
@@ -153,5 +166,22 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Web.DBPath == "" {
 		cfg.Web.DBPath = "smtp-server.db"
+	}
+	if cfg.Database.Driver == "" {
+		cfg.Database.Driver = "sqlite"
+	}
+	if cfg.Database.Path == "" && cfg.Database.Driver == "sqlite" {
+		cfg.Database.Path = cfg.Web.DBPath
+	}
+	if cfg.Database.Driver == "mysql" {
+		if cfg.Database.Host == "" {
+			cfg.Database.Host = "localhost"
+		}
+		if cfg.Database.Port == 0 {
+			cfg.Database.Port = 3306
+		}
+		if cfg.Database.Charset == "" {
+			cfg.Database.Charset = "utf8mb4"
+		}
 	}
 }

@@ -66,9 +66,11 @@ type throttleCounter struct {
 }
 
 // IPEntry describes one outbound IP in the pool with optional rate limits.
+// Hostname should match the IP's rDNS/PTR record — used as HELO when sending from this IP.
 type IPEntry struct {
 	IP           string
-	PerMin       int // 0 = unlimited
+	Hostname     string // rDNS hostname for this IP; used as HELO (must match PTR)
+	PerMin       int    // 0 = unlimited
 	PerHour      int
 	PerDay       int
 	WarmupPerDay int // >0 when IP is in warmup phase; overrides PerDay
@@ -771,16 +773,16 @@ func (e *ipPoolLimitedError) Error() string {
 
 // nextOutboundIP selects the next available IP from the pool using round-robin.
 // Returns:
-//   - (ip, nil)        — ip is selected; counters have been reserved (call undoIPCount if dial fails)
-//   - ("", nil)        — pool is disabled/empty; caller should use the system default IP
-//   - ("", limitedErr) — pool is active but ALL IPs are at their rate limits; caller must defer
-func (e *Engine) nextOutboundIP() (string, error) {
+//   - (ip, hostname, nil) — ip selected; hostname is the IP's rDNS (for HELO); counters reserved
+//   - ("", "", nil)      — pool disabled/empty; use system default IP and global HELO
+//   - ("", "", limitedErr) — pool active but all IPs rate-limited; caller must defer
+func (e *Engine) nextOutboundIP() (ip, hostname string, err error) {
 	if e.IPPoolProvider == nil {
-		return "", nil
+		return "", "", nil
 	}
 	entries := e.IPPoolProvider()
 	if len(entries) == 0 {
-		return "", nil // pool disabled or empty → fall through to system default
+		return "", "", nil // pool disabled or empty → fall through to system default
 	}
 
 	e.ipMu.Lock()
@@ -849,7 +851,7 @@ func (e *Engine) nextOutboundIP() (string, error) {
 		c.hourCount++
 		c.dayCount++
 		e.ipIdx = (e.ipIdx + i + 1) % n
-		return entry.IP, nil
+		return entry.IP, entry.Hostname, nil
 	}
 
 	// Pool is active but every IP is at its limit.
@@ -881,7 +883,7 @@ func (e *Engine) nextOutboundIP() (string, error) {
 		minWait = time.Minute
 	}
 	log.Printf("[IPPOOL] ⏳ all pool IPs rate-limited — deferring message, retry in %v", minWait)
-	return "", &ipPoolLimitedError{waitFor: minWait}
+	return "", "", &ipPoolLimitedError{waitFor: minWait}
 }
 
 // undoIPCount returns a previously reserved rate-limit slot for an IP.
@@ -1084,11 +1086,12 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 	var conn net.Conn
 	var err error
 
-	outIP, ipErr := e.nextOutboundIP()
+	outIP, outHostname, ipErr := e.nextOutboundIP()
 	if ipErr != nil {
 		// Pool is active but ALL IPs are rate-limited — signal the caller to defer.
 		return ipErr
 	}
+	usedPoolIP := false
 	if outIP != "" {
 		dialer := &net.Dialer{
 			Timeout:   e.connectTO,
@@ -1104,6 +1107,8 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
 			conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
+		} else {
+			usedPoolIP = true
 		}
 	} else {
 		// Pool is disabled/empty — use system default IP.
@@ -1114,9 +1119,14 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 	}
 	log.Printf("[DELIVERY]   TCP connected to %s", addr)
 
+	// HELO must match rDNS/PTR for the outbound IP. If we used a pool IP with a hostname, use it.
 	heloName := e.cfg.HeloName
 	if heloName == "" {
 		heloName = "localhost"
+	}
+	if usedPoolIP && outHostname != "" {
+		heloName = outHostname
+		log.Printf("[IPPOOL]   HELO %s (matches rDNS for %s)", heloName, outIP)
 	}
 
 	client, err := smtp.NewClient(conn, mxHost)

@@ -38,7 +38,18 @@ admin:
 web:
   listen_addr: ":8069"
   secret_key: "change-this-32-char-secret-key!!"
-  db_path: "smtp-server.db"
+
+# Database: sqlite (default) or mysql
+database:
+  driver: "sqlite"
+  path: "smtp-server.db"
+  # MySQL (when driver: "mysql"):
+  # host: "localhost"
+  # port: 3306
+  # user: "smtp"
+  # password: "your-password"
+  # database: "smtp"
+  # charset: "utf8mb4"
 
 logging:
   level: "info"

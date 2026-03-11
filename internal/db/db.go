@@ -16,16 +16,27 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
 
-// Init opens the SQLite database, runs migrations, and seeds the admin user.
-func Init(path, adminUser, adminPass string) error {
+// Init opens the database (SQLite or MySQL), runs migrations, and seeds the admin user.
+// cfg must have Driver set ("sqlite" or "mysql") and the appropriate connection fields.
+func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 	var err error
-	DB, err = gorm.Open(sqlite.Open(path), &gorm.Config{
+	var dialector gorm.Dialector
+
+	switch driver {
+	case "mysql":
+		dialector = mysql.Open(dsnOrPath)
+	default:
+		dialector = sqlite.Open(dsnOrPath)
+	}
+
+	DB, err = gorm.Open(dialector, &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -34,7 +45,11 @@ func Init(path, adminUser, adminPass string) error {
 
 	// Drop email_logs if it has the old 'to' column (pre-rename migration).
 	var colExists int64
-	DB.Raw("SELECT COUNT(*) FROM pragma_table_info('email_logs') WHERE name='to'").Scan(&colExists)
+	if DB.Dialector.Name() == "sqlite" {
+		DB.Raw("SELECT COUNT(*) FROM pragma_table_info('email_logs') WHERE name='to'").Scan(&colExists)
+	} else {
+		DB.Raw("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?", "email_logs", "to").Scan(&colExists)
+	}
 	if colExists > 0 {
 		log.Printf("db: migrating email_logs table (renaming 'to' → 'recipient')")
 		DB.Exec("DROP TABLE IF EXISTS email_logs")
@@ -56,7 +71,7 @@ func Init(path, adminUser, adminPass string) error {
 	}
 
 	ensureAdmin(adminUser, adminPass)
-	log.Printf("db: SQLite opened at %s", path)
+	log.Printf("db: %s opened successfully", driver)
 	return nil
 }
 

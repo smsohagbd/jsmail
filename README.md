@@ -175,6 +175,34 @@ Each message file is plain JSON and human-readable.
 
 ---
 
+## Database (MySQL)
+
+By default the server uses SQLite (`smtp-server.db`). For production use MySQL:
+
+```yaml
+database:
+  driver: "mysql"
+  host: "localhost"
+  port: 3306
+  user: "smtp"
+  password: "your-password"
+  database: "smtp"
+  charset: "utf8mb4"
+```
+
+Create the database and user first:
+
+```sql
+CREATE DATABASE smtp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'smtp'@'%' IDENTIFIED BY 'your-password';
+GRANT ALL ON smtp.* TO 'smtp'@'%';
+FLUSH PRIVILEGES;
+```
+
+Tables are created automatically on first run. To migrate from SQLite, export the SQLite data and import into MySQL, or start fresh with a new MySQL database.
+
+---
+
 ## Configuration Reference
 
 ```yaml
@@ -210,4 +238,15 @@ queue:
 api:
   listen_addr: ":8080"
   auth_token: "change-this-secret-token"
+
+database:
+  driver: "sqlite"   # or "mysql"
+  path: "smtp-server.db"   # SQLite file path
+  # MySQL (when driver: "mysql"):
+  # host: "localhost"
+  # port: 3306
+  # user: "smtp"
+  # password: "secret"
+  # database: "smtp"
+  # charset: "utf8mb4"
 ```
