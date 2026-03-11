@@ -1,0 +1,13 @@
+# Config with secrets — use config.yaml.example as template
+config.yaml
+
+# SQLite database
+*.db
+
+# Build output
+smtp-server
+smtp-server.exe
+
+# Queue and temp files
+queue/
+*.log
