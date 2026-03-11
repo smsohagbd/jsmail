@@ -22,7 +22,7 @@
         <th style="padding-left:20px;">Domain</th>
         <th>DKIM Selector</th>
         <th>Added</th>
-        <th></th>
+        <th style="padding-right:12px;text-align:right;">Actions</th>
       </tr></thead>
       <tbody>
         {{range .Domains}}
@@ -30,11 +30,11 @@
           <td style="padding-left:20px;font-weight:600;">{{.Name}}</td>
           <td style="font-family:monospace;font-size:12px;color:#a78bfa;">{{.DKIMSelector}}._domainkey</td>
           <td style="font-size:12px;color:#71717a;">{{.CreatedAt.Format "Jan 2 2006"}}</td>
-          <td style="padding-right:12px;text-align:right;">
-            <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
-              onclick="showDNS('{{.Name}}','{{.DKIMSelector}}','{{.DKIMPubKeyDNS}}')">DNS Records</button>
+          <td style="padding-right:12px;text-align:right;white-space:nowrap;">
             <button class="btn btn-ghost" style="font-size:11px;color:#f97316;"
-              onclick="cfPush({{.ID}},'{{.Name}}')">☁ Cloudflare</button>
+              data-cf-id="{{.ID}}" data-cf-name="{{.Name}}" onclick="cfPush(this)">Cloudflare</button>
+            <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
+              data-dns-name="{{.Name}}" data-dns-sel="{{.DKIMSelector}}" data-dns-dkim="{{.DKIMPubKeyDNS}}" onclick="showDNS(this)">DNS Records</button>
             <form method="POST" action="/admin/domains/delete" style="display:inline;">
               <input type="hidden" name="id" value="{{.ID}}"/>
               <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#f87171;" onclick="return confirm('Delete domain {{.Name}}?')">Delete</button>
@@ -182,14 +182,22 @@ const heloName = "{{.HeloName}}";
 let cfPendingDomainId = null;
 let cfPendingDomainName = null;
 
-async function cfPush(domainId, domainName) {
-  cfPendingDomainId = domainId;
-  cfPendingDomainName = domainName;
-  showCFLoading(domainName);
+async function cfPush(btnOrId) {
+  let id, name;
+  if (btnOrId && typeof btnOrId.getAttribute === 'function') {
+    id = btnOrId.getAttribute('data-cf-id');
+    name = btnOrId.getAttribute('data-cf-name');
+    cfPendingDomainId = id;
+    cfPendingDomainName = name;
+  } else {
+    id = cfPendingDomainId;
+    name = cfPendingDomainName;
+  }
+  showCFLoading(name);
   const res = await fetch('/admin/domains/cloudflare', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: 'domain_id=' + domainId
+    body: 'domain_id=' + id
   });
   const data = await res.json();
   if (data.need_token) {
@@ -215,7 +223,7 @@ async function saveCFToken() {
     body: 'token=' + encodeURIComponent(token)
   });
   document.getElementById('cf-token-modal').style.display = 'none';
-  cfPush(cfPendingDomainId, cfPendingDomainName);
+  cfPush();
 }
 
 function renderCFResults(domain, data) {
@@ -251,14 +259,17 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function showDNS(domain, selector, dkimVal) {
+function showDNS(btn) {
+  const domain = btn.getAttribute('data-dns-name');
+  const selector = btn.getAttribute('data-dns-sel');
+  const dkimVal = btn.getAttribute('data-dns-dkim');
   document.getElementById('dns-domain-title').textContent = 'DNS Records — ' + domain;
   document.getElementById('dns-mx-host').textContent = domain;
   document.getElementById('dns-mx-val').textContent = heloName || 'mail.example.com';
   document.getElementById('dns-spf-host').textContent = domain;
   document.getElementById('dns-spf-val').textContent = 'v=spf1 ip4:' + serverIP + ' ~all';
   document.getElementById('dns-dkim-host').textContent = selector + '._domainkey.' + domain;
-  document.getElementById('dns-dkim-val').textContent = dkimVal;
+  document.getElementById('dns-dkim-val').textContent = dkimVal || '';
   document.getElementById('dns-dmarc-host').textContent = '_dmarc.' + domain;
   document.getElementById('dns-dmarc-val').textContent = 'v=DMARC1; p=quarantine; rua=mailto:dmarc@' + domain + '; ruf=mailto:dmarc@' + domain + '; fo=1';
   document.getElementById('dns-box').style.display = 'block';
