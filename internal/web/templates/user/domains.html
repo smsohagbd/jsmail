@@ -163,18 +163,27 @@ async function cfPush(btnOrId) {
     name = cfPendingDomainName;
   }
   showCFLoading(name);
-  const res = await fetch('/user/domains/cloudflare', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: 'domain_id=' + id
-  });
-  const data = await res.json();
-  if (data.need_token) {
-    document.getElementById('cf-result-modal').style.display = 'none';
-    document.getElementById('cf-token-modal').style.display = 'flex';
-    return;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 35000);
+    const res = await fetch('/user/domains/cloudflare', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'domain_id=' + id,
+      signal: ctrl.signal
+    });
+    clearTimeout(t);
+    const data = await res.json();
+    if (data.need_token) {
+      document.getElementById('cf-result-modal').style.display = 'none';
+      document.getElementById('cf-token-modal').style.display = 'flex';
+      return;
+    }
+    renderCFResults(domainName, data);
+  } catch (e) {
+    const msg = e.name === 'AbortError' ? 'Request timed out (35s)' : (e.message || String(e));
+    renderCFResults(domainName, { error: msg, code: 'TIMEOUT', detail: 'Server may be unable to reach api.cloudflare.com. Check firewall.' });
   }
-  renderCFResults(domainName, data);
 }
 
 function showCFLoading(name) {
