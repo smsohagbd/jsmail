@@ -368,6 +368,13 @@ func ToggleUserSMTP(id uint, username string) {
 	DB.Model(&entry).Update("active", !entry.Active)
 }
 
+// UpdateUserSMTPFromAddress updates the FromAddress for an SMTP entry.
+func UpdateUserSMTPFromAddress(id uint, username, fromAddress string) error {
+	return DB.Model(&UserSMTP{}).
+		Where("id = ? AND owner_username = ?", id, username).
+		Update("from_address", strings.TrimSpace(fromAddress)).Error
+}
+
 // GetUserSMTPMode returns a user's SMTP delivery mode and rotation preference.
 func GetUserSMTPMode(username string) (mode string, rotation bool) {
 	var u User

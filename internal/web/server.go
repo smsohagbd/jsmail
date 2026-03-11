@@ -190,6 +190,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/smtp/delete", webauth.RequireUser(uh.DeleteSMTP))
 	mux.HandleFunc("/user/smtp/default", webauth.RequireUser(uh.SetDefaultSMTP))
 	mux.HandleFunc("/user/smtp/toggle", webauth.RequireUser(uh.ToggleSMTP))
+	mux.HandleFunc("/user/smtp/update", webauth.RequireUser(uh.UpdateSMTP))
 	mux.HandleFunc("/user/smtp/rotation", webauth.RequireUser(uh.ToggleSMTPRotation))
 	mux.HandleFunc("/user/smtp/test", webauth.RequireUser(uh.TestSMTP))
 	mux.HandleFunc("/user/smtp/bulk", webauth.RequireUser(uh.BulkAddSMTP))

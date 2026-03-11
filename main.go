@@ -102,13 +102,14 @@ func main() {
 		out := make([]delivery.SMTPRelay, 0, len(dbRelays))
 		for _, r := range dbRelays {
 			out = append(out, delivery.SMTPRelay{
-				ID:       r.ID,
-				Label:    r.Label,
-				Host:     r.Host,
-				Port:     r.Port,
-				Username: r.Username,
-				Password: r.Password,
-				UseTLS:   r.UseTLS,
+				ID:          r.ID,
+				Label:       r.Label,
+				Host:        r.Host,
+				Port:        r.Port,
+				Username:    r.Username,
+				Password:    r.Password,
+				UseTLS:      r.UseTLS,
+				FromAddress: r.FromAddress,
 			})
 		}
 		return mode, out

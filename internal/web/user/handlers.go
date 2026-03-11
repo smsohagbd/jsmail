@@ -376,6 +376,7 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.FormValue("smtp_user"))
 	password := r.FormValue("smtp_pass")
 	label := strings.TrimSpace(r.FormValue("label"))
+	fromAddress := strings.TrimSpace(r.FormValue("from_address"))
 	useTLS := r.FormValue("use_tls") == "on"
 	port, _ := strconv.Atoi(portStr)
 	if port == 0 {
@@ -398,6 +399,7 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 		Port:          port,
 		Username:      username,
 		Password:      password,
+		FromAddress:   fromAddress,
 		UseTLS:        useTLS,
 		Active:        true,
 	}
@@ -441,6 +443,21 @@ func (h *Handler) ToggleSMTP(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/user/smtp?ok=SMTP+status+toggled", http.StatusFound)
 }
 
+func (h *Handler) UpdateSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/smtp", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	fromAddress := strings.TrimSpace(r.FormValue("from_address"))
+	if err := appdb.UpdateUserSMTPFromAddress(uint(id), claims.Username, fromAddress); err != nil {
+		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("update failed: "+err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/smtp?ok=From+address+updated", http.StatusFound)
+}
+
 func (h *Handler) ToggleSMTPRotation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/user/smtp", http.StatusFound)
@@ -481,8 +498,8 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// Parse: host:port:user:pass:tls  (port and tls optional)
-		parts := strings.SplitN(line, ":", 5)
+		// Parse: host:port:user:pass:tls[:from@domain.com]  (port, tls, from optional)
+		parts := strings.SplitN(line, ":", 6)
 		if len(parts) < 3 {
 			errs = append(errs, "bad format (need host:port:user:pass:tls): "+line)
 			skipped++
@@ -528,6 +545,10 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		fromAddr := ""
+		if len(parts) > 5 {
+			fromAddr = strings.TrimSpace(parts[5])
+		}
 		entry := &appdb.UserSMTP{
 			OwnerUsername: claims.Username,
 			Label:         host,
@@ -535,6 +556,7 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 			Port:          port,
 			Username:      smtpUser,
 			Password:      smtpPass,
+			FromAddress:   fromAddr,
 			UseTLS:        useTLS,
 			Active:        true,
 		}

@@ -78,13 +78,14 @@ type IPEntry struct {
 
 // SMTPRelay describes a custom outbound SMTP relay server.
 type SMTPRelay struct {
-	ID       uint
-	Label    string
-	Host     string
-	Port     int
-	Username string
-	Password string
-	UseTLS   bool
+	ID          uint
+	Label       string
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	UseTLS      bool
+	FromAddress string // override From when sending via this relay (required for rotation)
 }
 
 // ipCounter tracks rolling send counts for one outbound IP.
@@ -318,7 +319,13 @@ func (e *Engine) deliver(msg *queue.Message) {
 			relay := e.pickRelay(msg.Username, mode, relays)
 			if relay != nil {
 				log.Printf("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
-				if err := e.deliverViaRelay(*relay, msg.From, msg.To, data); err != nil {
+				fromAddr := msg.From
+				relayData := data
+				if relay.FromAddress != "" {
+					fromAddr = relay.FromAddress
+					relayData = rewriteFromHeader(data, fromAddr)
+				}
+				if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData); err != nil {
 					log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
 					if isPermanentSMTPError(err) {
 						if e.OnEvent != nil {
@@ -1296,6 +1303,54 @@ func containsHeader(header, name string) bool {
 	lower := strings.ToLower(header)
 	return strings.Contains(lower, "\n"+strings.ToLower(name)+":") ||
 		strings.HasPrefix(lower, strings.ToLower(name)+":")
+}
+
+// rewriteFromHeader replaces the From header in raw RFC 5322 data with the given address.
+// Used when sending via custom relay with FromAddress override.
+func rewriteFromHeader(data []byte, fromAddr string) []byte {
+	header, body, found := bytes.Cut(data, []byte("\r\n\r\n"))
+	if !found {
+		header, body, found = bytes.Cut(data, []byte("\n\n"))
+		if !found {
+			return data
+		}
+	}
+	sep := "\r\n\r\n"
+	if !bytes.Contains(data, []byte("\r\n\r\n")) {
+		sep = "\n\n"
+	}
+	fromLine := "From: <" + fromAddr + ">"
+	if strings.Contains(fromAddr, "<") {
+		fromLine = "From: " + fromAddr
+	}
+	lines := strings.Split(strings.ReplaceAll(string(header), "\r\n", "\n"), "\n")
+	var out []string
+	skipUntilNextHeader := false
+	replaced := false
+	for _, line := range lines {
+		if line == "" {
+			out = append(out, line)
+			break
+		}
+		if skipUntilNextHeader {
+			if line[0] == ' ' || line[0] == '\t' {
+				continue // skip folded continuation
+			}
+			skipUntilNextHeader = false
+		}
+		lower := strings.ToLower(strings.TrimSpace(line))
+		if strings.HasPrefix(lower, "from:") {
+			out = append(out, fromLine)
+			skipUntilNextHeader = true
+			replaced = true
+			continue
+		}
+		out = append(out, line)
+	}
+	if !replaced {
+		out = append([]string{fromLine}, out...)
+	}
+	return []byte(strings.ReplaceAll(strings.Join(out, "\n"), "\n", "\r\n") + sep + string(body))
 }
 
 // ---- DKIM helpers ----

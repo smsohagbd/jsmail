@@ -32,6 +32,7 @@ type UserSMTP struct {
 	UseTLS        bool   `gorm:"default:true"`  // try STARTTLS
 	IsDefault     bool   `gorm:"default:false"` // preferred relay when rotation is off
 	Active        bool   `gorm:"default:true"`
+	FromAddress   string `gorm:"size:191"` // override From when using this relay (rotation: use per-relay; no rotation: use default's)
 }
 
 type EmailLog struct {

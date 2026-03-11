@@ -82,6 +82,7 @@
         <th style="padding-left:20px;">Label</th>
         <th>Host / Port</th>
         <th>Username</th>
+        <th>From Address</th>
         <th>TLS</th>
         <th>Status</th>
         <th style="padding-right:20px;text-align:right;">Actions</th>
@@ -99,6 +100,13 @@
           </td>
           <td style="font-family:monospace;font-size:12px;color:#a1a1aa;">{{.Host}}:{{.Port}}</td>
           <td style="font-size:12px;color:#71717a;">{{.Username}}</td>
+          <td style="font-size:12px;">
+            <form method="POST" action="/user/smtp/update" style="display:inline;">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <input type="text" name="from_address" value="{{.FromAddress}}" placeholder="sender@domain.com" style="width:160px;padding:4px 8px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
+              <button type="submit" class="btn btn-ghost" style="font-size:10px;padding:2px 8px;">Save</button>
+            </form>
+          </td>
           <td>
             {{if .UseTLS}}
             <span style="color:#4ade80;font-size:11px;">STARTTLS</span>
@@ -154,11 +162,11 @@
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
       <div style="font-size:11px;color:#818cf8;font-weight:600;margin-bottom:4px;">Rotation OFF</div>
-      <div style="font-size:12px;color:#71717a;">All mail goes through the DEFAULT server (marked with purple badge)</div>
+      <div style="font-size:12px;color:#71717a;">All mail goes through the DEFAULT server. Use its From Address (or message's From).</div>
     </div>
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
       <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:4px;">Rotation ON</div>
-      <div style="font-size:12px;color:#71717a;">Each message is sent through the next server in round-robin order across all <em>active</em> servers</div>
+      <div style="font-size:12px;color:#71717a;">Each message uses the next server in round-robin. Set <strong>From Address</strong> on each server so the correct sender is used.</div>
     </div>
     {{if eq .SMTPMode "system_and_custom"}}
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
@@ -257,6 +265,11 @@
             <input class="form-input" type="password" name="smtp_pass" id="f-pass" placeholder="••••••••" required/>
           </div>
         </div>
+        <div class="form-group" style="margin-bottom:14px;">
+          <label class="form-label">From Address <span style="color:#52525b;font-weight:400;">(optional)</span></label>
+          <input class="form-input" name="from_address" id="f-from" placeholder="sender@yourdomain.com"/>
+          <div style="font-size:11px;color:#52525b;margin-top:4px;">Rotation ON: use this address when sending via this server. Rotation OFF: default server's From is used.</div>
+        </div>
         <div style="margin-bottom:14px;">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
             <input type="checkbox" name="use_tls" id="f-tls" checked style="width:14px;height:14px;accent-color:#818cf8;"/>
@@ -279,14 +292,14 @@
     <div id="pane-bulk" style="padding:20px 24px 24px;display:none;">
       <div style="font-size:13px;font-weight:700;color:#e4e4e7;margin-bottom:4px;">Bulk Import SMTP Servers</div>
       <div style="font-size:12px;color:#52525b;margin-bottom:14px;">One server per line. Format:
-        <code style="background:#09090b;padding:2px 6px;border-radius:4px;color:#a78bfa;">host:port:user:pass:tls</code>
-        — TLS is <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">1</code> or <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">0</code>
+        <code style="background:#09090b;padding:2px 6px;border-radius:4px;color:#a78bfa;">host:port:user:pass:tls[:from@domain.com]</code>
+        — TLS is <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">1</code> or <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">0</code>. From address optional.
       </div>
 
       <!-- Examples -->
       <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:10px 14px;font-family:monospace;font-size:11px;color:#52525b;margin-bottom:14px;line-height:1.8;">
-        smtp.gmail.com:587:user@gmail.com:app-password:1<br>
-        smtp.sendgrid.net:587:apikey:SG.xxxx:1<br>
+        smtp.gmail.com:587:user@gmail.com:app-password:1:user@gmail.com<br>
+        smtp.sendgrid.net:587:apikey:SG.xxxx:1:sender@yourdomain.com<br>
         smtp.mailgun.org:587:postmaster@mg.example.com:key-xxx:1<br>
         smtp.office365.com:587:user@company.com:password:1
       </div>
