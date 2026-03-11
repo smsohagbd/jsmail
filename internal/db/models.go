@@ -71,8 +71,8 @@ type UpstreamSMTP struct {
 
 type Setting struct {
 	gorm.Model
-	Key   string `gorm:"uniqueIndex;size:191"`
-	Value string `gorm:"type:text"` // text for MySQL; avoids key-length issues
+	Key   string `gorm:"column:setting_key;uniqueIndex;size:191"` // column name avoids MySQL reserved 'key'
+	Value string `gorm:"type:text"`
 }
 
 // BounceList records permanently invalid email addresses (hard bounces).
