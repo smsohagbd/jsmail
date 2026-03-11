@@ -42,6 +42,7 @@ api:
 
 ```bash
 
+rm smtp-server
 git pull
 go build -o smtp-server .
 ./smtp-server -config config.yaml

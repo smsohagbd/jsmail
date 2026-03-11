@@ -286,7 +286,7 @@ func DeleteIPPoolEntry(id uint) {
 // GetSetting retrieves a setting value by key, returning def if not set.
 func GetSetting(key, def string) string {
 	var s Setting
-	if err := DB.Where("key = ?", key).First(&s).Error; err != nil {
+	if err := DB.Where("setting_key = ?", key).First(&s).Error; err != nil {
 		return def
 	}
 	return s.Value
@@ -296,7 +296,7 @@ func GetSetting(key, def string) string {
 // Uses Unscoped so we find soft-deleted rows and update them instead of hitting "duplicate key".
 func SetSetting(key, value string) error {
 	var s Setting
-	err := DB.Unscoped().Where("key = ?", key).First(&s).Error
+	err := DB.Unscoped().Where("setting_key = ?", key).First(&s).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return DB.Create(&Setting{Key: key, Value: value}).Error
@@ -304,7 +304,7 @@ func SetSetting(key, value string) error {
 		return err
 	}
 	// Found (including soft-deleted) — update value and restore if deleted
-	return DB.Unscoped().Model(&s).Updates(map[string]interface{}{"value": value, "deleted_at": nil}).Error
+	return DB.Unscoped().Model(&s).Updates(map[string]interface{}{"setting_value": value, "deleted_at": nil}).Error
 }
 
 // ──────────────────────────── UserSMTP ───────────────────────────────────────
