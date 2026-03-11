@@ -97,19 +97,19 @@ type IPPool struct {
 	Note     string
 
 	// Warmup: gradually increase sending volume over N days.
-	WarmupEnabled   bool      `gorm:"default:false"`
-	WarmupStartedAt time.Time // when warmup began (zero = not started)
-	WarmupDays      int       `gorm:"default:14"` // total warmup period
+	WarmupEnabled   bool       `gorm:"default:false"`
+	WarmupStartedAt *time.Time // when warmup began (nil = not started); avoids MySQL '0000-00-00' error
+	WarmupDays      int        `gorm:"default:14"` // total warmup period
 }
 
 // WarmupDayLimit returns the maximum emails/day this IP may send today based on
 // its warmup schedule.  Returns 0 (unlimited) when warmup is inactive or complete.
 // Schedule doubles each day: 50 → 100 → 200 → 400 → ... capped at PerDay.
 func (ip *IPPool) WarmupDayLimit() int {
-	if !ip.WarmupEnabled || ip.WarmupStartedAt.IsZero() {
+	if !ip.WarmupEnabled || ip.WarmupStartedAt == nil || ip.WarmupStartedAt.IsZero() {
 		return 0
 	}
-	day := int(time.Since(ip.WarmupStartedAt).Hours()/24) + 1 // day 1, 2, ...
+	day := int(time.Since(*ip.WarmupStartedAt).Hours()/24) + 1 // day 1, 2, ...
 	if day > ip.WarmupDays {
 		return 0 // warmup complete, use PerDay (or unlimited)
 	}

@@ -693,7 +693,8 @@ func (h *Handler) AddIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 		WarmupDays:    warmupDays,
 	}
 	if warmupEnabled {
-		entry.WarmupStartedAt = time.Now()
+		t := time.Now()
+		entry.WarmupStartedAt = &t
 	}
 	if err := appdb.SaveIPPoolEntry(entry); err != nil {
 		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
@@ -731,7 +732,8 @@ func (h *Handler) UpdateIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 	entry.WarmupDays = warmupDays
 	// Only reset warmup start time if toggling warmup on.
 	if warmupEnabled && !entry.WarmupEnabled {
-		entry.WarmupStartedAt = time.Now()
+		t := time.Now()
+		entry.WarmupStartedAt = &t
 	}
 	entry.WarmupEnabled = warmupEnabled
 	if err := appdb.SaveIPPoolEntry(entry); err != nil {
@@ -760,7 +762,11 @@ func (h *Handler) BulkAddIPPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := r.FormValue("ips")
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	// Normalize line endings and Unicode colons (full-width, etc.) to ASCII colon
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\uff1a", ":") // full-width colon
+	text = strings.ReplaceAll(text, "\u2236", ":") // ratio
+	lines := strings.Split(text, "\n")
 	added, updated, skipped := 0, 0, 0
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -773,7 +779,15 @@ func (h *Handler) BulkAddIPPool(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 2 {
 			hostname = strings.TrimSpace(parts[1])
 		}
-		if net.ParseIP(ip) == nil {
+		// Strip any invisible/control chars that can break IP parsing (e.g. from copy-paste)
+		ip = strings.Map(func(r rune) rune {
+			if r < 32 || r == 127 || r == '\ufffd' {
+				return -1
+			}
+			return r
+		}, ip)
+		if ip == "" || net.ParseIP(ip) == nil {
+			log.Printf("ippool bulk: invalid IP %q (line: %q)", ip, line)
 			skipped++
 			continue
 		}
@@ -784,6 +798,7 @@ func (h *Handler) BulkAddIPPool(w http.ResponseWriter, r *http.Request) {
 			if err := appdb.SaveIPPoolEntry(entry); err == nil {
 				added++
 			} else {
+				log.Printf("ippool bulk: failed to save %s: %v", ip, err)
 				skipped++
 			}
 		} else {
