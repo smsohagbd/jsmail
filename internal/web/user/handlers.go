@@ -14,6 +14,7 @@ import (
 
 	"gorm.io/gorm"
 
+	cf "smtp-server/internal/cloudflare"
 	appdb "smtp-server/internal/db"
 	"smtp-server/internal/queue"
 	webauth "smtp-server/internal/web/auth"
@@ -31,10 +32,11 @@ func flatQuery(v url.Values) map[string]string {
 }
 
 type Handler struct {
-	DB       *gorm.DB
-	Queue    *queue.Queue
-	Verifier *verifier.Verifier
-	Tmpl     TemplateRenderer
+	DB             *gorm.DB
+	Queue          *queue.Queue
+	Verifier       *verifier.Verifier
+	Tmpl           TemplateRenderer
+	ConfigSnapshot map[string]string // for HeloName, smtp_domain, etc.
 }
 
 type TemplateRenderer interface {
@@ -716,4 +718,59 @@ func (h *Handler) RemoveUserSuppression(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	http.Redirect(w, r, "/user/suppression", http.StatusFound)
+}
+
+// ─────────────────────────── Cloudflare DNS push (user) ──────────────────────
+
+// CloudflareSetToken saves the user's Cloudflare API token.
+func (h *Handler) CloudflareSetToken(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	token := strings.TrimSpace(r.FormValue("token"))
+	appdb.SetCFToken(claims.Username, token)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"ok":true}`)
+}
+
+// CloudflarePushDNS pushes DNS records for a user domain to Cloudflare.
+func (h *Handler) CloudflarePushDNS(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	w.Header().Set("Content-Type", "application/json")
+
+	apiToken := appdb.GetCFToken(claims.Username)
+	if apiToken == "" {
+		fmt.Fprintf(w, `{"need_token":true}`)
+		return
+	}
+
+	domainID, _ := strconv.ParseUint(r.FormValue("domain_id"), 10, 64)
+	d, ok := appdb.GetDomainByID(uint(domainID))
+	if !ok || (d.OwnerUsername != "" && d.OwnerUsername != claims.Username) {
+		fmt.Fprintf(w, `{"error":"domain not found"}`)
+		return
+	}
+
+	heloName := ""
+	if h.ConfigSnapshot != nil {
+		heloName = h.ConfigSnapshot["smtp_domain"]
+	}
+	spfInclude := "spf." + heloName
+
+	opts := cf.PushOptions{
+		Domain:      d.Name,
+		DKIMName:    d.DKIMSelector + "._domainkey." + d.Name,
+		DKIMContent: d.DKIMPubKeyDNS,
+		SPFInclude:  spfInclude,
+		MXTarget:    heloName,
+		MXPriority:  10,
+	}
+
+	client := cf.New(apiToken)
+	records, err := client.PushDNS(opts)
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		w.Write(b)
+		return
+	}
+	b, _ := json.Marshal(map[string]interface{}{"records": records})
+	w.Write(b)
 }

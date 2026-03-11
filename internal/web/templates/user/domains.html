@@ -33,6 +33,8 @@
           <td style="padding-right:12px;text-align:right;">
             <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
               onclick="showDNS('{{.Name}}','{{.DKIMSelector}}','{{.DKIMPubKeyDNS}}')">DNS Records</button>
+            <button class="btn btn-ghost" style="font-size:11px;color:#f97316;"
+              onclick="cfPush({{.ID}},'{{.Name}}')">☁ Cloudflare</button>
             <form method="POST" action="/user/domains/delete" style="display:inline;">
               <input type="hidden" name="id" value="{{.ID}}"/>
               <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#f87171;" onclick="return confirm('Delete domain {{.Name}}?')">Delete</button>
@@ -93,8 +95,8 @@
           <input class="form-input" name="name" placeholder="example.com" required/>
         </div>
         <div class="form-group">
-          <label class="form-label">DKIM Selector <span style="color:#52525b;font-weight:400;">(default: mail)</span></label>
-          <input class="form-input" name="selector" placeholder="mail"/>
+          <label class="form-label">DKIM Selector <span style="color:#52525b;font-weight:400;">(default: sm)</span></label>
+          <input class="form-input" name="selector" placeholder="sm"/>
         </div>
         <p style="font-size:12px;color:#52525b;margin:10px 0 16px;">A 2048-bit RSA DKIM key pair will be automatically generated.</p>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
@@ -106,8 +108,118 @@
   </div>
 </div>
 
+<!-- Cloudflare token modal -->
+<div id="cf-token-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;">
+  <div class="card" style="width:460px;max-width:95vw;">
+    <div class="card-header">
+      <span class="card-title">☁ Connect Cloudflare</span>
+      <button onclick="document.getElementById('cf-token-modal').style.display='none'" class="btn btn-ghost" style="font-size:11px;">✕</button>
+    </div>
+    <div class="card-body" style="padding:20px;">
+      <p style="font-size:13px;color:#a1a1aa;margin:0 0 16px;line-height:1.6;">
+        Enter your Cloudflare <strong style="color:#f97316;">API Token</strong> with
+        <strong style="color:#e4e4e7;">Zone:DNS:Edit</strong> permission.
+        <br><a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" style="color:#818cf8;font-size:12px;">Create token at dash.cloudflare.com →</a>
+      </p>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label class="form-label">Cloudflare API Token</label>
+        <input class="form-input" id="cf-token-input" type="password" placeholder="paste token here…" style="font-family:monospace;"/>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-ghost" onclick="document.getElementById('cf-token-modal').style.display='none'">Cancel</button>
+        <button class="btn btn-primary" style="background:#f97316;" onclick="saveCFToken()">Save &amp; Push DNS</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Cloudflare results modal -->
+<div id="cf-result-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;">
+  <div class="card" style="width:560px;max-width:95vw;max-height:80vh;overflow-y:auto;">
+    <div class="card-header" style="position:sticky;top:0;background:#111113;z-index:1;">
+      <span class="card-title" id="cf-result-title">☁ Cloudflare DNS Update</span>
+      <button onclick="document.getElementById('cf-result-modal').style.display='none'" class="btn btn-ghost" style="font-size:11px;">✕</button>
+    </div>
+    <div class="card-body" style="padding:16px 20px;">
+      <div id="cf-result-body"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 const serverIP = "{{.ServerIP}}";
+let cfPendingDomainId = null;
+let cfPendingDomainName = null;
+
+async function cfPush(domainId, domainName) {
+  cfPendingDomainId = domainId;
+  cfPendingDomainName = domainName;
+  showCFLoading(domainName);
+  const res = await fetch('/user/domains/cloudflare', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'domain_id=' + domainId
+  });
+  const data = await res.json();
+  if (data.need_token) {
+    document.getElementById('cf-result-modal').style.display = 'none';
+    document.getElementById('cf-token-modal').style.display = 'flex';
+    return;
+  }
+  renderCFResults(domainName, data);
+}
+
+function showCFLoading(name) {
+  document.getElementById('cf-result-title').textContent = '☁ Cloudflare — ' + name;
+  document.getElementById('cf-result-body').innerHTML = '<div style="text-align:center;padding:32px;color:#71717a;font-size:13px;">Connecting to Cloudflare...</div>';
+  document.getElementById('cf-result-modal').style.display = 'flex';
+}
+
+async function saveCFToken() {
+  const token = document.getElementById('cf-token-input').value.trim();
+  if (!token) { alert('Please enter an API token'); return; }
+  await fetch('/user/domains/cloudflare/token', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'token=' + encodeURIComponent(token)
+  });
+  document.getElementById('cf-token-modal').style.display = 'none';
+  cfPush(cfPendingDomainId, cfPendingDomainName);
+}
+
+function renderCFResults(domain, data) {
+  document.getElementById('cf-result-title').textContent = '☁ Cloudflare — ' + domain;
+  let html = '';
+  if (data.error) {
+    html = '<div style="background:#1c0606;border:1px solid #450a0a;border-radius:8px;padding:14px;color:#f87171;font-size:13px;">✗ ' + esc(data.error) + '</div>';
+  } else {
+    const actionColor = {created:'#4ade80', updated:'#fbbf24', skipped:'#52525b', error:'#f87171'};
+    const actionIcon  = {created:'✓', updated:'↑', skipped:'–', error:'✗'};
+    html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+    (data.records || []).forEach(r => {
+      const col = actionColor[r.action] || '#a1a1aa';
+      const ico = actionIcon[r.action] || '?';
+      html += `<div style="background:#18181b;border:1px solid #27272a;border-radius:7px;padding:10px 12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="font-size:11px;font-weight:600;color:#a1a1aa;text-transform:uppercase;">${esc(r.type)}</span>
+          <span style="font-size:11px;font-weight:700;color:${col};">${ico} ${esc(r.action)}</span>
+        </div>
+        <div style="font-family:monospace;font-size:11px;color:#818cf8;margin-bottom:2px;">${esc(r.name)}</div>
+        <div style="font-family:monospace;font-size:11px;color:#e4e4e7;word-break:break-all;">${esc(r.content)}</div>
+        ${r.error ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">${esc(r.error)}</div>` : ''}
+      </div>`;
+    });
+    html += '</div>';
+    html += '<p style="font-size:11px;color:#52525b;margin:12px 0 0;">DNS changes are usually live within 1-5 minutes.</p>';
+  }
+  document.getElementById('cf-result-body').innerHTML = html;
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
 function showDNS(domain, selector, dkimVal) {
   document.getElementById('dns-domain-title').textContent = 'DNS Records — ' + domain;
   document.getElementById('d-mx').textContent = domain + '  IN  MX  10  ' + (window.location.hostname || 'mail.example.com');

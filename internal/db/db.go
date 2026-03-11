@@ -167,7 +167,7 @@ func RemoveFromBounceList(email string) {
 func CreateDomain(ownerUsername, name, selector string) (*Domain, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if selector == "" {
-		selector = "mail"
+		selector = "sm"
 	}
 
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -217,6 +217,14 @@ func GetDomainsByOwner(owner string) []Domain {
 func GetDomainByName(name string) (*Domain, bool) {
 	var d Domain
 	if err := DB.Where("name = ?", strings.ToLower(name)).First(&d).Error; err != nil {
+		return nil, false
+	}
+	return &d, true
+}
+
+func GetDomainByID(id uint) (*Domain, bool) {
+	var d Domain
+	if err := DB.First(&d, id).Error; err != nil {
 		return nil, false
 	}
 	return &d, true
@@ -506,6 +514,25 @@ func RemoveSuppression(id uint, username string) {
 func RemoveSuppressionAdmin(id uint) {
 	DB.Delete(&Suppression{}, id)
 }
+
+// ─────────────────────────── Cloudflare token storage ────────────────────────
+
+// GetCFToken returns the Cloudflare API token stored for a user.
+// Falls back to the global admin token if the user has none set.
+func GetCFToken(username string) string {
+	if t := GetSetting("cf_token:"+username, ""); t != "" {
+		return t
+	}
+	return GetSetting("cf_token:__global", "")
+}
+
+// SetCFToken persists a Cloudflare API token for a user.
+// Pass username = "__global" to set the platform-wide fallback token.
+func SetCFToken(username, token string) {
+	SetSetting("cf_token:"+username, token)
+}
+
+// ─────────────────────────── Suppression ────────────────────────────────────
 
 // LogSuppressed updates an email log entry status to "suppressed".
 func LogSuppressed(msgID, recipient, reason string) {

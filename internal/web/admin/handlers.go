@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"crypto/ecdsa"
+	cf "smtp-server/internal/cloudflare"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
@@ -1270,6 +1271,60 @@ func (h *Handler) VerifyCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin/ssl?ok=cert+and+key+match+✓", http.StatusFound)
+}
+
+// ─────────────────────────── Cloudflare DNS push ─────────────────────────────
+
+// CloudflareSetToken saves (or clears) the CF API token for the admin user.
+func (h *Handler) CloudflareSetToken(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	token := strings.TrimSpace(r.FormValue("token"))
+	appdb.SetCFToken(claims.Username, token)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"ok":true}`)
+}
+
+// CloudflarePushDNS pushes SPF/DKIM/MX/DMARC records for a domain to Cloudflare.
+// Returns JSON so the browser can render results without a page reload.
+func (h *Handler) CloudflarePushDNS(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check token.
+	apiToken := appdb.GetCFToken(claims.Username)
+	if apiToken == "" {
+		fmt.Fprintf(w, `{"need_token":true}`)
+		return
+	}
+
+	domainID, _ := strconv.ParseUint(r.FormValue("domain_id"), 10, 64)
+	d, ok := appdb.GetDomainByID(uint(domainID))
+	if !ok {
+		fmt.Fprintf(w, `{"error":"domain not found"}`)
+		return
+	}
+
+	heloName := h.ConfigSnapshot["smtp_domain"]
+	spfInclude := "spf." + heloName
+
+	opts := cf.PushOptions{
+		Domain:      d.Name,
+		DKIMName:    d.DKIMSelector + "._domainkey." + d.Name,
+		DKIMContent: d.DKIMPubKeyDNS,
+		SPFInclude:  spfInclude,
+		MXTarget:    heloName,
+		MXPriority:  10,
+	}
+
+	client := cf.New(apiToken)
+	records, err := client.PushDNS(opts)
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		w.Write(b)
+		return
+	}
+	b, _ := json.Marshal(map[string]interface{}{"records": records})
+	w.Write(b)
 }
 
 // ─────────────────────────── Suppression (admin) ─────────────────────────────

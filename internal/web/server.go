@@ -147,6 +147,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/domains", webauth.RequireAdmin(ah.Domains))
 	mux.HandleFunc("/admin/domains/add", webauth.RequireAdmin(ah.AddDomain))
 	mux.HandleFunc("/admin/domains/delete", webauth.RequireAdmin(ah.DeleteDomain))
+	mux.HandleFunc("/admin/domains/cloudflare", webauth.RequireAdmin(ah.CloudflarePushDNS))
+	mux.HandleFunc("/admin/domains/cloudflare/token", webauth.RequireAdmin(ah.CloudflareSetToken))
 	mux.HandleFunc("/admin/ippool", webauth.RequireAdmin(ah.IPPool))
 	mux.HandleFunc("/admin/ippool/toggle", webauth.RequireAdmin(ah.ToggleIPPool))
 	mux.HandleFunc("/admin/ippool/add", webauth.RequireAdmin(ah.AddIPPoolEntry))
@@ -168,7 +170,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/suppression/add", webauth.RequireAdmin(ah.AddSuppressionAdmin))
 
 	// User routes
-	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer}
+	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer, ConfigSnapshot: s.cfg}
 	mux.HandleFunc("/user", webauth.RequireUser(uh.Dashboard))
 	mux.HandleFunc("/user/logs", webauth.RequireUser(uh.Logs))
 	mux.HandleFunc("/user/queue", webauth.RequireUser(uh.QueuePage))
@@ -180,6 +182,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/domains", webauth.RequireUser(uh.Domains))
 	mux.HandleFunc("/user/domains/add", webauth.RequireUser(uh.AddDomain))
 	mux.HandleFunc("/user/domains/delete", webauth.RequireUser(uh.DeleteDomain))
+	mux.HandleFunc("/user/domains/cloudflare", webauth.RequireUser(uh.CloudflarePushDNS))
+	mux.HandleFunc("/user/domains/cloudflare/token", webauth.RequireUser(uh.CloudflareSetToken))
 	mux.HandleFunc("/user/smtp", webauth.RequireUser(uh.SMTPPage))
 	mux.HandleFunc("/user/smtp/add", webauth.RequireUser(uh.AddSMTP))
 	mux.HandleFunc("/user/smtp/delete", webauth.RequireUser(uh.DeleteSMTP))
