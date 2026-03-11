@@ -276,6 +276,25 @@ func (c *Client) ListDNSRecords(zoneID, recType, name string) ([]DNSRecord, erro
 	return records, nil
 }
 
+// ListAllTXTRecords returns all TXT records in a zone (no name filter).
+func (c *Client) ListAllTXTRecords(zoneID string) ([]DNSRecord, error) {
+	path := fmt.Sprintf("/zones/%s/dns_records?type=TXT&per_page=100", zoneID)
+	r, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var records []DNSRecord
+	json.Unmarshal(r.Result, &records)
+	return records, nil
+}
+
+// nameMatchesApex returns true if the record name is the zone apex (root).
+func nameMatchesApex(recordName, domain string) bool {
+	n := strings.TrimSuffix(strings.ToLower(recordName), ".")
+	d := strings.ToLower(domain)
+	return n == d || n == "" || n == "@"
+}
+
 // CreateDNSRecord adds a new DNS record to a zone.
 func (c *Client) CreateDNSRecord(zoneID string, rec DNSRecord) error {
 	_, err := c.do("POST", "/zones/"+zoneID+"/dns_records", rec)
@@ -286,6 +305,36 @@ func (c *Client) CreateDNSRecord(zoneID string, rec DNSRecord) error {
 func (c *Client) UpdateDNSRecord(zoneID, recordID string, rec DNSRecord) error {
 	_, err := c.do("PUT", "/zones/"+zoneID+"/dns_records/"+recordID, rec)
 	return err
+}
+
+// DeleteDNSRecord removes a DNS record by ID.
+func (c *Client) DeleteDNSRecord(zoneID, recordID string) error {
+	_, err := c.do("DELETE", "/zones/"+zoneID+"/dns_records/"+recordID, nil)
+	return err
+}
+
+// ─────────────────────────── TXT content formatting ────────────────────────────
+
+// quoteTXTContent wraps TXT content in double quotes for Cloudflare API.
+// Cloudflare requires TXT record content to be in quotation marks.
+func quoteTXTContent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return `""`
+	}
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s
+	}
+	return `"` + s + `"`
+}
+
+// unquoteTXTContent strips surrounding quotes for comparison (Cloudflare may return quoted).
+func unquoteTXTContent(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 // ─────────────────────────── SPF merge helper ────────────────────────────────
@@ -336,24 +385,41 @@ func (c *Client) PushDNS(opts PushOptions) ([]RecordResult, error) {
 	results = append(results, c.upsertTXT(zoneID, opts.DKIMName, opts.DKIMContent))
 
 	// ── SPF ──────────────────────────────────────────────────────────────────
+	// Find ANY existing TXT record at the zone apex that starts with v=spf1.
+	// Prefer the one that doesn't already have our include (the "original" to merge into).
+	// Update that record (merge our include). Never create a second SPF record.
 	{
-		existing, _ := c.ListDNSRecords(zoneID, "TXT", opts.Domain)
+		allTXT, _ := c.ListAllTXTRecords(zoneID)
 		var spfRecord *DNSRecord
-		for i := range existing {
-			if strings.HasPrefix(strings.ToLower(existing[i].Content), "v=spf1") {
-				spfRecord = &existing[i]
+		var fallback *DNSRecord
+		ourInclude := "include:" + opts.SPFInclude
+		for i := range allTXT {
+			if !nameMatchesApex(allTXT[i].Name, opts.Domain) {
+				continue
+			}
+			raw := unquoteTXTContent(allTXT[i].Content)
+			if !strings.HasPrefix(strings.ToLower(raw), "v=spf1") {
+				continue
+			}
+			if !strings.Contains(raw, ourInclude) {
+				spfRecord = &allTXT[i]
 				break
 			}
+			fallback = &allTXT[i]
+		}
+		if spfRecord == nil && fallback != nil {
+			spfRecord = fallback
 		}
 		merged := MergeSPF("", opts.SPFInclude)
 		if spfRecord != nil {
-			merged = MergeSPF(spfRecord.Content, opts.SPFInclude)
+			merged = MergeSPF(unquoteTXTContent(spfRecord.Content), opts.SPFInclude)
 		}
-		if spfRecord != nil && spfRecord.Content == merged {
+		if spfRecord != nil && unquoteTXTContent(spfRecord.Content) == merged {
 			results = append(results, RecordResult{Type: "TXT (SPF)", Name: opts.Domain, Content: merged, Action: "skipped"})
 		} else if spfRecord != nil {
+			// Update existing SPF — use original record name (e.g. gettonstrategy.com or @)
 			err := c.UpdateDNSRecord(zoneID, spfRecord.ID, DNSRecord{
-				Type: "TXT", Name: opts.Domain, Content: merged, TTL: 300,
+				Type: "TXT", Name: spfRecord.Name, Content: quoteTXTContent(merged), TTL: 300,
 			})
 			action := "updated"
 			errStr := ""
@@ -362,9 +428,24 @@ func (c *Client) PushDNS(opts PushOptions) ([]RecordResult, error) {
 				errStr = err.Error()
 			}
 			results = append(results, RecordResult{Type: "TXT (SPF)", Name: opts.Domain, Content: merged, Action: action, Error: errStr})
+			// Remove any duplicate SPF we may have created earlier (standalone with only our include)
+			standalone := "v=spf1 include:" + opts.SPFInclude + " ~all"
+			for i := range allTXT {
+				if allTXT[i].ID == spfRecord.ID {
+					continue
+				}
+				if !nameMatchesApex(allTXT[i].Name, opts.Domain) {
+					continue
+				}
+				raw := unquoteTXTContent(allTXT[i].Content)
+				if strings.HasPrefix(strings.ToLower(raw), "v=spf1") && raw == standalone {
+					_ = c.DeleteDNSRecord(zoneID, allTXT[i].ID)
+					break
+				}
+			}
 		} else {
 			err := c.CreateDNSRecord(zoneID, DNSRecord{
-				Type: "TXT", Name: opts.Domain, Content: merged, TTL: 300,
+				Type: "TXT", Name: opts.Domain, Content: quoteTXTContent(merged), TTL: 300,
 			})
 			action := "created"
 			errStr := ""
@@ -408,13 +489,14 @@ func (c *Client) PushDNS(opts PushOptions) ([]RecordResult, error) {
 }
 
 // upsertTXT creates or updates a TXT record (always overwrites the value).
+// Content is sent to Cloudflare with quotation marks as required for TXT records.
 func (c *Client) upsertTXT(zoneID, name, content string) RecordResult {
 	existing, _ := c.ListDNSRecords(zoneID, "TXT", name)
-
-	rec := DNSRecord{Type: "TXT", Name: name, Content: content, TTL: 300}
+	quoted := quoteTXTContent(content)
+	rec := DNSRecord{Type: "TXT", Name: name, Content: quoted, TTL: 300}
 
 	if len(existing) > 0 {
-		if existing[0].Content == content {
+		if unquoteTXTContent(existing[0].Content) == content {
 			return RecordResult{Type: "TXT", Name: name, Content: content, Action: "skipped"}
 		}
 		err := c.UpdateDNSRecord(zoneID, existing[0].ID, rec)
