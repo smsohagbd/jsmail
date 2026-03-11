@@ -29,8 +29,9 @@ type UserSMTP struct {
 	Port          int    `gorm:"default:587"`
 	Username      string `gorm:"not null"`
 	Password      string `gorm:"type:text;not null"`
-	UseTLS        bool   `gorm:"default:true"`  // try STARTTLS
-	IsDefault     bool   `gorm:"default:false"` // preferred relay when rotation is off
+	TLSMode       string `gorm:"size:20;default:starttls"` // "none" | "starttls" | "ssl"
+	UseTLS        bool   `gorm:"default:true"`              // deprecated; TLSMode preferred
+	IsDefault     bool   `gorm:"default:false"`             // preferred relay when rotation is off
 	Active        bool   `gorm:"default:true"`
 	FromAddress   string `gorm:"size:191"` // override From when using this relay (rotation: use per-relay; no rotation: use default's)
 }
@@ -45,6 +46,22 @@ type EmailLog struct {
 	Error     string
 	MXHost    string
 	SentAt    time.Time
+}
+
+// DailyStats stores aggregated send/delivery counts per day for statistics.
+// Used when EmailLog is purged ("delete logs only") so dashboard/reports still show totals.
+// Username empty = admin/system-wide.
+type DailyStats struct {
+	gorm.Model
+	StatDate   string `gorm:"uniqueIndex:idx_daily_stats_date_user;size:10;not null"` // YYYY-MM-DD
+	Username  string `gorm:"uniqueIndex:idx_daily_stats_date_user;size:191;default:''"`
+	Sent      int64  `gorm:"default:0"`
+	Delivered int64  `gorm:"default:0"`
+	Failed    int64  `gorm:"default:0"`
+	Deferred  int64  `gorm:"default:0"`
+	HardBounce int64 `gorm:"default:0"`
+	SoftBounce int64 `gorm:"default:0"`
+	Suppressed int64 `gorm:"default:0"`
 }
 
 type ThrottleRule struct {

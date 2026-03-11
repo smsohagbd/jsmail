@@ -1,10 +1,7 @@
 package verifier
 
 import (
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
-	"fmt"
 	"log"
 	"net"
 	"net/smtp"
@@ -230,7 +227,8 @@ func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, bool) {
 		return probeUnknown, false
 	}
 
-	// Check target mailbox.
+	// Check target mailbox — single RCPT TO handshake (same as real delivery).
+	// No catch-all probe: Yahoo, Gmail, AOL, Outlook accept RCPT TO = valid; 550 = invalid.
 	result := rcptProbe(client, email)
 	if result == probeNotFound {
 		return probeNotFound, false
@@ -238,18 +236,8 @@ func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, bool) {
 	if result != probeExists {
 		return result, false
 	}
-
-	// ── Catch-all detection ──────────────────────────────────────────────────
-	// Generate a random address on the same domain.
-	domain := email[strings.Index(email, "@")+1:]
-	randAddr := fmt.Sprintf("verify-%s@%s", randomHex(8), domain)
-
-	randResult := rcptProbe(client, randAddr)
-	// If server accepts the random address → definitely catch-all.
-	// If server is unknown/evasive (won't tell us) → assume catch-all to be safe.
-	catchAll := randResult == probeExists || randResult == probeUnknown
-	client.Reset()
-	return probeExists, catchAll
+	// RCPT TO accepted — valid. Skip catch-all probe (caused false invalid for Yahoo etc).
+	return probeExists, false
 }
 
 func rcptProbe(client *smtp.Client, addr string) probeResult {
@@ -270,12 +258,6 @@ func rcptProbe(client *smtp.Client, addr string) probeResult {
 	}
 	// 4xx or other = server won't tell us.
 	return probeUnknown
-}
-
-func randomHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 // ── Disposable domain list ────────────────────────────────────────────────────

@@ -108,10 +108,12 @@
             </form>
           </td>
           <td>
-            {{if .UseTLS}}
+            {{if eq .TLSMode "ssl"}}
+            <span style="color:#60a5fa;font-size:11px;">SSL/TLS</span>
+            {{else if or (eq .TLSMode "starttls") (and (eq .TLSMode "") .UseTLS)}}
             <span style="color:#4ade80;font-size:11px;">STARTTLS</span>
             {{else}}
-            <span style="color:#f87171;font-size:11px;">Plain</span>
+            <span style="color:#f87171;font-size:11px;">None</span>
             {{end}}
           </td>
           <td>
@@ -207,35 +209,39 @@
       <div style="margin-bottom:16px;">
         <div style="font-size:11px;color:#52525b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Quick Presets</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.gmail.com',587,'gmail','Gmail')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.gmail.com',587,'gmail','Gmail','starttls')">
             <img src="https://www.google.com/favicon.ico" width="12" height="12" style="border-radius:2px;"> Gmail
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.mail.yahoo.com',587,'yahoo','Yahoo')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.mail.yahoo.com',587,'yahoo','Yahoo','starttls')">
             <img src="https://www.yahoo.com/favicon.ico" width="12" height="12" style="border-radius:2px;"> Yahoo
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.office365.com',587,'outlook','Outlook/Office365')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.office365.com',587,'outlook','Outlook/Office365','starttls')">
             <img src="https://outlook.com/favicon.ico" width="12" height="12" style="border-radius:2px;"> Outlook
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.sendgrid.net',587,'apikey','SendGrid')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.sendgrid.net',587,'apikey','SendGrid','starttls')">
             <span style="color:#1a82e2;font-size:10px;font-weight:700;">SG</span> SendGrid
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.mailgun.org',587,'','Mailgun')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.mailgun.org',587,'','Mailgun','starttls')">
             <span style="color:#f06b26;font-size:10px;font-weight:700;">MG</span> Mailgun
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('email-smtp.us-east-1.amazonaws.com',587,'','Amazon SES')">
+          <button type="button" class="preset-btn" onclick="applyPreset('email-smtp.us-east-1.amazonaws.com',587,'','Amazon SES','starttls')">
             <span style="color:#ff9900;font-size:10px;font-weight:700;">SES</span> Amazon SES
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.zoho.com',587,'','Zoho')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.zoho.com',587,'','Zoho','starttls')">
             <span style="color:#e42527;font-size:10px;font-weight:700;">Z</span> Zoho
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.postmarkapp.com',587,'','Postmark')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.postmarkapp.com',587,'','Postmark','starttls')">
             <span style="color:#ffcc00;font-size:10px;font-weight:700;">PM</span> Postmark
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.elasticemail.com',2525,'','Elastic Email')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.elasticemail.com',2525,'','Elastic Email','starttls')">
             <span style="color:#00aaff;font-size:10px;font-weight:700;">EE</span> Elastic Email
           </button>
-          <button type="button" class="preset-btn" onclick="applyPreset('smtp.brevo.com',587,'','Brevo/Sendinblue')">
+          <button type="button" class="preset-btn" onclick="applyPreset('smtp.brevo.com',587,'','Brevo/Sendinblue','starttls')">
             <span style="color:#0092ff;font-size:10px;font-weight:700;">BR</span> Brevo
+          </button>
+          <button type="button" class="preset-btn" onclick="applyPreset('',587,'','','starttls')" style="border-style:dashed;border-color:#3f3f46;">
+            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+            Custom / Other
           </button>
         </div>
       </div>
@@ -270,11 +276,13 @@
           <input class="form-input" name="from_address" id="f-from" placeholder="sender@yourdomain.com"/>
           <div style="font-size:11px;color:#52525b;margin-top:4px;">Rotation ON: use this address when sending via this server. Rotation OFF: default server's From is used.</div>
         </div>
-        <div style="margin-bottom:14px;">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-            <input type="checkbox" name="use_tls" id="f-tls" checked style="width:14px;height:14px;accent-color:#818cf8;"/>
-            <span style="font-size:13px;color:#e4e4e7;">Use STARTTLS</span>
-          </label>
+        <div class="form-group" style="margin-bottom:14px;">
+          <label class="form-label">Encryption</label>
+          <select class="form-input" name="tls_mode" id="f-tls">
+            <option value="starttls" selected>STARTTLS (port 587) — connect plain, then upgrade</option>
+            <option value="ssl">SSL/TLS (port 465) — encrypted from the start</option>
+            <option value="none">None (port 25) — plain connection</option>
+          </select>
         </div>
         <div id="test-result" style="display:none;padding:9px 13px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
@@ -293,15 +301,15 @@
       <div style="font-size:13px;font-weight:700;color:#e4e4e7;margin-bottom:4px;">Bulk Import SMTP Servers</div>
       <div style="font-size:12px;color:#52525b;margin-bottom:14px;">One server per line. Format:
         <code style="background:#09090b;padding:2px 6px;border-radius:4px;color:#a78bfa;">host:port:user:pass:tls[:from@domain.com]</code>
-        — TLS is <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">1</code> or <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">0</code>. From address optional.
+        — TLS: <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">0</code>=none, <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">1</code>=starttls, <code style="background:#09090b;padding:2px 4px;border-radius:3px;color:#a78bfa;">2</code>=ssl
       </div>
 
       <!-- Examples -->
       <div style="background:#09090b;border:1px solid #27272a;border-radius:6px;padding:10px 14px;font-family:monospace;font-size:11px;color:#52525b;margin-bottom:14px;line-height:1.8;">
         smtp.gmail.com:587:user@gmail.com:app-password:1:user@gmail.com<br>
         smtp.sendgrid.net:587:apikey:SG.xxxx:1:sender@yourdomain.com<br>
-        smtp.mailgun.org:587:postmaster@mg.example.com:key-xxx:1<br>
-        smtp.office365.com:587:user@company.com:password:1
+        smtp.example.com:465:user:pass:2<br>
+        mail.relay.local:25:user:pass:0
       </div>
 
       <form method="POST" action="/user/smtp/bulk" id="bulk-form">
@@ -358,13 +366,15 @@ function switchTab(t) {
 }
 
 // ── Preset fill ────────────────────────────────────────────────────────────
-function applyPreset(host, port, defaultUser, label) {
-  document.getElementById('f-host').value  = host;
-  document.getElementById('f-port').value  = port;
-  document.getElementById('f-label').value = label;
-  if (defaultUser) document.getElementById('f-user').value = defaultUser;
-  document.getElementById('f-user').focus();
-  // Clear any previous test result
+function applyPreset(host, port, defaultUser, label, tlsMode) {
+  document.getElementById('f-host').value  = host || '';
+  document.getElementById('f-port').value  = port || '587';
+  document.getElementById('f-label').value = label || '';
+  document.getElementById('f-user').value  = defaultUser || '';
+  document.getElementById('f-from').value  = '';
+  document.getElementById('f-pass').value  = '';
+  document.getElementById('f-tls').value   = tlsMode || 'starttls';
+  document.getElementById('f-host').focus();
   const r = document.getElementById('test-result');
   r.style.display = 'none';
 }
@@ -375,7 +385,7 @@ async function testSMTP() {
   const port = document.getElementById('f-port').value || '587';
   const user = document.getElementById('f-user').value.trim();
   const pass = document.getElementById('f-pass').value;
-  const useTLS = document.getElementById('f-tls').checked;
+  const tlsMode = document.getElementById('f-tls').value || 'starttls';
   const res  = document.getElementById('test-result');
 
   res.style.display = 'block';
@@ -386,7 +396,7 @@ async function testSMTP() {
     const r = await fetch('/user/smtp/test', {
       method:'POST',
       headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body: new URLSearchParams({host,port,smtp_user:user,smtp_pass:pass,use_tls:useTLS?'true':'false'})
+      body: new URLSearchParams({host,port,smtp_user:user,smtp_pass:pass,tls_mode:tlsMode})
     });
     const d = await r.json();
     if (d.ok) {

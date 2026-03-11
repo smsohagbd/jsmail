@@ -59,6 +59,7 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 	if err := DB.AutoMigrate(
 		&User{},
 		&EmailLog{},
+		&DailyStats{},
 		&ThrottleRule{},
 		&UpstreamSMTP{},
 		&Setting{},
@@ -98,8 +99,59 @@ func ensureAdmin(username, password string) {
 	}
 }
 
+// incrementDailyStat atomically increments a counter in DailyStats for the given date and username.
+func incrementDailyStat(statDate, username, field string, delta int64) {
+	if statDate == "" {
+		return
+	}
+	var existing DailyStats
+	err := DB.Where("stat_date = ? AND username = ?", statDate, username).First(&existing).Error
+	if err != nil {
+		row := DailyStats{StatDate: statDate, Username: username}
+		switch field {
+		case "sent":
+			row.Sent = delta
+		case "delivered":
+			row.Delivered = delta
+		case "failed":
+			row.Failed = delta
+		case "deferred":
+			row.Deferred = delta
+		case "hard_bounce":
+			row.HardBounce = delta
+		case "soft_bounce":
+			row.SoftBounce = delta
+		case "suppressed":
+			row.Suppressed = delta
+		default:
+			return
+		}
+		DB.Create(&row)
+		return
+	}
+	col := "sent"
+	switch field {
+	case "delivered":
+		col = "delivered"
+	case "failed":
+		col = "failed"
+	case "deferred":
+		col = "deferred"
+	case "hard_bounce":
+		col = "hard_bounce"
+	case "soft_bounce":
+		col = "soft_bounce"
+	case "suppressed":
+		col = "suppressed"
+	}
+	DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", statDate, username).
+		UpdateColumn(col, gorm.Expr("COALESCE("+col+",0) + ?", delta))
+}
+
 // LogQueued writes a queued log entry for every recipient.
 func LogQueued(username, msgID, from string, recipients []string) {
+	now := time.Now()
+	statDate := now.Format("2006-01-02")
 	for _, rcpt := range recipients {
 		DB.Create(&EmailLog{
 			Username:  username,
@@ -107,13 +159,16 @@ func LogQueued(username, msgID, from string, recipients []string) {
 			From:      from,
 			Recipient: rcpt,
 			Status:    "queued",
-			SentAt:    time.Now(),
+			SentAt:    now,
 		})
 	}
+	incrementDailyStat(statDate, username, "sent", int64(len(recipients)))
+	incrementDailyStat(statDate, "", "sent", int64(len(recipients))) // admin-wide
 }
 
 // LogDelivered updates a log entry to delivered.
-func LogDelivered(msgID, recipient, mxHost string) {
+func LogDelivered(username, msgID, recipient, mxHost string) {
+	statDate := time.Now().Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
@@ -121,36 +176,47 @@ func LogDelivered(msgID, recipient, mxHost string) {
 			"mx_host": mxHost,
 			"sent_at": time.Now(),
 		})
+	incrementDailyStat(statDate, username, "delivered", 1)
+	incrementDailyStat(statDate, "", "delivered", 1)
 }
 
 // LogFailed updates a log entry to failed.
-func LogFailed(msgID, recipient, errMsg string) {
+func LogFailed(username, msgID, recipient, errMsg string) {
+	statDate := time.Now().Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status": "failed",
 			"error":  errMsg,
 		})
+	incrementDailyStat(statDate, username, "failed", 1)
+	incrementDailyStat(statDate, "", "failed", 1)
 }
 
 // LogDeferred updates a log entry to deferred.
-func LogDeferred(msgID, recipient, errMsg string) {
+func LogDeferred(username, msgID, recipient, errMsg string) {
+	statDate := time.Now().Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status": "deferred",
 			"error":  errMsg,
 		})
+	incrementDailyStat(statDate, username, "deferred", 1)
+	incrementDailyStat(statDate, "", "deferred", 1)
 }
 
 // LogHardBounce marks a log entry as hard_bounce and adds address to bounce list.
-func LogHardBounce(msgID, recipient, errMsg string) {
+func LogHardBounce(username, msgID, recipient, errMsg string) {
+	statDate := time.Now().Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status": "hard_bounce",
 			"error":  errMsg,
 		})
+	incrementDailyStat(statDate, username, "hard_bounce", 1)
+	incrementDailyStat(statDate, "", "hard_bounce", 1)
 
 	// Upsert into bounce list.
 	var entry BounceList
@@ -568,11 +634,257 @@ func SetCFToken(username, token string) error {
 // ─────────────────────────── Suppression ────────────────────────────────────
 
 // LogSuppressed updates an email log entry status to "suppressed".
-func LogSuppressed(msgID, recipient, reason string) {
+func LogSuppressed(username, msgID, recipient, reason string) {
+	statDate := time.Now().Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status": "suppressed",
 			"error":  reason,
 		})
+	incrementDailyStat(statDate, username, "suppressed", 1)
+	incrementDailyStat(statDate, "", "suppressed", 1)
+}
+
+// ─────────────────────────── Data Management ───────────────────────────────────
+
+// AggregateStats holds totals for dashboard/reports.
+type AggregateStats struct {
+	Sent       int64
+	Delivered  int64
+	Failed     int64
+	Deferred   int64
+	HardBounce int64
+	SoftBounce int64
+	Suppressed int64
+	Queued     int64
+}
+
+// GetAggregateStatsAdmin returns system-wide stats, preferring DailyStats when available.
+func GetAggregateStatsAdmin() AggregateStats {
+	var s AggregateStats
+	DB.Model(&DailyStats{}).Where("username = ?", "").
+		Select("COALESCE(SUM(sent),0) as sent, COALESCE(SUM(delivered),0) as delivered, COALESCE(SUM(failed),0) as failed, COALESCE(SUM(deferred),0) as deferred, COALESCE(SUM(hard_bounce),0) as hard_bounce, COALESCE(SUM(soft_bounce),0) as soft_bounce, COALESCE(SUM(suppressed),0) as suppressed").
+		Scan(&s)
+	if s.Sent == 0 && s.Delivered == 0 {
+		DB.Model(&EmailLog{}).Count(&s.Sent)
+		DB.Model(&EmailLog{}).Where("status = ?", "delivered").Count(&s.Delivered)
+		DB.Model(&EmailLog{}).Where("status = ?", "failed").Count(&s.Failed)
+		DB.Model(&EmailLog{}).Where("status = ?", "deferred").Count(&s.Deferred)
+		DB.Model(&EmailLog{}).Where("status = ?", "hard_bounce").Count(&s.HardBounce)
+		DB.Model(&EmailLog{}).Where("status IN ?", []string{"soft_bounce", "deferred"}).Count(&s.SoftBounce)
+		DB.Model(&EmailLog{}).Where("status = ?", "suppressed").Count(&s.Suppressed)
+		DB.Model(&EmailLog{}).Where("status = ?", "queued").Count(&s.Queued)
+	} else {
+		DB.Model(&EmailLog{}).Where("status IN ?", []string{"queued", "deferred"}).Count(&s.Queued)
+	}
+	return s
+}
+
+// GetAggregateStatsUser returns stats for a user, preferring DailyStats when available.
+func GetAggregateStatsUser(username string) AggregateStats {
+	var s AggregateStats
+	DB.Model(&DailyStats{}).Where("username = ?", username).
+		Select("COALESCE(SUM(sent),0) as sent, COALESCE(SUM(delivered),0) as delivered, COALESCE(SUM(failed),0) as failed, COALESCE(SUM(deferred),0) as deferred, COALESCE(SUM(hard_bounce),0) as hard_bounce, COALESCE(SUM(soft_bounce),0) as soft_bounce, COALESCE(SUM(suppressed),0) as suppressed").
+		Scan(&s)
+	if s.Sent == 0 && s.Delivered == 0 {
+		DB.Model(&EmailLog{}).Where("username = ?", username).Count(&s.Sent)
+		DB.Model(&EmailLog{}).Where("username = ? AND status = ?", username, "delivered").Count(&s.Delivered)
+		DB.Model(&EmailLog{}).Where("username = ? AND status = ?", username, "failed").Count(&s.Failed)
+		DB.Model(&EmailLog{}).Where("username = ? AND status = ?", username, "deferred").Count(&s.Deferred)
+		DB.Model(&EmailLog{}).Where("username = ? AND status = ?", username, "hard_bounce").Count(&s.HardBounce)
+		DB.Model(&EmailLog{}).Where("username = ? AND status IN ?", username, []string{"soft_bounce", "deferred"}).Count(&s.SoftBounce)
+		DB.Model(&EmailLog{}).Where("username = ? AND status = ?", username, "suppressed").Count(&s.Suppressed)
+		DB.Model(&EmailLog{}).Where("username = ? AND status = ?", username, "queued").Count(&s.Queued)
+	} else {
+		DB.Model(&EmailLog{}).Where("username = ? AND status IN ?", username, []string{"queued", "deferred"}).Count(&s.Queued)
+	}
+	return s
+}
+
+// GetTodayYesterdayMonthAdmin returns sent counts for today, yesterday, and this month.
+func GetTodayYesterdayMonthAdmin() (today, yesterday, month int64) {
+	t := time.Now().Truncate(24 * time.Hour)
+	todayStr := t.Format("2006-01-02")
+	yesterdayStr := t.AddDate(0, 0, -1).Format("2006-01-02")
+	monthStart := t.AddDate(0, -1, 0).Format("2006-01-02")
+	var d DailyStats
+	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", todayStr, "").First(&d).Error; err == nil {
+		today = d.Sent
+	} else {
+		DB.Model(&EmailLog{}).Where("sent_at >= ?", t).Count(&today)
+	}
+	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", yesterdayStr, "").First(&d).Error; err == nil {
+		yesterday = d.Sent
+	} else {
+		DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ?", t.AddDate(0, 0, -1), t).Count(&yesterday)
+	}
+	DB.Model(&DailyStats{}).Where("username = ? AND stat_date >= ?", "", monthStart).Select("COALESCE(SUM(sent),0)").Scan(&month)
+	if month == 0 {
+		DB.Model(&EmailLog{}).Where("sent_at >= ?", t.AddDate(0, -1, 0)).Count(&month)
+	}
+	return today, yesterday, month
+}
+
+// GetTodayYesterdayMonthUser returns sent counts for a user.
+func GetTodayYesterdayMonthUser(username string) (today, yesterday, month int64) {
+	t := time.Now().Truncate(24 * time.Hour)
+	todayStr := t.Format("2006-01-02")
+	yesterdayStr := t.AddDate(0, 0, -1).Format("2006-01-02")
+	monthStart := t.AddDate(0, -1, 0).Format("2006-01-02")
+	var d DailyStats
+	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", todayStr, username).First(&d).Error; err == nil {
+		today = d.Sent
+	} else {
+		DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ?", username, t).Count(&today)
+	}
+	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", yesterdayStr, username).First(&d).Error; err == nil {
+		yesterday = d.Sent
+	} else {
+		DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ? AND sent_at < ?", username, t.AddDate(0, 0, -1), t).Count(&yesterday)
+	}
+	DB.Model(&DailyStats{}).Where("username = ? AND stat_date >= ?", username, monthStart).Select("COALESCE(SUM(sent),0)").Scan(&month)
+	if month == 0 {
+		DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ?", username, t.AddDate(0, -1, 0)).Count(&month)
+	}
+	return today, yesterday, month
+}
+
+// GetDailyCountsAdmin returns delivered and hard_bounce counts per day for chart (admin).
+func GetDailyCountsAdmin(days int) (labels []string, delivered, bounced []int64) {
+	today := time.Now().Truncate(24 * time.Hour)
+	labels = make([]string, days)
+	delivered = make([]int64, days)
+	bounced = make([]int64, days)
+	for i := days - 1; i >= 0; i-- {
+		day := today.AddDate(0, 0, -i)
+		dateStr := day.Format("2006-01-02")
+		labels[days-1-i] = day.Format("Jan 2")
+		var d DailyStats
+		if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", dateStr, "").First(&d).Error; err == nil {
+			delivered[days-1-i] = d.Delivered
+			bounced[days-1-i] = d.HardBounce
+		} else {
+			DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "delivered").Count(&delivered[days-1-i])
+			DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "hard_bounce").Count(&bounced[days-1-i])
+		}
+	}
+	return labels, delivered, bounced
+}
+
+// GetDailyCountsUser returns delivered and hard_bounce counts per day for chart (user).
+func GetDailyCountsUser(username string, days int) (labels []string, delivered, bounced []int64) {
+	today := time.Now().Truncate(24 * time.Hour)
+	labels = make([]string, days)
+	delivered = make([]int64, days)
+	bounced = make([]int64, days)
+	for i := days - 1; i >= 0; i-- {
+		day := today.AddDate(0, 0, -i)
+		dateStr := day.Format("2006-01-02")
+		labels[days-1-i] = day.Format("Jan 2")
+		var d DailyStats
+		if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", dateStr, username).First(&d).Error; err == nil {
+			delivered[days-1-i] = d.Delivered
+			bounced[days-1-i] = d.HardBounce
+		} else {
+			DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ? AND sent_at < ? AND status = ?", username, day, day.Add(24*time.Hour), "delivered").Count(&delivered[days-1-i])
+			DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ? AND sent_at < ? AND status = ?", username, day, day.Add(24*time.Hour), "hard_bounce").Count(&bounced[days-1-i])
+		}
+	}
+	return labels, delivered, bounced
+}
+
+// AggregateEmailLogToDailyStats aggregates all EmailLog rows into DailyStats.
+// Merges with existing DailyStats (we write to both on each log), so we add EmailLog
+// counts to any dates not yet in DailyStats, or use max to avoid double-count.
+// For "delete logs only": we replace DailyStats from EmailLog to capture final state.
+func AggregateEmailLogToDailyStats() error {
+	type row struct {
+		StatDate   string
+		Username   string
+		Sent       int64
+		Delivered  int64
+		Failed     int64
+		Deferred   int64
+		HardBounce int64
+		SoftBounce int64
+		Suppressed int64
+	}
+	var rows []row
+	dateFn := "DATE(sent_at)"
+	if DB.Dialector.Name() == "sqlite" {
+		dateFn = "date(sent_at)"
+	}
+	DB.Raw(`SELECT `+dateFn+` as stat_date, COALESCE(username,'') as username,
+		COUNT(*) as sent,
+		SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END) as delivered,
+		SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed,
+		SUM(CASE WHEN status='deferred' THEN 1 ELSE 0 END) as deferred,
+		SUM(CASE WHEN status='hard_bounce' THEN 1 ELSE 0 END) as hard_bounce,
+		SUM(CASE WHEN status='soft_bounce' THEN 1 ELSE 0 END) as soft_bounce,
+		SUM(CASE WHEN status='suppressed' THEN 1 ELSE 0 END) as suppressed
+		FROM email_logs WHERE deleted_at IS NULL
+		GROUP BY `+dateFn+`, username`).Scan(&rows)
+
+	// Replace DailyStats for these (date,username) with aggregated values from EmailLog.
+	for _, r := range rows {
+		if r.StatDate == "" {
+			continue
+		}
+		var d DailyStats
+		err := DB.Where("stat_date = ? AND username = ?", r.StatDate, r.Username).First(&d).Error
+		if err != nil {
+			DB.Create(&DailyStats{
+				StatDate:   r.StatDate,
+				Username:   r.Username,
+				Sent:       r.Sent,
+				Delivered:  r.Delivered,
+				Failed:     r.Failed,
+				Deferred:   r.Deferred,
+				HardBounce: r.HardBounce,
+				SoftBounce: r.SoftBounce,
+				Suppressed: r.Suppressed,
+			})
+		} else {
+			// Use the greater of existing (from incremental writes) or aggregated
+			DB.Model(&d).Updates(map[string]interface{}{
+				"sent":        maxInt64(d.Sent, r.Sent),
+				"delivered":   maxInt64(d.Delivered, r.Delivered),
+				"failed":      maxInt64(d.Failed, r.Failed),
+				"deferred":    maxInt64(d.Deferred, r.Deferred),
+				"hard_bounce": maxInt64(d.HardBounce, r.HardBounce),
+				"soft_bounce": maxInt64(d.SoftBounce, r.SoftBounce),
+				"suppressed":  maxInt64(d.Suppressed, r.Suppressed),
+			})
+		}
+	}
+	return nil
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// DeleteAllEmailLogs permanently removes all email log rows.
+func DeleteAllEmailLogs() int64 {
+	res := DB.Unscoped().Where("1=1").Delete(&EmailLog{})
+	return res.RowsAffected
+}
+
+// DeleteLogsKeepStats aggregates EmailLog into DailyStats, then deletes all logs.
+func DeleteLogsKeepStats() (int64, error) {
+	if err := AggregateEmailLogToDailyStats(); err != nil {
+		return 0, err
+	}
+	return DeleteAllEmailLogs(), nil
+}
+
+// DeleteAllData removes EmailLog and DailyStats. Statistics will be reset.
+func DeleteAllData() (emailLogs int64, dailyStats int64) {
+	emailLogs = DeleteAllEmailLogs()
+	res := DB.Unscoped().Where("1=1").Delete(&DailyStats{})
+	return emailLogs, res.RowsAffected
 }

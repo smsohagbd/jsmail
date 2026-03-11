@@ -84,7 +84,7 @@ type SMTPRelay struct {
 	Port        int
 	Username    string
 	Password    string
-	UseTLS      bool
+	TLSMode     string // "none" | "starttls" | "ssl"
 	FromAddress string // override From when sending via this relay (required for rotation)
 }
 
@@ -1019,13 +1019,29 @@ func (e *Engine) pickRelay(username, mode string, relays []SMTPRelay) *SMTPRelay
 // deliverViaRelay sends all recipients of a message through an authenticated SMTP relay.
 func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, data []byte) error {
 	addr := fmt.Sprintf("%s:%d", relay.Host, relay.Port)
-	log.Printf("[DELIVERY]   relay connecting to %s …", addr)
-
-	conn, err := net.DialTimeout("tcp4", addr, e.connectTO)
-	if err != nil {
-		return fmt.Errorf("relay dial %s: %w", addr, err)
+	tlsMode := relay.TLSMode
+	if tlsMode == "" {
+		tlsMode = "starttls"
 	}
-	log.Printf("[DELIVERY]   relay TCP connected to %s", addr)
+	log.Printf("[DELIVERY]   relay connecting to %s (TLS: %s) …", addr, tlsMode)
+
+	var conn net.Conn
+	var err error
+	if tlsMode == "ssl" {
+		tlsCfg := &tls.Config{ServerName: relay.Host, MinVersion: tls.VersionTLS12}
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: e.connectTO}, "tcp4", addr, tlsCfg)
+		if err != nil {
+			return fmt.Errorf("relay TLS dial %s: %w", addr, err)
+		}
+		log.Printf("[DELIVERY]   relay TLS connected to %s", addr)
+	} else {
+		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
+		if err != nil {
+			return fmt.Errorf("relay dial %s: %w", addr, err)
+		}
+		log.Printf("[DELIVERY]   relay TCP connected to %s", addr)
+	}
+	defer conn.Close()
 
 	heloName := e.cfg.HeloName
 	if heloName == "" {
@@ -1034,7 +1050,6 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 
 	client, err := smtp.NewClient(conn, relay.Host)
 	if err != nil {
-		conn.Close()
 		return fmt.Errorf("relay new client: %w", err)
 	}
 	defer client.Close()
@@ -1043,7 +1058,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 		return fmt.Errorf("relay EHLO: %w", err)
 	}
 
-	if relay.UseTLS {
+	if tlsMode == "starttls" {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			tlsCfg := &tls.Config{ServerName: relay.Host, MinVersion: tls.VersionTLS12}
 			if err := client.StartTLS(tlsCfg); err != nil {

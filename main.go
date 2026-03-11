@@ -52,15 +52,15 @@ func main() {
 	eng.OnEvent = func(evt delivery.DeliveryEvent) {
 		switch evt.Status {
 		case "delivered":
-			appdb.LogDelivered(evt.MessageID, evt.To, evt.MXHost)
+			appdb.LogDelivered(evt.Username, evt.MessageID, evt.To, evt.MXHost)
 		case "failed":
-			appdb.LogFailed(evt.MessageID, evt.To, evt.Error)
+			appdb.LogFailed(evt.Username, evt.MessageID, evt.To, evt.Error)
 		case "deferred":
-			appdb.LogDeferred(evt.MessageID, evt.To, evt.Error)
+			appdb.LogDeferred(evt.Username, evt.MessageID, evt.To, evt.Error)
 		case "hard_bounce":
-			appdb.LogHardBounce(evt.MessageID, evt.To, evt.Error)
+			appdb.LogHardBounce(evt.Username, evt.MessageID, evt.To, evt.Error)
 		case "suppressed":
-			appdb.LogSuppressed(evt.MessageID, evt.To, evt.Error)
+			appdb.LogSuppressed(evt.Username, evt.MessageID, evt.To, evt.Error)
 		}
 	}
 
@@ -101,6 +101,14 @@ func main() {
 		dbRelays := appdb.GetActiveUserSMTPs(username)
 		out := make([]delivery.SMTPRelay, 0, len(dbRelays))
 		for _, r := range dbRelays {
+			tlsMode := r.TLSMode
+			if tlsMode == "" {
+				if r.UseTLS {
+					tlsMode = "starttls"
+				} else {
+					tlsMode = "none"
+				}
+			}
 			out = append(out, delivery.SMTPRelay{
 				ID:          r.ID,
 				Label:       r.Label,
@@ -108,7 +116,7 @@ func main() {
 				Port:        r.Port,
 				Username:    r.Username,
 				Password:    r.Password,
-				UseTLS:      r.UseTLS,
+				TLSMode:     tlsMode,
 				FromAddress: r.FromAddress,
 			})
 		}

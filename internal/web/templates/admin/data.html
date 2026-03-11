@@ -1,0 +1,59 @@
+{{define "title"}}Data Management — Admin{{end}}
+{{define "content"}}
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">Data Management</div>
+  <div class="page-sub">Purge logs to keep your database light. Statistics can be preserved when deleting logs.</div>
+</div>
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header"><span class="card-title">Current Data</span></div>
+  <div style="padding:20px;">
+    <div style="display:flex;gap:32px;flex-wrap:wrap;">
+      <div>
+        <span style="font-size:12px;color:#71717a;">Email log rows</span>
+        <div style="font-size:24px;font-weight:600;color:#e4e4e7;">{{.LogCount}}</div>
+      </div>
+      <div>
+        <span style="font-size:12px;color:#71717a;">Daily stat rows</span>
+        <div style="font-size:24px;font-weight:600;color:#e4e4e7;">{{.StatsCount}}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+  <div class="card" style="border:1px solid #27272a;">
+    <div class="card-header">
+      <span class="card-title">Delete logs only</span>
+      <span style="font-size:11px;color:#4ade80;background:#052e16;padding:2px 8px;border-radius:4px;">Keeps stats</span>
+    </div>
+    <div style="padding:20px;">
+      <p style="font-size:13px;color:#a1a1aa;margin:0 0 16px;">Removes all email sending logs but preserves aggregated statistics. Dashboard and Reports will still show total sent, delivered, bounced, etc.</p>
+      <p style="font-size:12px;color:#71717a;margin:0 0 16px;">Use this to lighten the database while keeping your delivery analytics.</p>
+      <form method="POST" action="/admin/data/delete-logs" onsubmit="return confirm('Delete all email logs? Statistics will be preserved.');">
+        <button type="submit" class="btn" style="background:#f97316;color:#fff;">Delete logs only</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card" style="border:1px solid #450a0a;">
+    <div class="card-header">
+      <span class="card-title">Delete all data</span>
+      <span style="font-size:11px;color:#f87171;background:#1c0606;padding:2px 8px;border-radius:4px;">Full reset</span>
+    </div>
+    <div style="padding:20px;">
+      <p style="font-size:13px;color:#a1a1aa;margin:0 0 16px;">Removes all email logs and statistics. Dashboard and Reports will show zeros. Use when you want a complete reset.</p>
+      <p style="font-size:12px;color:#71717a;margin:0 0 16px;">This cannot be undone.</p>
+      <form method="POST" action="/admin/data/delete-all" onsubmit="return confirm('Delete ALL logs and statistics? This cannot be undone.');">
+        <button type="submit" class="btn" style="background:#dc2626;color:#fff;">Delete all</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+</div>
+{{end}}

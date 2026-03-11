@@ -65,15 +65,9 @@ func merge(base, page map[string]interface{}) map[string]interface{} {
 
 func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
-	today := time.Now().Truncate(24 * time.Hour)
 
-	var totalToday, totalYesterday, totalMonth, pending int64
-	base := h.DB.Model(&appdb.EmailLog{}).Where("username = ?", claims.Username)
-	base.Where("sent_at >= ?", today).Count(&totalToday)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND sent_at >= ? AND sent_at < ?",
-		claims.Username, today.AddDate(0, 0, -1), today).Count(&totalYesterday)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND sent_at >= ?",
-		claims.Username, today.AddDate(0, -1, 0)).Count(&totalMonth)
+	totalToday, totalYesterday, totalMonth := appdb.GetTodayYesterdayMonthUser(claims.Username)
+	var pending int64
 	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status IN ?",
 		claims.Username, []string{"queued", "deferred"}).Count(&pending)
 
@@ -377,7 +371,10 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("smtp_pass")
 	label := strings.TrimSpace(r.FormValue("label"))
 	fromAddress := strings.TrimSpace(r.FormValue("from_address"))
-	useTLS := r.FormValue("use_tls") == "on"
+	tlsMode := strings.TrimSpace(r.FormValue("tls_mode"))
+	if tlsMode != "none" && tlsMode != "starttls" && tlsMode != "ssl" {
+		tlsMode = "starttls"
+	}
 	port, _ := strconv.Atoi(portStr)
 	if port == 0 {
 		port = 587
@@ -387,7 +384,7 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Test the connection before saving.
-	if err := testSMTPConn(host, port, username, password, useTLS); err != nil {
+	if err := testSMTPConn(host, port, username, password, tlsMode); err != nil {
 		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("connection failed: "+err.Error()), http.StatusFound)
 		return
 	}
@@ -400,7 +397,8 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 		Username:      username,
 		Password:      password,
 		FromAddress:   fromAddress,
-		UseTLS:        useTLS,
+		TLSMode:       tlsMode,
+		UseTLS:        tlsMode == "starttls" || tlsMode == "ssl",
 		Active:        true,
 	}
 	if err := appdb.AddUserSMTP(entry); err != nil {
@@ -531,14 +529,21 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 		}
 		smtpUser := strings.TrimSpace(parts[userIdx])
 		smtpPass := strings.TrimSpace(parts[passIdx])
-		useTLS := true // default on
+		tlsMode := "starttls"
 		if tlsIdx >= 0 && tlsIdx < len(parts) {
-			v := strings.TrimSpace(parts[tlsIdx])
-			useTLS = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+			v := strings.TrimSpace(strings.ToLower(parts[tlsIdx]))
+			switch v {
+			case "0", "none", "no", "false":
+				tlsMode = "none"
+			case "1", "starttls", "yes", "true":
+				tlsMode = "starttls"
+			case "2", "ssl", "tls":
+				tlsMode = "ssl"
+			}
 		}
 
 		if testAll {
-			if err := testSMTPConn(host, port, smtpUser, smtpPass, useTLS); err != nil {
+			if err := testSMTPConn(host, port, smtpUser, smtpPass, tlsMode); err != nil {
 				errs = append(errs, fmt.Sprintf("%s:%d — test failed: %v", host, port, err))
 				skipped++
 				continue
@@ -557,7 +562,8 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 			Username:      smtpUser,
 			Password:      smtpPass,
 			FromAddress:   fromAddr,
-			UseTLS:        useTLS,
+			TLSMode:       tlsMode,
+			UseTLS:        tlsMode != "none",
 			Active:        true,
 		}
 		if err := appdb.AddUserSMTP(entry); err != nil {
@@ -590,14 +596,17 @@ func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 	portStr := strings.TrimSpace(r.FormValue("port"))
 	username := strings.TrimSpace(r.FormValue("smtp_user"))
 	password := r.FormValue("smtp_pass")
-	useTLS := r.FormValue("use_tls") == "true"
+	tlsMode := r.FormValue("tls_mode")
+	if tlsMode != "none" && tlsMode != "starttls" && tlsMode != "ssl" {
+		tlsMode = "starttls"
+	}
 	port, _ := strconv.Atoi(portStr)
 	if port == 0 {
 		port = 587
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := testSMTPConn(host, port, username, password, useTLS); err != nil {
+	if err := testSMTPConn(host, port, username, password, tlsMode); err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
 		return
 	}
@@ -605,16 +614,26 @@ func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // testSMTPConn tries to connect and authenticate to an SMTP server.
-func testSMTPConn(host string, port int, username, password string, useTLS bool) error {
+func testSMTPConn(host string, port int, username, password, tlsMode string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
-	conn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+	var conn net.Conn
+	var err error
+	if tlsMode == "ssl" {
+		tlsCfg := &tls.Config{ServerName: host, InsecureSkipVerify: false}
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp4", addr, tlsCfg)
+		if err != nil {
+			return fmt.Errorf("TLS connect: %w", err)
+		}
+	} else {
+		conn, err = net.DialTimeout("tcp4", addr, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
 	}
+	defer conn.Close()
 
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
-		conn.Close()
 		return fmt.Errorf("SMTP handshake: %w", err)
 	}
 	defer client.Close()
@@ -623,11 +642,10 @@ func testSMTPConn(host string, port int, username, password string, useTLS bool)
 		return fmt.Errorf("EHLO: %w", err)
 	}
 
-	if useTLS {
+	if tlsMode == "starttls" {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			tlsCfg := &tls.Config{ServerName: host, InsecureSkipVerify: false}
 			if err := client.StartTLS(tlsCfg); err != nil {
-				// Not fatal — some servers require STARTTLS, some don't. Try auth anyway.
 				_ = err
 			}
 		}
@@ -649,14 +667,9 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	uname := claims.Username
 
-	var totalSent, delivered, hardBounce, softBounce, failed, deferred, queued int64
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ?", uname).Count(&totalSent)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "delivered").Count(&delivered)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "hard_bounce").Count(&hardBounce)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status IN ?", uname, []string{"soft_bounce", "deferred"}).Count(&softBounce)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "failed").Count(&failed)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "deferred").Count(&deferred)
-	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status = ?", uname, "queued").Count(&queued)
+	s := appdb.GetAggregateStatsUser(uname)
+	totalSent, delivered, hardBounce, failed, deferred, queued := s.Sent, s.Delivered, s.HardBounce, s.Failed, s.Deferred, s.Queued
+	softBounce := s.SoftBounce + s.Deferred // combined for display
 
 	attempted := totalSent - queued - deferred
 	var deliveryRate float64
@@ -672,22 +685,7 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 		FROM email_logs WHERE deleted_at IS NULL AND username = ?
 		GROUP BY domain ORDER BY count DESC LIMIT 10`, uname).Scan(&topDomains)
 
-	today := time.Now().Truncate(24 * time.Hour)
-	days := 30
-	chartLabels := make([]string, days)
-	chartDelivered := make([]int64, days)
-	chartBounced := make([]int64, days)
-	for i := days - 1; i >= 0; i-- {
-		day := today.AddDate(0, 0, -i)
-		idx := days - 1 - i
-		chartLabels[idx] = day.Format("Jan 2")
-		h.DB.Model(&appdb.EmailLog{}).
-			Where("username = ? AND sent_at >= ? AND sent_at < ? AND status = ?", uname, day, day.Add(24*time.Hour), "delivered").
-			Count(&chartDelivered[idx])
-		h.DB.Model(&appdb.EmailLog{}).
-			Where("username = ? AND sent_at >= ? AND sent_at < ? AND status = ?", uname, day, day.Add(24*time.Hour), "hard_bounce").
-			Count(&chartBounced[idx])
-	}
+	chartLabels, chartDelivered, chartBounced := appdb.GetDailyCountsUser(uname, 30)
 	labelsJSON, _ := json.Marshal(chartLabels)
 	deliveredJSON, _ := json.Marshal(chartDelivered)
 	bouncedJSON, _ := json.Marshal(chartBounced)

@@ -169,6 +169,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/suppression", webauth.RequireAdmin(ah.Suppression))
 	mux.HandleFunc("/admin/suppression/delete", webauth.RequireAdmin(ah.DeleteSuppression))
 	mux.HandleFunc("/admin/suppression/add", webauth.RequireAdmin(ah.AddSuppressionAdmin))
+	mux.HandleFunc("/admin/data", webauth.RequireAdmin(ah.DataManagement))
+	mux.HandleFunc("/admin/data/delete-logs", webauth.RequireAdmin(ah.DataManagementDeleteLogs))
+	mux.HandleFunc("/admin/data/delete-all", webauth.RequireAdmin(ah.DataManagementDeleteAll))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer, ConfigSnapshot: s.cfg}

@@ -80,30 +80,17 @@ type TemplateRenderer interface {
 func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 
-	var totalToday, totalYesterday, totalMonth, pending int64
-	today := time.Now().Truncate(24 * time.Hour)
-	yesterday := today.AddDate(0, 0, -1)
-
-	h.DB.Model(&appdb.EmailLog{}).Where("sent_at >= ?", today).Count(&totalToday)
-	h.DB.Model(&appdb.EmailLog{}).Where("sent_at >= ? AND sent_at < ?", yesterday, today).Count(&totalYesterday)
-	h.DB.Model(&appdb.EmailLog{}).Where("sent_at >= ?", today.AddDate(0, -1, 0)).Count(&totalMonth)
+	totalToday, totalYesterday, totalMonth := appdb.GetTodayYesterdayMonthAdmin()
+	var pending int64
 	h.DB.Model(&appdb.EmailLog{}).Where("status IN ?", []string{"queued", "deferred"}).Count(&pending)
 
 	var totalUsers int64
 	h.DB.Model(&appdb.User{}).Where("role = ?", "user").Count(&totalUsers)
 
 	// Last 7 days chart data
-	labels := make([]string, 7)
-	counts := make([]int64, 7)
-	for i := 6; i >= 0; i-- {
-		day := today.AddDate(0, 0, -i)
-		labels[6-i] = day.Format("Jan 2")
-		h.DB.Model(&appdb.EmailLog{}).
-			Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "delivered").
-			Count(&counts[6-i])
-	}
+	labels, delivered, _ := appdb.GetDailyCountsAdmin(7)
 	labelsJSON, _ := json.Marshal(labels)
-	countsJSON, _ := json.Marshal(counts)
+	countsJSON, _ := json.Marshal(delivered)
 
 	// Recent logs
 	var recentLogs []appdb.EmailLog
@@ -348,6 +335,50 @@ func (h *Handler) DeleteQueueItem(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/queue", http.StatusFound)
 }
 
+// ──────────────────────────── Data Management ─────────────────────────────────
+
+func (h *Handler) DataManagement(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	var logCount, statsCount int64
+	h.DB.Model(&appdb.EmailLog{}).Count(&logCount)
+	h.DB.Model(&appdb.DailyStats{}).Count(&statsCount)
+	data := map[string]interface{}{
+		"Page":       "data",
+		"ActiveUser": claims.Username,
+		"LogCount":   logCount,
+		"StatsCount": statsCount,
+	}
+	if ok := r.URL.Query().Get("ok"); ok != "" {
+		data["FlashOK"] = ok
+	}
+	if err := r.URL.Query().Get("err"); err != "" {
+		data["FlashErr"] = err
+	}
+	h.Tmpl.Render(w, "admin/data", data)
+}
+
+func (h *Handler) DataManagementDeleteLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/data", http.StatusFound)
+		return
+	}
+	deleted, err := appdb.DeleteLogsKeepStats()
+	if err != nil {
+		http.Redirect(w, r, "/admin/data?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/data?ok="+url.QueryEscape(fmt.Sprintf("Deleted %d log rows. Statistics preserved.", deleted)), http.StatusFound)
+}
+
+func (h *Handler) DataManagementDeleteAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/data", http.StatusFound)
+		return
+	}
+	logs, stats := appdb.DeleteAllData()
+	http.Redirect(w, r, "/admin/data?ok="+url.QueryEscape(fmt.Sprintf("Deleted %d log rows and %d stat rows. All data cleared.", logs, stats)), http.StatusFound)
+}
+
 // ──────────────────────────── Throttle ───────────────────────────────────────
 
 func (h *Handler) Throttle(w http.ResponseWriter, r *http.Request) {
@@ -444,25 +475,18 @@ type senderStat struct {
 func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 
-	// Overall totals.
-	var totalSent, delivered, hardBounce, softBounce, failed, deferred, queued, bounceListTotal int64
-	h.DB.Model(&appdb.EmailLog{}).Count(&totalSent)
-	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "delivered").Count(&delivered)
-	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "hard_bounce").Count(&hardBounce)
-	h.DB.Model(&appdb.EmailLog{}).Where("status IN ?", []string{"soft_bounce", "deferred"}).Count(&softBounce)
-	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "failed").Count(&failed)
-	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "deferred").Count(&deferred)
-	h.DB.Model(&appdb.EmailLog{}).Where("status = ?", "queued").Count(&queued)
+	s := appdb.GetAggregateStatsAdmin()
+	totalSent, delivered, hardBounce, failed, deferred, queued := s.Sent, s.Delivered, s.HardBounce, s.Failed, s.Deferred, s.Queued
+	softBounce := s.SoftBounce + s.Deferred // combined for "Soft Bounce / Deferred" display
+	var bounceListTotal int64
 	h.DB.Model(&appdb.BounceList{}).Count(&bounceListTotal)
 
-	// Delivery rate (non-queued/deferred attempts).
 	attempted := totalSent - queued - deferred
 	var deliveryRate float64
 	if attempted > 0 {
 		deliveryRate = float64(delivered) / float64(attempted) * 100
 	}
 
-	// Top 10 recipient domains.
 	type domainRow struct {
 		Domain string
 		Count  int64
@@ -472,7 +496,6 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 		FROM email_logs WHERE deleted_at IS NULL
 		GROUP BY domain ORDER BY count DESC LIMIT 10`).Scan(&topDomains)
 
-	// Top 10 senders.
 	var topSenders []struct {
 		Username string
 		Count    int64
@@ -481,23 +504,7 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 		Select("username, COUNT(*) as count").
 		Group("username").Order("count DESC").Limit(10).Scan(&topSenders)
 
-	// Last 30 days delivery chart.
-	today := time.Now().Truncate(24 * time.Hour)
-	days := 30
-	chartLabels := make([]string, days)
-	chartDelivered := make([]int64, days)
-	chartBounced := make([]int64, days)
-	for i := days - 1; i >= 0; i-- {
-		day := today.AddDate(0, 0, -i)
-		idx := days - 1 - i
-		chartLabels[idx] = day.Format("Jan 2")
-		h.DB.Model(&appdb.EmailLog{}).
-			Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "delivered").
-			Count(&chartDelivered[idx])
-		h.DB.Model(&appdb.EmailLog{}).
-			Where("sent_at >= ? AND sent_at < ? AND status = ?", day, day.Add(24*time.Hour), "hard_bounce").
-			Count(&chartBounced[idx])
-	}
+	chartLabels, chartDelivered, chartBounced := appdb.GetDailyCountsAdmin(30)
 	labelsJSON, _ := json.Marshal(chartLabels)
 	deliveredJSON, _ := json.Marshal(chartDelivered)
 	bouncedJSON, _ := json.Marshal(chartBounced)
