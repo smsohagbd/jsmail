@@ -121,7 +121,9 @@ func (s *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 		return errors.New("550 5.1.1 address rejected — permanently bounced")
 	}
 	s.to = append(s.to, to)
-	log.Printf("[SMTP]   RCPT TO              ip=%s to=%q", s.remoteIP, to)
+	if s.backend.cfg.VerboseLog {
+		log.Printf("[SMTP]   RCPT TO              ip=%s to=%q", s.remoteIP, to)
+	}
 	return nil
 }
 
@@ -168,8 +170,10 @@ func (s *session) Data(r io.Reader) error {
 	}
 	// Log to DB if available
 	appdb.LogQueued(s.authUser, msg.ID, msg.From, msg.To)
-	log.Printf("[SMTP] ✓ message queued       ip=%s id=%s from=%s to=%v",
-		s.remoteIP, msg.ID, msg.From, msg.To)
+	if s.backend.cfg.VerboseLog {
+		log.Printf("[SMTP] ✓ message queued       ip=%s id=%s from=%s to=%v",
+			s.remoteIP, msg.ID, msg.From, msg.To)
+	}
 	return nil
 }
 
