@@ -63,31 +63,46 @@
   </form>
 </div>
 
-<!-- Master config: applies to all IPs when no custom domain rule exists -->
+<!-- Master domain rules: per-domain limits for all IPs when no IP-specific rule exists -->
 <div class="card" style="margin-bottom:16px;padding:16px 20px;">
   <div class="card-header" style="margin-bottom:12px;">
-    <span class="card-title">Master Rate Limits</span>
-    <span style="font-size:12px;color:#52525b;font-weight:400;">Applies to all IPs when no custom domain rule exists</span>
+    <span class="card-title">Master Domain Rules</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">Per-domain limits for all IPs. No default — each domain needs its own rule.</span>
   </div>
-  <form method="POST" action="/admin/ippool/master/save" style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
-    <div class="form-group" style="margin:0;">
-      <label class="form-label" style="font-size:11px;">Per Min</label>
-      <input type="number" name="per_min" class="form-input" style="width:80px;" min="0" value="{{.MasterPerMin}}" placeholder="0"/>
-    </div>
-    <div class="form-group" style="margin:0;">
-      <label class="form-label" style="font-size:11px;">Per Hour</label>
-      <input type="number" name="per_hour" class="form-input" style="width:80px;" min="0" value="{{.MasterPerHour}}" placeholder="0"/>
-    </div>
-    <div class="form-group" style="margin:0;">
-      <label class="form-label" style="font-size:11px;">Per Day</label>
-      <input type="number" name="per_day" class="form-input" style="width:80px;" min="0" value="{{.MasterPerDay}}" placeholder="0"/>
-    </div>
-    <div class="form-group" style="margin:0;">
-      <label class="form-label" style="font-size:11px;">Interval (sec)</label>
-      <input type="number" name="interval_sec" class="form-input" style="width:80px;" min="0" value="{{.MasterIntervalSec}}" placeholder="0"/>
-    </div>
-    <button type="submit" class="btn btn-primary">Save Master Config</button>
-    <span style="font-size:12px;color:#52525b;align-self:center;">0 = no limit. Custom domain rules override these for that IP+domain.</span>
+  <table class="data-table" style="margin-bottom:16px;">
+    <thead><tr>
+      <th style="padding-left:20px;">Domain</th>
+      <th>/min</th><th>/hour</th><th>/day</th><th>Interval</th>
+      <th style="padding-right:12px;"></th>
+    </tr></thead>
+    <tbody>
+      {{range .MasterRules}}
+      <tr>
+        <td style="padding-left:20px;font-family:monospace;">{{.Domain}}</td>
+        <td>{{if .PerMin}}{{.PerMin}}{{else}}—{{end}}</td>
+        <td>{{if .PerHour}}{{.PerHour}}{{else}}—{{end}}</td>
+        <td>{{if .PerDay}}{{.PerDay}}{{else}}—{{end}}</td>
+        <td>{{if .IntervalSec}}{{.IntervalSec}}s{{else}}—{{end}}</td>
+        <td style="padding-right:12px;">
+          <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;" onclick="editMasterRule({{.ID}},'{{.Domain}}',{{.PerMin}},{{.PerHour}},{{.PerDay}},{{.IntervalSec}})">Edit</button>
+          <form method="POST" action="/admin/ippool/master/delete" style="display:inline;">
+            <input type="hidden" name="id" value="{{.ID}}"/>
+            <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#f87171;" onclick="return confirm('Remove this master rule?')">Del</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="6" style="padding:16px 20px;color:#52525b;">No master rules. Add per-domain rules — IP base limits apply when no rule matches.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  <form method="POST" action="/admin/ippool/master/add" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+    <div><label class="form-label">Domain</label><input class="form-input" name="domain" placeholder="gmail.com" style="width:120px;" required/></div>
+    <div><label class="form-label">/min</label><input class="form-input" name="per_min" type="number" min="0" value="0" style="width:70px;"/></div>
+    <div><label class="form-label">/hour</label><input class="form-input" name="per_hour" type="number" min="0" value="0" style="width:70px;"/></div>
+    <div><label class="form-label">/day</label><input class="form-input" name="per_day" type="number" min="0" value="0" style="width:70px;"/></div>
+    <div><label class="form-label">Interval</label><input class="form-input" name="interval_sec" type="number" min="0" value="0" placeholder="sec" style="width:60px;"/></div>
+    <button type="submit" class="btn btn-primary">Add master rule</button>
   </form>
 </div>
 
@@ -380,6 +395,26 @@
   </div>
 </div>
 
+<!-- Edit master rule modal -->
+<div id="edit-master-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:102;align-items:center;justify-content:center;">
+  <div class="card" style="width:400px;">
+    <div class="card-header"><span class="card-title">Edit master rule</span><button onclick="document.getElementById('edit-master-modal').style.display='none'" class="btn btn-ghost">✕</button></div>
+    <div class="card-body" style="padding:20px;">
+      <form method="POST" action="/admin/ippool/master/update">
+        <input type="hidden" name="id" id="mr-id"/>
+        <div class="form-group"><label class="form-label">Domain</label><input class="form-input" name="domain" id="mr-domain" required/></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+          <div class="form-group"><label class="form-label">/min</label><input class="form-input" name="per_min" id="mr-permin" type="number" min="0"/></div>
+          <div class="form-group"><label class="form-label">/hour</label><input class="form-input" name="per_hour" id="mr-perhour" type="number" min="0"/></div>
+          <div class="form-group"><label class="form-label">/day</label><input class="form-input" name="per_day" id="mr-perday" type="number" min="0"/></div>
+        </div>
+        <div class="form-group"><label class="form-label">Interval (sec)</label><input class="form-input" name="interval_sec" id="mr-interval" type="number" min="0" value="0"/></div>
+        <div style="display:flex;gap:8px;margin-top:12px;"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-ghost" onclick="document.getElementById('edit-master-modal').style.display='none'">Cancel</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <script>
 var currentView = null;
 function toggleView(v) {
@@ -420,6 +455,15 @@ function editDomainRule(id, ipPoolId, domain, perMin, perHour, perDay, intervalS
   document.getElementById('er-perday').value = perDay || 0;
   document.getElementById('er-interval').value = intervalSec || 0;
   document.getElementById('edit-rule-modal').style.display = 'flex';
+}
+function editMasterRule(id, domain, perMin, perHour, perDay, intervalSec) {
+  document.getElementById('mr-id').value = id;
+  document.getElementById('mr-domain').value = domain || '';
+  document.getElementById('mr-permin').value = perMin || 0;
+  document.getElementById('mr-perhour').value = perHour || 0;
+  document.getElementById('mr-perday').value = perDay || 0;
+  document.getElementById('mr-interval').value = intervalSec || 0;
+  document.getElementById('edit-master-modal').style.display = 'flex';
 }
 
 function testIP(ip, id) {

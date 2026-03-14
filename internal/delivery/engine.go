@@ -130,9 +130,9 @@ type Engine struct {
 	// Return nil or empty to use the system default IP.
 	IPPoolProvider func() []IPEntry
 
-	// IPPoolMasterProvider returns master limits that apply to ALL IPs when no custom domain rule exists.
-	// Return all zeros to disable. When an IP has a domain rule for the recipient domain, that rule is used instead.
-	IPPoolMasterProvider func() (perMin, perHour, perDay, intervalSec int)
+	// IPPoolMasterProvider returns master limits for a domain. Applies to ALL IPs when no IP-specific domain rule exists.
+	// Per-domain only: different rules for different domains. Returns found=false if no master rule for that domain.
+	IPPoolMasterProvider func(domain string) (perMin, perHour, perDay, intervalSec int, found bool)
 
 	// UserSMTPProvider returns the SMTP delivery mode and custom relay list for a user.
 	// mode: "system_only" | "custom_only" | "system_and_custom"
@@ -799,7 +799,7 @@ func (e *ipPoolLimitedError) Error() string {
 }
 
 // ipEffectiveLimits returns per-min/hour/day and interval for an IP+domain.
-// Priority: 1) IP's domain rule for this domain, 2) master rule (if set), 3) IP base limits.
+// Priority: 1) IP's domain rule for this domain, 2) master rule for this domain (if exists), 3) IP base limits.
 func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHour, perDay, intervalSec int) {
 	domain = strings.ToLower(domain)
 	for _, r := range entry.DomainRules {
@@ -813,10 +813,10 @@ func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHo
 			return
 		}
 	}
-	// No custom domain rule — use master if set, else IP base
+	// No IP-specific domain rule — use master rule for this domain if it exists
 	if e.IPPoolMasterProvider != nil {
-		mPerMin, mPerHour, mPerDay, mInterval := e.IPPoolMasterProvider()
-		if mPerMin > 0 || mPerHour > 0 || mPerDay > 0 || mInterval > 0 {
+		mPerMin, mPerHour, mPerDay, mInterval, found := e.IPPoolMasterProvider(domain)
+		if found {
 			return mPerMin, mPerHour, mPerDay, mInterval
 		}
 	}

@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -68,6 +67,7 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 		&Domain{},
 		&IPPool{},
 		&IPPoolDomainRule{},
+		&IPPoolMasterDomainRule{},
 		&UserSMTP{},
 		&Suppression{},
 	); err != nil {
@@ -350,27 +350,57 @@ func DeleteIPPoolEntry(id uint) {
 	DB.Unscoped().Delete(&IPPool{}, id)
 }
 
-// GetIPPoolMasterLimits returns master limits that apply to all IPs when no custom domain rule exists.
-func GetIPPoolMasterLimits() (perMin, perHour, perDay, intervalSec int) {
-	perMin, _ = strconv.Atoi(GetSetting("ip_pool_master_per_min", "0"))
-	perHour, _ = strconv.Atoi(GetSetting("ip_pool_master_per_hour", "0"))
-	perDay, _ = strconv.Atoi(GetSetting("ip_pool_master_per_day", "0"))
-	intervalSec, _ = strconv.Atoi(GetSetting("ip_pool_master_interval_sec", "0"))
-	return
+// GetAllIPPoolMasterDomainRules returns all master domain rules (per-domain limits for all IPs).
+func GetAllIPPoolMasterDomainRules() []IPPoolMasterDomainRule {
+	var rules []IPPoolMasterDomainRule
+	DB.Order("domain asc").Find(&rules)
+	return rules
 }
 
-// SetIPPoolMasterLimits saves master limits for the IP pool.
-func SetIPPoolMasterLimits(perMin, perHour, perDay, intervalSec int) error {
-	if err := SetSetting("ip_pool_master_per_min", strconv.Itoa(perMin)); err != nil {
-		return err
+// GetIPPoolMasterDomainRule returns the master rule for a domain, or nil if none.
+func GetIPPoolMasterDomainRule(domain string) *IPPoolMasterDomainRule {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return nil
 	}
-	if err := SetSetting("ip_pool_master_per_hour", strconv.Itoa(perHour)); err != nil {
-		return err
+	var r IPPoolMasterDomainRule
+	if err := DB.Where("domain = ?", domain).First(&r).Error; err != nil {
+		return nil
 	}
-	if err := SetSetting("ip_pool_master_per_day", strconv.Itoa(perDay)); err != nil {
-		return err
+	return &r
+}
+
+// AddIPPoolMasterDomainRule adds a master domain rule.
+func AddIPPoolMasterDomainRule(domain string, perMin, perHour, perDay, intervalSec int) error {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return fmt.Errorf("domain required")
 	}
-	return SetSetting("ip_pool_master_interval_sec", strconv.Itoa(intervalSec))
+	return DB.Create(&IPPoolMasterDomainRule{
+		Domain:     domain,
+		PerMin:     perMin,
+		PerHour:    perHour,
+		PerDay:     perDay,
+		IntervalSec: intervalSec,
+	}).Error
+}
+
+// UpdateIPPoolMasterDomainRule updates a master domain rule.
+func UpdateIPPoolMasterDomainRule(id uint, domain string, perMin, perHour, perDay, intervalSec int) error {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	return DB.Model(&IPPoolMasterDomainRule{}).Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"domain":       domain,
+			"per_min":      perMin,
+			"per_hour":     perHour,
+			"per_day":      perDay,
+			"interval_sec": intervalSec,
+		}).Error
+}
+
+// DeleteIPPoolMasterDomainRule deletes a master domain rule.
+func DeleteIPPoolMasterDomainRule(id uint) {
+	DB.Where("id = ?", id).Delete(&IPPoolMasterDomainRule{})
 }
 
 // GetIPPoolDomainRules returns all domain rules for an IP.

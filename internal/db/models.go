@@ -134,6 +134,17 @@ type IPPoolDomainRule struct {
 	IntervalSec int   `gorm:"default:0"` // min seconds between emails to this domain from this IP
 }
 
+// IPPoolMasterDomainRule holds per-domain rate limits that apply to ALL IPs when no IP-specific domain rule exists.
+// Each domain has its own rule; there is no default/fixed master rule.
+type IPPoolMasterDomainRule struct {
+	gorm.Model
+	Domain     string `gorm:"uniqueIndex;size:191;not null"` // e.g. gmail.com, yahoo.com
+	PerMin     int    `gorm:"default:0"`
+	PerHour    int    `gorm:"default:0"`
+	PerDay     int    `gorm:"default:0"`
+	IntervalSec int   `gorm:"default:0"`
+}
+
 // WarmupDayLimit returns the maximum emails/day this IP may send today based on
 // its warmup schedule.  Returns 0 (unlimited) when warmup is inactive or complete.
 // Schedule doubles each day: 50 → 100 → 200 → 400 → ... capped at PerDay.

@@ -669,18 +669,15 @@ func (h *Handler) IPPool(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	mPerMin, mPerHour, mPerDay, mInterval := appdb.GetIPPoolMasterLimits()
+	masterRules := appdb.GetAllIPPoolMasterDomainRules()
 	h.Tmpl.Render(w, "admin/ippool", map[string]interface{}{
-		"Page":             "ippool",
-		"ActiveUser":       claims.Username,
-		"Enabled":          appdb.GetSetting("ip_pool_enabled", "false") == "true",
-		"Entries":          views,
-		"MasterPerMin":     mPerMin,
-		"MasterPerHour":    mPerHour,
-		"MasterPerDay":     mPerDay,
-		"MasterIntervalSec": mInterval,
-		"FlashOK":          r.URL.Query().Get("ok"),
-		"FlashErr":         r.URL.Query().Get("err"),
+		"Page":           "ippool",
+		"ActiveUser":     claims.Username,
+		"Enabled":        appdb.GetSetting("ip_pool_enabled", "false") == "true",
+		"Entries":        views,
+		"MasterRules":    masterRules,
+		"FlashOK":        r.URL.Query().Get("ok"),
+		"FlashErr":       r.URL.Query().Get("err"),
 	})
 }
 
@@ -868,21 +865,49 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/forcefrom?ok=Config+updated", http.StatusFound)
 }
 
-func (h *Handler) SaveIPPoolMaster(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AddIPPoolMasterDomainRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
 		return
 	}
+	domain := strings.TrimSpace(r.FormValue("domain"))
 	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
 	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
 	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
 	intervalSec, _ := strconv.Atoi(r.FormValue("interval_sec"))
-	if err := appdb.SetIPPoolMasterLimits(perMin, perHour, perDay, intervalSec); err != nil {
-		log.Printf("ippool master: failed to save: %v", err)
-		http.Redirect(w, r, "/admin/ippool?err=Failed+to+save+master+config", http.StatusFound)
+	if err := appdb.AddIPPoolMasterDomainRule(domain, perMin, perHour, perDay, intervalSec); err != nil {
+		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/admin/ippool?ok=Master+config+updated", http.StatusFound)
+	http.Redirect(w, r, "/admin/ippool?ok=Master+rule+added", http.StatusFound)
+}
+
+func (h *Handler) UpdateIPPoolMasterDomainRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	domain := strings.TrimSpace(r.FormValue("domain"))
+	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
+	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
+	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
+	intervalSec, _ := strconv.Atoi(r.FormValue("interval_sec"))
+	if err := appdb.UpdateIPPoolMasterDomainRule(uint(id), domain, perMin, perHour, perDay, intervalSec); err != nil {
+		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ippool?ok=Master+rule+updated", http.StatusFound)
+}
+
+func (h *Handler) DeleteIPPoolMasterDomainRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	appdb.DeleteIPPoolMasterDomainRule(uint(id))
+	http.Redirect(w, r, "/admin/ippool?ok=Master+rule+removed", http.StatusFound)
 }
 
 // BulkAddIPPool imports multiple IPs from a textarea in "ip:hostname" format.
