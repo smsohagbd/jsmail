@@ -41,7 +41,9 @@ func newBackend(cfg config.SMTPConfig, q *queue.Queue, lookup UserLookup) *backe
 
 func (b *backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 	remoteIP := c.Conn().RemoteAddr().String()
-	log.Printf("[SMTP] ▶ new connection from %s", remoteIP)
+	if b.cfg.VerboseLog {
+		log.Printf("[SMTP] ▶ new connection from %s", remoteIP)
+	}
 	return &session{backend: b, remoteIP: remoteIP}, nil
 }
 
@@ -95,7 +97,9 @@ func (s *session) checkCredentials(username, password string) error {
 	}
 	s.authenticated = true
 	s.authUser = username
-	log.Printf("[SMTP] ✓ AUTH ok            ip=%s user=%q", s.remoteIP, username)
+	if s.backend.cfg.VerboseLog {
+		log.Printf("[SMTP] ✓ AUTH ok            ip=%s user=%q", s.remoteIP, username)
+	}
 	return nil
 }
 
@@ -105,7 +109,9 @@ func (s *session) Mail(from string, _ *smtp.MailOptions) error {
 		return errors.New("530 5.7.0 authentication required")
 	}
 	s.from = from
-	log.Printf("[SMTP]   MAIL FROM            ip=%s from=%q", s.remoteIP, from)
+	if s.backend.cfg.VerboseLog {
+		log.Printf("[SMTP]   MAIL FROM            ip=%s from=%q", s.remoteIP, from)
+	}
 	return nil
 }
 
@@ -126,8 +132,10 @@ func (s *session) Data(r io.Reader) error {
 		return fmt.Errorf("read data: %w", err)
 	}
 
-	log.Printf("[SMTP]   DATA received        ip=%s size=%d bytes from=%s to=%v",
-		s.remoteIP, len(data), s.from, s.to)
+	if s.backend.cfg.VerboseLog {
+		log.Printf("[SMTP]   DATA received        ip=%s size=%d bytes from=%s to=%v",
+			s.remoteIP, len(data), s.from, s.to)
+	}
 
 	from := s.from
 	// Force From: when enabled, replace From with rotated address (local@domain from list).
@@ -142,7 +150,9 @@ func (s *session) Data(r io.Reader) error {
 			domain := domains[int(idx)%len(domains)]
 			from = localPart + "@" + domain
 			data = email.RewriteFromHeader(data, from)
-			log.Printf("[SMTP]   force-from applied   ip=%s new_from=%s", s.remoteIP, from)
+			if s.backend.cfg.VerboseLog {
+				log.Printf("[SMTP]   force-from applied   ip=%s new_from=%s", s.remoteIP, from)
+			}
 		}
 	}
 
@@ -178,13 +188,17 @@ func extractLocalPart(addr string) string {
 }
 
 func (s *session) Reset() {
-	log.Printf("[SMTP]   RSET                 ip=%s", s.remoteIP)
+	if s.backend.cfg.VerboseLog {
+		log.Printf("[SMTP]   RSET                 ip=%s", s.remoteIP)
+	}
 	s.from = ""
 	s.to = nil
 }
 
 func (s *session) Logout() error {
-	log.Printf("[SMTP] ◀ disconnected         ip=%s user=%q", s.remoteIP, s.authUser)
+	if s.backend.cfg.VerboseLog {
+		log.Printf("[SMTP] ◀ disconnected         ip=%s user=%q", s.remoteIP, s.authUser)
+	}
 	return nil
 }
 

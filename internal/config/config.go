@@ -46,6 +46,7 @@ type SMTPConfig struct {
 	TLS            TLSConfig  `yaml:"tls"`
 	Auth           AuthConfig `yaml:"auth"`
 	MaxMessageSize int64      `yaml:"max_message_size"`
+	VerboseLog     bool       `yaml:"verbose_log"` // when true, log every MAIL/RCPT/DATA; when false, only errors
 }
 
 type TLSConfig struct {
@@ -75,6 +76,7 @@ type DeliveryConfig struct {
 	SendTimeout    string     `yaml:"send_timeout"`
 	HeloName       string     `yaml:"helo_name"`
 	DKIM           DKIMConfig `yaml:"dkim"`
+	VerboseLog     bool       `yaml:"verbose_log"` // when true, log every delivery step; when false, only errors
 }
 
 type DKIMConfig struct {
@@ -183,5 +185,13 @@ func applyDefaults(cfg *Config) {
 		if cfg.Database.Charset == "" {
 			cfg.Database.Charset = "utf8mb4"
 		}
+	}
+	// Verbose logging: level "debug" or "verbose" = full per-message logs; "info" (default) = quiet (errors only)
+	if cfg.Logging.Level == "" {
+		cfg.Logging.Level = "info"
+	}
+	if cfg.Logging.Level == "debug" || cfg.Logging.Level == "verbose" {
+		cfg.SMTP.VerboseLog = true
+		cfg.Delivery.VerboseLog = true
 	}
 }

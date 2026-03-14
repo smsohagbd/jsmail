@@ -210,6 +210,13 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 	return e
 }
 
+// logV prints only when VerboseLog is enabled (reduces terminal noise and I/O at high volume).
+func (e *Engine) logV(format string, args ...interface{}) {
+	if e.cfg.VerboseLog {
+		log.Printf(format, args...)
+	}
+}
+
 // Start launches worker goroutines and returns immediately.
 func (e *Engine) Start() {
 	log.Printf("delivery: starting %d workers", e.cfg.Workers)
@@ -284,12 +291,12 @@ func (e *Engine) worker(id int) {
 }
 
 func (e *Engine) deliver(msg *queue.Message) {
-	log.Printf("[DELIVERY] ══════════════════════════════════════════")
-	log.Printf("[DELIVERY]   id      = %s", msg.ID)
-	log.Printf("[DELIVERY]   from    = %s", msg.From)
-	log.Printf("[DELIVERY]   to      = %v", msg.To)
-	log.Printf("[DELIVERY]   attempt = %d / %d", msg.RetryCount+1, e.cfg.MaxRetries+1)
-	log.Printf("[DELIVERY]   size    = %d bytes", len(msg.Data))
+	e.logV("[DELIVERY] ══════════════════════════════════════════")
+	e.logV("[DELIVERY]   id      = %s", msg.ID)
+	e.logV("[DELIVERY]   from    = %s", msg.From)
+	e.logV("[DELIVERY]   to      = %v", msg.To)
+	e.logV("[DELIVERY]   attempt = %d / %d", msg.RetryCount+1, e.cfg.MaxRetries+1)
+	e.logV("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
 	data := injectMissingHeaders(msg.Data, e.cfg.HeloName)
 
@@ -305,7 +312,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 		var active []string
 		for _, rcpt := range msg.To {
 			if e.SuppressionChecker(msg.Username, rcpt) {
-				log.Printf("[DELIVERY] ⏭ %s suppressed — skipping", rcpt)
+				e.logV("[DELIVERY] ⏭ %s suppressed — skipping", rcpt)
 				if e.OnEvent != nil {
 					e.OnEvent(DeliveryEvent{
 						MessageID: msg.ID, Username: msg.Username,
@@ -318,7 +325,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			}
 		}
 		if len(active) == 0 {
-			log.Printf("[DELIVERY] ✓ message %s: all %d recipient(s) suppressed — done", msg.ID, len(msg.To))
+			e.logV("[DELIVERY] ✓ message %s: all %d recipient(s) suppressed — done", msg.ID, len(msg.To))
 			e.queue.Complete(msg.ID)
 			return
 		}
@@ -338,7 +345,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 		if mode == "custom_only" || mode == "system_and_custom" {
 			relay := e.pickRelay(msg.Username, mode, relays)
 			if relay != nil {
-				log.Printf("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
+				e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
 				fromAddr := msg.From
 				relayData := data
 				if relay.FromAddress != "" {
@@ -375,7 +382,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 						}
 					}
 				} else {
-					log.Printf("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
+					e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
 					e.queue.Complete(msg.ID)
 					if e.OnEvent != nil {
 						for _, to := range msg.To {
@@ -417,7 +424,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			if privPEM, sel, ok := e.DKIMKeyLoader(fromDomain); ok {
 				if dbSigner, err := parseDKIMSignerFromPEM(fromDomain, sel, privPEM); err == nil {
 					signer = dbSigner
-					log.Printf("[DELIVERY]   using DB DKIM key for domain %q selector=%q", fromDomain, sel)
+					e.logV("[DELIVERY]   using DB DKIM key for domain %q selector=%q", fromDomain, sel)
 				}
 			}
 		}
@@ -428,7 +435,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			log.Printf("[DELIVERY] ⚠ DKIM sign failed (sending unsigned): %v", err)
 		} else {
 			data = signed
-			log.Printf("[DELIVERY]   DKIM signed ok")
+			e.logV("[DELIVERY]   DKIM signed ok")
 		}
 	}
 
@@ -452,11 +459,11 @@ func (e *Engine) deliver(msg *queue.Message) {
 	hardBouncedRcpts := make(map[string]bool)
 
 	for domain, rcpts := range byDomain {
-		log.Printf("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
+		e.logV("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
 
 		// ── Per-user throttle check ───────────────────────────────────────────
 		if reason, retryAfter := e.checkThrottle(msg.Username, domain, true); reason != "" {
-			log.Printf("[DELIVERY] ⏳ %s", reason)
+			e.logV("[DELIVERY] ⏳ %s", reason)
 			if retryAfter < 5*time.Second {
 				retryAfter = 5 * time.Second
 			}
@@ -495,7 +502,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 				var poolErr *ipPoolLimitedError
 				errors.As(err, &poolErr)
 				wait := poolErr.waitFor
-				log.Printf("[IPPOOL] ⏳ message %s queued — waiting %v for an IP slot", msg.ID, wait)
+				e.logV("[IPPOOL] ⏳ message %s queued — waiting %v for an IP slot", msg.ID, wait)
 				e.queue.DeferNoIncrement(msg, wait, err.Error())
 				if e.OnEvent != nil {
 					for _, rcpt := range rcpts {
@@ -528,7 +535,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 				// Do NOT set lastErr — hard bounces are terminal per-recipient
 				// and must not trigger global retries.
 			} else if isTempRateLimitError(err) || strings.Contains(err.Error(), "rate-limited") {
-				log.Printf("[DELIVERY] ⏳ domain %q is rate-limited — will defer (retries not consumed)", domain)
+				e.logV("[DELIVERY] ⏳ domain %q is rate-limited — will defer (retries not consumed)", domain)
 				lastErr = err
 			} else {
 				lastErr = err
@@ -550,7 +557,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 		}
 
 		if deliveredRcpts > 0 {
-			log.Printf("[DELIVERY] ✓ message %s DELIVERED SUCCESSFULLY (%d/%d recipients)",
+			e.logV("[DELIVERY] ✓ message %s DELIVERED SUCCESSFULLY (%d/%d recipients)",
 				msg.ID, deliveredRcpts, len(msg.To))
 		} else {
 			log.Printf("[DELIVERY] ✗ message %s — all %d recipient(s) hard-bounced, removing from queue",
@@ -582,7 +589,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 	if isRateLimit {
 		// Use the domain's cooldown + a small buffer.
 		backoff := 35 * time.Minute
-		log.Printf("[DELIVERY] ⏳ message %s DEFERRED (rate-limited) — retry in %v (retries NOT consumed)",
+		e.logV("[DELIVERY] ⏳ message %s DEFERRED (rate-limited) — retry in %v (retries NOT consumed)",
 			msg.ID, backoff)
 		e.queue.DeferNoIncrement(msg, backoff, lastErr.Error())
 		if e.OnEvent != nil {
@@ -618,9 +625,9 @@ func (e *Engine) deliver(msg *queue.Message) {
 	if backoff > 24*time.Hour {
 		backoff = 24 * time.Hour
 	}
-	log.Printf("[DELIVERY] ⏳ message %s DEFERRED — retry in %v (attempt %d next)",
+	e.logV("[DELIVERY] ⏳ message %s DEFERRED — retry in %v (attempt %d next)",
 		msg.ID, backoff, msg.RetryCount+2)
-	log.Printf("[DELIVERY]   reason: %v", lastErr)
+	e.logV("[DELIVERY]   reason: %v", lastErr)
 	e.queue.Defer(msg, backoff, lastErr.Error())
 	if e.OnEvent != nil {
 		for _, to := range msg.To {
@@ -678,7 +685,7 @@ func (e *Engine) recordRateLimit(domain string) time.Duration {
 		backoff = 2 * time.Hour
 	}
 	c.until = time.Now().Add(backoff)
-	log.Printf("[DELIVERY] ⏳ domain %q rate-limited (421) — cooldown %v until %s (streak=%d)",
+	e.logV("[DELIVERY] ⏳ domain %q rate-limited (421) — cooldown %v until %s (streak=%d)",
 		domain, backoff, c.until.Format("15:04:05"), c.streak)
 	return backoff
 }
@@ -718,20 +725,20 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 	// Check per-domain 421 cooldown before doing anything.
 	if until := e.domainCooldownUntil(domain); !until.IsZero() && time.Now().Before(until) {
 		wait := time.Until(until).Round(time.Second)
-		log.Printf("[DELIVERY] ⏳ domain %q is rate-limited — skipping for %v", domain, wait)
+		e.logV("[DELIVERY] ⏳ domain %q is rate-limited — skipping for %v", domain, wait)
 		return "", fmt.Errorf("domain rate-limited (421 cooldown), retry after %v", wait)
 	}
 
-	log.Printf("[DELIVERY]   DNS MX lookup for %q", domain)
+	e.logV("[DELIVERY]   DNS MX lookup for %q", domain)
 	mxRecords, err := lookupMX(domain)
 	if err != nil {
 		log.Printf("[DELIVERY] ✗ MX lookup failed for %q: %v", domain, err)
 		return "", fmt.Errorf("MX lookup: %w", err)
 	}
 
-	log.Printf("[DELIVERY]   MX records for %q:", domain)
+	e.logV("[DELIVERY]   MX records for %q:", domain)
 	for _, mx := range mxRecords {
-		log.Printf("[DELIVERY]     pref=%d  host=%s", mx.Pref, mx.Host)
+		e.logV("[DELIVERY]     pref=%d  host=%s", mx.Pref, mx.Host)
 	}
 
 	var lastMXErr error
@@ -739,7 +746,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 
 	for _, mx := range mxRecords {
 		for _, port := range deliveryPorts {
-			log.Printf("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
+			e.logV("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
 
 			// Respect per-MX connection limit.
 			e.acquireMXSlot(mx.Host)
@@ -747,7 +754,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 			e.releaseMXSlot(mx.Host)
 
 			if mxErr == nil {
-				log.Printf("[DELIVERY] ✓ delivered via MX %s:%s", mx.Host, port)
+				e.logV("[DELIVERY] ✓ delivered via MX %s:%s", mx.Host, port)
 				e.clearCooldown(domain) // success — reset streak
 				return mx.Host, nil
 			}
@@ -887,21 +894,21 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 			elapsed := time.Since(c.lastSendAt).Seconds()
 			if elapsed < float64(intervalSec) {
 				wait := time.Duration(intervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
-				log.Printf("[IPPOOL]   IP %s: interval %ds not met for %s (wait %v)", entry.IP, intervalSec, domain, wait.Round(time.Second))
+				e.logV("[IPPOOL]   IP %s: interval %ds not met for %s (wait %v)", entry.IP, intervalSec, domain, wait.Round(time.Second))
 				continue
 			}
 		}
 
 		if perMin > 0 && c.minCount >= perMin {
-			log.Printf("[IPPOOL]   IP %s: per-min limit %d reached for %s, skipping", entry.IP, perMin, domain)
+			e.logV("[IPPOOL]   IP %s: per-min limit %d reached for %s, skipping", entry.IP, perMin, domain)
 			continue
 		}
 		if perHour > 0 && c.hourCount >= perHour {
-			log.Printf("[IPPOOL]   IP %s: per-hour limit %d reached for %s, skipping", entry.IP, perHour, domain)
+			e.logV("[IPPOOL]   IP %s: per-hour limit %d reached for %s, skipping", entry.IP, perHour, domain)
 			continue
 		}
 		if effectivePerDay > 0 && c.dayCount >= effectivePerDay {
-			log.Printf("[IPPOOL]   IP %s: per-day limit %d reached for %s, skipping", entry.IP, effectivePerDay, domain)
+			e.logV("[IPPOOL]   IP %s: per-day limit %d reached for %s, skipping", entry.IP, effectivePerDay, domain)
 			continue
 		}
 
@@ -951,7 +958,7 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 	if minWait <= 0 {
 		minWait = time.Minute
 	}
-	log.Printf("[IPPOOL] ⏳ all pool IPs rate-limited — deferring message, retry in %v", minWait)
+	e.logV("[IPPOOL] ⏳ all pool IPs rate-limited — deferring message, retry in %v", minWait)
 	return "", "", &ipPoolLimitedError{waitFor: minWait}
 }
 
@@ -1095,7 +1102,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 	if tlsMode == "" {
 		tlsMode = "starttls"
 	}
-	log.Printf("[DELIVERY]   relay connecting to %s (TLS: %s) …", addr, tlsMode)
+	e.logV("[DELIVERY]   relay connecting to %s (TLS: %s) …", addr, tlsMode)
 
 	var conn net.Conn
 	var err error
@@ -1105,13 +1112,13 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 		if err != nil {
 			return fmt.Errorf("relay TLS dial %s: %w", addr, err)
 		}
-		log.Printf("[DELIVERY]   relay TLS connected to %s", addr)
+		e.logV("[DELIVERY]   relay TLS connected to %s", addr)
 	} else {
 		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
 		if err != nil {
 			return fmt.Errorf("relay dial %s: %w", addr, err)
 		}
-		log.Printf("[DELIVERY]   relay TCP connected to %s", addr)
+		e.logV("[DELIVERY]   relay TCP connected to %s", addr)
 	}
 	defer conn.Close()
 
@@ -1134,9 +1141,9 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			tlsCfg := &tls.Config{ServerName: relay.Host, MinVersion: tls.VersionTLS12}
 			if err := client.StartTLS(tlsCfg); err != nil {
-				log.Printf("[DELIVERY]   relay STARTTLS failed (%v), continuing plain", err)
+				e.logV("[DELIVERY]   relay STARTTLS failed (%v), continuing plain", err)
 			} else {
-				log.Printf("[DELIVERY]   relay STARTTLS ok")
+				e.logV("[DELIVERY]   relay STARTTLS ok")
 			}
 		}
 	}
@@ -1146,7 +1153,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("relay AUTH: %w", err)
 		}
-		log.Printf("[DELIVERY]   relay AUTH ok (user=%s)", relay.Username)
+		e.logV("[DELIVERY]   relay AUTH ok (user=%s)", relay.Username)
 	}
 
 	if err := client.Mail(from); err != nil {
@@ -1167,7 +1174,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("relay DATA close: %w", err)
 	}
-	log.Printf("[DELIVERY]   relay DATA sent (%d bytes) → ok", len(data))
+	e.logV("[DELIVERY]   relay DATA sent (%d bytes) → ok", len(data))
 	client.Quit()
 	return nil
 }
@@ -1175,7 +1182,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, data []byte,
 	onRcptBounce func(rcpt, reason string)) error {
 	addr := net.JoinHostPort(mxHost, port)
-	log.Printf("[DELIVERY]   connecting to %s …", addr)
+	e.logV("[DELIVERY]   connecting to %s …", addr)
 
 	var conn net.Conn
 	var err error
@@ -1191,7 +1198,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			Timeout:   e.connectTO,
 			LocalAddr: &net.TCPAddr{IP: net.ParseIP(outIP)},
 		}
-		log.Printf("[IPPOOL]   selected outbound IP %s → %s", outIP, addr)
+		e.logV("[IPPOOL]   selected outbound IP %s → %s", outIP, addr)
 		conn, err = dialer.Dial("tcp4", addr)
 		if err != nil {
 			// Binding to this pool IP failed (not assigned to interface or OS error).
@@ -1211,7 +1218,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
-	log.Printf("[DELIVERY]   TCP connected to %s", addr)
+	e.logV("[DELIVERY]   TCP connected to %s", addr)
 
 	// HELO must match rDNS/PTR for the outbound IP. If we used a pool IP with a hostname, use it.
 	heloName := e.cfg.HeloName
@@ -1220,7 +1227,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	}
 	if usedPoolIP && outHostname != "" {
 		heloName = outHostname
-		log.Printf("[IPPOOL]   HELO %s (matches rDNS for %s)", heloName, outIP)
+		e.logV("[IPPOOL]   HELO %s (matches rDNS for %s)", heloName, outIP)
 	}
 
 	client, err := smtp.NewClient(conn, mxHost)
@@ -1233,10 +1240,10 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	if err := client.Hello(heloName); err != nil {
 		return fmt.Errorf("EHLO: %w", err)
 	}
-	log.Printf("[DELIVERY]   EHLO %s → ok", heloName)
+	e.logV("[DELIVERY]   EHLO %s → ok", heloName)
 
 	if ok, _ := client.Extension("STARTTLS"); ok {
-		log.Printf("[DELIVERY]   STARTTLS supported, upgrading …")
+		e.logV("[DELIVERY]   STARTTLS supported, upgrading …")
 		tlsCfg := &tls.Config{
 			ServerName:         mxHost,
 			InsecureSkipVerify: false,
@@ -1244,16 +1251,16 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 		if err := client.StartTLS(tlsCfg); err != nil {
 			log.Printf("[DELIVERY] ⚠ STARTTLS failed (continuing plain): %v", err)
 		} else {
-			log.Printf("[DELIVERY]   STARTTLS ok (TLS active)")
+			e.logV("[DELIVERY]   STARTTLS ok (TLS active)")
 		}
 	} else {
-		log.Printf("[DELIVERY]   STARTTLS not supported, sending plain")
+		e.logV("[DELIVERY]   STARTTLS not supported, sending plain")
 	}
 
 	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM <%s>: %w", from, err)
 	}
-	log.Printf("[DELIVERY]   MAIL FROM <%s> → ok", from)
+	e.logV("[DELIVERY]   MAIL FROM <%s> → ok", from)
 
 	// ── RCPT TO — per-recipient handling ──────────────────────────────────
 	// A 5xx on RCPT TO is a permanent per-recipient rejection (mailbox not
@@ -1280,7 +1287,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			client.Quit()
 			return fmt.Errorf("RCPT TO <%s>: %w", rcpt, err)
 		}
-		log.Printf("[DELIVERY]   RCPT TO <%s> → ok", rcpt)
+		e.logV("[DELIVERY]   RCPT TO <%s> → ok", rcpt)
 		accepted = append(accepted, rcpt)
 	}
 
@@ -1293,7 +1300,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 		return lastRcptBounceErr
 	}
 	if len(accepted) < len(rcpts) {
-		log.Printf("[DELIVERY]   %d/%d recipient(s) accepted for DATA (rest hard-bounced)",
+		e.logV("[DELIVERY]   %d/%d recipient(s) accepted for DATA (rest hard-bounced)",
 			len(accepted), len(rcpts))
 	}
 	// ── end RCPT TO ────────────────────────────────────────────────────────
@@ -1310,7 +1317,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 		// A 5xx DATA close is also a permanent rejection.
 		return fmt.Errorf("DATA close: %w", err)
 	}
-	log.Printf("[DELIVERY]   DATA sent (%d bytes) to %d recipient(s) → ok", n, len(accepted))
+	e.logV("[DELIVERY]   DATA sent (%d bytes) to %d recipient(s) → ok", n, len(accepted))
 
 	if err := client.Quit(); err != nil {
 		log.Printf("[DELIVERY] ⚠ QUIT error (message was accepted): %v", err)
@@ -1341,12 +1348,10 @@ func injectMissingHeaders(data []byte, domain string) []byte {
 		msgID := fmt.Sprintf("Message-ID: <%d.%s@%s>\r\n",
 			time.Now().UnixNano(), hex.EncodeToString(b), domain)
 		inject.WriteString(msgID)
-		log.Printf("[DELIVERY]   injected Message-ID header")
 	}
 
 	if !containsHeader(headerStr, "Date") {
 		inject.WriteString("Date: " + time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700") + "\r\n")
-		log.Printf("[DELIVERY]   injected Date header")
 	}
 
 	if inject.Len() == 0 {
