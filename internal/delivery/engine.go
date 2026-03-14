@@ -170,10 +170,9 @@ type Engine struct {
 	sems  map[string]chan struct{}
 
 	// IP pool rotation + per-IP rate limiting (all guarded by ipMu).
-	ipMu                   sync.Mutex
-	ipIdx                  int
-	ipCounters             map[string]*ipCounter
-	domainIntervalLastSend map[string]time.Time // domain-level interval: 1 email per domain per intervalSec across ALL IPs
+	ipMu       sync.Mutex
+	ipIdx      int
+	ipCounters map[string]*ipCounter
 }
 
 // New creates a delivery Engine.
@@ -183,9 +182,8 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 		queue:            q,
 		cooldowns:        make(map[string]*domainCooldownEntry),
 		sems:             make(map[string]chan struct{}),
-		ipCounters:             make(map[string]*ipCounter),
-		domainIntervalLastSend: make(map[string]time.Time),
-		userRelayIdx:           make(map[string]int),
+		ipCounters:       make(map[string]*ipCounter),
+		userRelayIdx:     make(map[string]int),
 		throttleCounters: make(map[string]*throttleCounter),
 	}
 
@@ -846,23 +844,6 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 	defer e.ipMu.Unlock()
 
 	now := time.Now()
-
-	// Domain-level interval: when master rule has intervalSec > 0, only 1 email to this domain
-	// per interval across ALL IPs. Messages queue and defer until the interval passes.
-	if e.IPPoolMasterProvider != nil {
-		_, _, _, masterInterval, found := e.IPPoolMasterProvider(domain)
-		if found && masterInterval > 0 {
-			if last, ok := e.domainIntervalLastSend[domain]; ok && !last.IsZero() {
-				elapsed := time.Since(last).Seconds()
-				if elapsed < float64(masterInterval) {
-					wait := time.Duration(masterInterval)*time.Second - time.Duration(elapsed*float64(time.Second))
-					log.Printf("[IPPOOL] ⏳ domain %s: interval %ds not met (global) — deferring, wait %v", domain, masterInterval, wait.Round(time.Second))
-					return "", "", &ipPoolLimitedError{waitFor: wait}
-				}
-			}
-		}
-	}
-
 	n := len(entries)
 
 	for i := 0; i < n; i++ {
@@ -928,13 +909,6 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 		c.hourCount++
 		c.dayCount++
 		c.lastSendAt = now
-		// Update domain-level interval when master rule has one (so next message defers correctly)
-		if e.IPPoolMasterProvider != nil {
-			_, _, _, masterInterval, found := e.IPPoolMasterProvider(domain)
-			if found && masterInterval > 0 {
-				e.domainIntervalLastSend[domain] = now
-			}
-		}
 		e.ipIdx = (e.ipIdx + i + 1) % n
 		return entry.IP, entry.Hostname, nil
 	}
@@ -997,13 +971,6 @@ func (e *Engine) undoIPCount(ip, domain string) {
 			c.dayCount--
 		}
 	}
-}
-
-// undoDomainInterval clears the domain-level interval timestamp (used when send fails after reserving).
-func (e *Engine) undoDomainInterval(domain string) {
-	e.ipMu.Lock()
-	defer e.ipMu.Unlock()
-	delete(e.domainIntervalLastSend, domain)
 }
 
 // checkThrottle checks whether the user is within rate limits for the given domain.
@@ -1230,7 +1197,6 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			// Binding to this pool IP failed (not assigned to interface or OS error).
 			// Undo the reservation so the counter stays accurate, then fall back.
 			e.undoIPCount(outIP, domain)
-			e.undoDomainInterval(domain)
 			log.Printf("[IPPOOL] ✗ bind to %s FAILED: %v", outIP, err)
 			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")

@@ -175,6 +175,7 @@ func LogDelivered(username, msgID, recipient, mxHost string) {
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
 			"status":  "delivered",
+			"error":   "", // clear any previous defer/throttle error
 			"mx_host": mxHost,
 			"sent_at": time.Now(),
 		})
