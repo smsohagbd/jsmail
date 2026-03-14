@@ -99,18 +99,49 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	qStats := h.Queue.Stats()
 
+	todayDelivered, yesterdayDelivered, last7Delivered := appdb.GetSummaryStats()
+	rtLabels, rtIncoming, rtOutgoing := appdb.GetLast60MinuteBuckets()
+	rtLabelsJSON, _ := json.Marshal(rtLabels)
+	rtIncomingJSON, _ := json.Marshal(rtIncoming)
+	rtOutgoingJSON, _ := json.Marshal(rtOutgoing)
+
 	h.Tmpl.Render(w, "admin/dashboard", map[string]interface{}{
-		"Page":           "dashboard",
-		"ActiveUser":     claims.Username,
-		"TotalToday":     totalToday,
-		"TotalYesterday": totalYesterday,
-		"TotalMonth":     totalMonth,
-		"Pending":        pending,
-		"TotalUsers":     totalUsers,
-		"ChartLabels":    string(labelsJSON),
-		"ChartCounts":    string(countsJSON),
-		"RecentLogs":     recentLogs,
-		"QueueStats":     qStats,
+		"Page":             "dashboard",
+		"ActiveUser":       claims.Username,
+		"TotalToday":       totalToday,
+		"TotalYesterday":   totalYesterday,
+		"TotalMonth":       totalMonth,
+		"TodayDelivered":   todayDelivered,
+		"YesterdayDelivered": yesterdayDelivered,
+		"Last7Delivered":   last7Delivered,
+		"Pending":          pending,
+		"TotalUsers":       totalUsers,
+		"ChartLabels":      string(labelsJSON),
+		"ChartCounts":      string(countsJSON),
+		"RealtimeLabels":   string(rtLabelsJSON),
+		"RealtimeIncoming": string(rtIncomingJSON),
+		"RealtimeOutgoing": string(rtOutgoingJSON),
+		"RecentLogs":       recentLogs,
+		"QueueStats":       qStats,
+	})
+}
+
+// DashboardRealtime returns JSON for the last 60 minutes (incoming/outgoing) and summary stats.
+// Used for real-time chart updates.
+func (h *Handler) DashboardRealtime(w http.ResponseWriter, r *http.Request) {
+	labels, incoming, outgoing := appdb.GetLast60MinuteBuckets()
+	today, yesterday, last7 := appdb.GetSummaryStats()
+	qStats := h.Queue.Stats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"labels":       labels,
+		"incoming":     incoming,
+		"outgoing":     outgoing,
+		"today":        today,
+		"yesterday":    yesterday,
+		"last7":        last7,
+		"queue_pending": qStats.Pending,
+		"queue_deferred": qStats.Deferred,
 	})
 }
 

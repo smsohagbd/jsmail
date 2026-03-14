@@ -127,6 +127,7 @@ func (s *Server) Start() {
 		},
 	}
 	mux.HandleFunc("/admin", webauth.RequireAdmin(ah.Dashboard))
+	mux.HandleFunc("/admin/dashboard/realtime", webauth.RequireAdmin(ah.DashboardRealtime))
 	mux.HandleFunc("/admin/users", webauth.RequireAdmin(ah.Users))
 	mux.HandleFunc("/admin/users/create", webauth.RequireAdmin(ah.CreateUser))
 	mux.HandleFunc("/admin/users/update", webauth.RequireAdmin(ah.UpdateUser))

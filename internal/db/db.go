@@ -920,6 +920,49 @@ func GetDailyCountsAdmin(days int) (labels []string, delivered, bounced []int64)
 	return labels, delivered, bounced
 }
 
+// GetLast60MinuteBuckets returns per-minute incoming (queued) and outgoing (delivered) for the last 60 minutes.
+// Labels are like "14:32", incoming/outgoing are counts per minute.
+func GetLast60MinuteBuckets() (labels []string, incoming, outgoing []int64) {
+	now := time.Now()
+	labels = make([]string, 60)
+	incoming = make([]int64, 60)
+	outgoing = make([]int64, 60)
+	since := now.Add(-60 * time.Minute).Truncate(time.Minute)
+
+	for i := 0; i < 60; i++ {
+		bucketStart := since.Add(time.Duration(i) * time.Minute)
+		bucketEnd := bucketStart.Add(time.Minute)
+		labels[i] = bucketStart.Format("15:04")
+		DB.Model(&EmailLog{}).Where("created_at >= ? AND created_at < ?", bucketStart, bucketEnd).Count(&incoming[i])
+		DB.Model(&EmailLog{}).Where("status = ? AND sent_at >= ? AND sent_at < ?", "delivered", bucketStart, bucketEnd).Count(&outgoing[i])
+	}
+	return labels, incoming, outgoing
+}
+
+// GetSummaryStats returns today delivered, yesterday delivered, and last 7 days total delivered.
+func GetSummaryStats() (today, yesterday, last7Days int64) {
+	t := time.Now().Truncate(24 * time.Hour)
+	todayStr := t.Format("2006-01-02")
+	yesterdayStr := t.AddDate(0, 0, -1).Format("2006-01-02")
+	var d DailyStats
+	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", todayStr, "").First(&d).Error; err == nil {
+		today = d.Delivered
+	} else {
+		DB.Model(&EmailLog{}).Where("sent_at >= ? AND status = ?", t, "delivered").Count(&today)
+	}
+	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", yesterdayStr, "").First(&d).Error; err == nil {
+		yesterday = d.Delivered
+	} else {
+		DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", t.AddDate(0, 0, -1), t, "delivered").Count(&yesterday)
+	}
+	sevenDaysAgo := t.AddDate(0, 0, -7)
+	DB.Model(&DailyStats{}).Where("username = ? AND stat_date >= ?", "", sevenDaysAgo.Format("2006-01-02")).Select("COALESCE(SUM(delivered),0)").Scan(&last7Days)
+	if last7Days == 0 {
+		DB.Model(&EmailLog{}).Where("sent_at >= ? AND status = ?", sevenDaysAgo, "delivered").Count(&last7Days)
+	}
+	return today, yesterday, last7Days
+}
+
 // GetDailyCountsUser returns delivered and hard_bounce counts per day for chart (user).
 func GetDailyCountsUser(username string, days int) (labels []string, delivered, bounced []int64) {
 	today := time.Now().Truncate(24 * time.Hour)
