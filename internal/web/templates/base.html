@@ -147,6 +147,7 @@ tailwind.config = {
   @media (max-width:768px) {
     .stat-grid { grid-template-columns:repeat(2,1fr); gap:12px; margin-bottom:16px; }
     .stat-value { font-size:22px; }
+    .reports-kpi-value { font-size:24px !important; }
     .page-header { padding:16px 16px 0; flex-wrap:wrap; gap:12px; }
     .page-body { padding:16px; }
     .card-header { flex-wrap:wrap; gap:8px; padding:12px 16px; }
@@ -160,13 +161,19 @@ tailwind.config = {
     .truncate-cell { max-width:100px; }
     .chart-grid { grid-template-columns:1fr !important; }
     .smtp-creds-grid { grid-template-columns:1fr !important; }
+    .reports-kpi-grid { grid-template-columns:repeat(2,1fr) !important; gap:12px !important; }
+    .reports-top-grid { grid-template-columns:1fr !important; }
+    .reports-top-grid .data-table,
+    .reports-simple-table { min-width:200px; }
     .filters-row { flex-direction:column; align-items:stretch !important; }
     .filters-row > div { width:100% !important; min-width:0 !important; }
     .filters-row .form-input, .filters-row select { width:100% !important; }
   }
   @media (max-width:480px) {
     .stat-grid { grid-template-columns:1fr; }
+    .reports-kpi-grid { grid-template-columns:1fr !important; }
     .stat-value { font-size:24px; }
+    .reports-kpi-value { font-size:20px !important; }
   }
 
   /* Sidebar mobile: overlay + slide-in */
