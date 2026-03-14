@@ -22,6 +22,7 @@ import (
 	"github.com/emersion/go-msgauth/dkim"
 
 	"smtp-server/internal/config"
+	"smtp-server/internal/email"
 	"smtp-server/internal/queue"
 )
 
@@ -128,6 +129,10 @@ type Engine struct {
 	// IPPoolProvider returns the active IP entries with per-IP rate limits.
 	// Return nil or empty to use the system default IP.
 	IPPoolProvider func() []IPEntry
+
+	// IPPoolMasterProvider returns master limits that apply to ALL IPs when no custom domain rule exists.
+	// Return all zeros to disable. When an IP has a domain rule for the recipient domain, that rule is used instead.
+	IPPoolMasterProvider func() (perMin, perHour, perDay, intervalSec int)
 
 	// UserSMTPProvider returns the SMTP delivery mode and custom relay list for a user.
 	// mode: "system_only" | "custom_only" | "system_and_custom"
@@ -338,7 +343,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 				relayData := data
 				if relay.FromAddress != "" {
 					fromAddr = relay.FromAddress
-					relayData = rewriteFromHeader(data, fromAddr)
+					relayData = email.RewriteFromHeader(data, fromAddr)
 				}
 				if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData); err != nil {
 					log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
@@ -794,7 +799,8 @@ func (e *ipPoolLimitedError) Error() string {
 }
 
 // ipEffectiveLimits returns per-min/hour/day and interval for an IP+domain.
-func (entry *IPEntry) ipEffectiveLimits(domain string) (perMin, perHour, perDay, intervalSec int) {
+// Priority: 1) IP's domain rule for this domain, 2) master rule (if set), 3) IP base limits.
+func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHour, perDay, intervalSec int) {
 	domain = strings.ToLower(domain)
 	for _, r := range entry.DomainRules {
 		if r.Domain == domain {
@@ -805,6 +811,13 @@ func (entry *IPEntry) ipEffectiveLimits(domain string) (perMin, perHour, perDay,
 				intervalSec = entry.IntervalSec
 			}
 			return
+		}
+	}
+	// No custom domain rule — use master if set, else IP base
+	if e.IPPoolMasterProvider != nil {
+		mPerMin, mPerHour, mPerDay, mInterval := e.IPPoolMasterProvider()
+		if mPerMin > 0 || mPerHour > 0 || mPerDay > 0 || mInterval > 0 {
+			return mPerMin, mPerHour, mPerDay, mInterval
 		}
 	}
 	return entry.PerMin, entry.PerHour, entry.PerDay, entry.IntervalSec
@@ -833,7 +846,7 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 
 	for i := 0; i < n; i++ {
 		entry := entries[(e.ipIdx+i)%n]
-		perMin, perHour, perDay, intervalSec := entry.ipEffectiveLimits(domain)
+		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(&entry, domain)
 
 		// Counter key: ip|domain for per-domain tracking
 		counterKey := entry.IP + "|" + domain
@@ -899,8 +912,9 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 	}
 
 	minWait := 24 * time.Hour
-	for _, entry := range entries {
-		perMin, perHour, perDay, intervalSec := entry.ipEffectiveLimits(domain)
+	for i := range entries {
+		entry := &entries[i]
+		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(entry, domain)
 		counterKey := entry.IP + "|" + domain
 		c, ok := e.ipCounters[counterKey]
 		if !ok {
@@ -1374,54 +1388,6 @@ func containsHeader(header, name string) bool {
 	lower := strings.ToLower(header)
 	return strings.Contains(lower, "\n"+strings.ToLower(name)+":") ||
 		strings.HasPrefix(lower, strings.ToLower(name)+":")
-}
-
-// rewriteFromHeader replaces the From header in raw RFC 5322 data with the given address.
-// Used when sending via custom relay with FromAddress override.
-func rewriteFromHeader(data []byte, fromAddr string) []byte {
-	header, body, found := bytes.Cut(data, []byte("\r\n\r\n"))
-	if !found {
-		header, body, found = bytes.Cut(data, []byte("\n\n"))
-		if !found {
-			return data
-		}
-	}
-	sep := "\r\n\r\n"
-	if !bytes.Contains(data, []byte("\r\n\r\n")) {
-		sep = "\n\n"
-	}
-	fromLine := "From: <" + fromAddr + ">"
-	if strings.Contains(fromAddr, "<") {
-		fromLine = "From: " + fromAddr
-	}
-	lines := strings.Split(strings.ReplaceAll(string(header), "\r\n", "\n"), "\n")
-	var out []string
-	skipUntilNextHeader := false
-	replaced := false
-	for _, line := range lines {
-		if line == "" {
-			out = append(out, line)
-			break
-		}
-		if skipUntilNextHeader {
-			if line[0] == ' ' || line[0] == '\t' {
-				continue // skip folded continuation
-			}
-			skipUntilNextHeader = false
-		}
-		lower := strings.ToLower(strings.TrimSpace(line))
-		if strings.HasPrefix(lower, "from:") {
-			out = append(out, fromLine)
-			skipUntilNextHeader = true
-			replaced = true
-			continue
-		}
-		out = append(out, line)
-	}
-	if !replaced {
-		out = append([]string{fromLine}, out...)
-	}
-	return []byte(strings.ReplaceAll(strings.Join(out, "\n"), "\n", "\r\n") + sep + string(body))
 }
 
 // ---- DKIM helpers ----

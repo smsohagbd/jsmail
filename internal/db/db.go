@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -349,6 +350,29 @@ func DeleteIPPoolEntry(id uint) {
 	DB.Unscoped().Delete(&IPPool{}, id)
 }
 
+// GetIPPoolMasterLimits returns master limits that apply to all IPs when no custom domain rule exists.
+func GetIPPoolMasterLimits() (perMin, perHour, perDay, intervalSec int) {
+	perMin, _ = strconv.Atoi(GetSetting("ip_pool_master_per_min", "0"))
+	perHour, _ = strconv.Atoi(GetSetting("ip_pool_master_per_hour", "0"))
+	perDay, _ = strconv.Atoi(GetSetting("ip_pool_master_per_day", "0"))
+	intervalSec, _ = strconv.Atoi(GetSetting("ip_pool_master_interval_sec", "0"))
+	return
+}
+
+// SetIPPoolMasterLimits saves master limits for the IP pool.
+func SetIPPoolMasterLimits(perMin, perHour, perDay, intervalSec int) error {
+	if err := SetSetting("ip_pool_master_per_min", strconv.Itoa(perMin)); err != nil {
+		return err
+	}
+	if err := SetSetting("ip_pool_master_per_hour", strconv.Itoa(perHour)); err != nil {
+		return err
+	}
+	if err := SetSetting("ip_pool_master_per_day", strconv.Itoa(perDay)); err != nil {
+		return err
+	}
+	return SetSetting("ip_pool_master_interval_sec", strconv.Itoa(intervalSec))
+}
+
 // GetIPPoolDomainRules returns all domain rules for an IP.
 func GetIPPoolDomainRules(ipPoolID uint) []IPPoolDomainRule {
 	var rules []IPPoolDomainRule
@@ -385,6 +409,43 @@ func UpdateIPPoolDomainRule(id, ipPoolID uint, domain string, perMin, perHour, p
 
 func DeleteIPPoolDomainRule(id, ipPoolID uint) {
 	DB.Where("id = ? AND ip_pool_id = ?", id, ipPoolID).Delete(&IPPoolDomainRule{})
+}
+
+// ──────────────────────────── Force From Address ──────────────────────────────
+
+// GetForceFromEnabled returns true if force-from is enabled.
+func GetForceFromEnabled() bool {
+	return GetSetting("force_from_enabled", "false") == "true"
+}
+
+// GetForceFromDomainsRaw returns the raw domains string (newline-separated) for editing.
+func GetForceFromDomainsRaw() string {
+	return GetSetting("force_from_domains", "")
+}
+
+// GetForceFromDomains returns the list of domains for rotation (one per line, trimmed, non-empty).
+func GetForceFromDomains() []string {
+	raw := GetSetting("force_from_domains", "")
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		d := strings.ToLower(strings.TrimSpace(line))
+		if d != "" && !strings.HasPrefix(d, "#") {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// SetForceFromConfig saves the force-from enabled flag and domains (newline-separated).
+func SetForceFromConfig(enabled bool, domains string) error {
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+	if err := SetSetting("force_from_enabled", val); err != nil {
+		return err
+	}
+	return SetSetting("force_from_domains", domains)
 }
 
 // ──────────────────────────── Settings ───────────────────────────────────────

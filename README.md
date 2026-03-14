@@ -42,6 +42,7 @@ api:
 
 ```bash
 
+systemctl stop smtp-server
 rm smtp-server
 git pull
 go build -o smtp-server .

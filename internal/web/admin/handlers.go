@@ -669,13 +669,18 @@ func (h *Handler) IPPool(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	mPerMin, mPerHour, mPerDay, mInterval := appdb.GetIPPoolMasterLimits()
 	h.Tmpl.Render(w, "admin/ippool", map[string]interface{}{
-		"Page":       "ippool",
-		"ActiveUser": claims.Username,
-		"Enabled":    appdb.GetSetting("ip_pool_enabled", "false") == "true",
-		"Entries":    views,
-		"FlashOK":    r.URL.Query().Get("ok"),
-		"FlashErr":   r.URL.Query().Get("err"),
+		"Page":             "ippool",
+		"ActiveUser":       claims.Username,
+		"Enabled":          appdb.GetSetting("ip_pool_enabled", "false") == "true",
+		"Entries":          views,
+		"MasterPerMin":     mPerMin,
+		"MasterPerHour":    mPerHour,
+		"MasterPerDay":     mPerDay,
+		"MasterIntervalSec": mInterval,
+		"FlashOK":          r.URL.Query().Get("ok"),
+		"FlashErr":         r.URL.Query().Get("err"),
 	})
 }
 
@@ -832,6 +837,52 @@ func (h *Handler) DeleteIPPoolDomainRule(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
 	h.ToggleIPPool(w, r)
+}
+
+// ──────────────────────────── Force From Address ──────────────────────────────
+
+func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	h.Tmpl.Render(w, "admin/forcefrom", map[string]interface{}{
+		"Page":       "forcefrom",
+		"ActiveUser": claims.Username,
+		"Enabled":    appdb.GetForceFromEnabled(),
+		"Domains":    appdb.GetForceFromDomainsRaw(),
+		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   r.URL.Query().Get("err"),
+	})
+}
+
+func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/forcefrom", http.StatusFound)
+		return
+	}
+	enabled := r.FormValue("enabled") == "on"
+	domains := strings.TrimSpace(r.FormValue("domains"))
+	if err := appdb.SetForceFromConfig(enabled, domains); err != nil {
+		log.Printf("forcefrom: failed to save: %v", err)
+		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/forcefrom?ok=Config+updated", http.StatusFound)
+}
+
+func (h *Handler) SaveIPPoolMaster(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
+	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
+	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
+	intervalSec, _ := strconv.Atoi(r.FormValue("interval_sec"))
+	if err := appdb.SetIPPoolMasterLimits(perMin, perHour, perDay, intervalSec); err != nil {
+		log.Printf("ippool master: failed to save: %v", err)
+		http.Redirect(w, r, "/admin/ippool?err=Failed+to+save+master+config", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ippool?ok=Master+config+updated", http.StatusFound)
 }
 
 // BulkAddIPPool imports multiple IPs from a textarea in "ip:hostname" format.

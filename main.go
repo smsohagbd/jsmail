@@ -125,6 +125,9 @@ func main() {
 	}
 
 	// IP pool: round-robin with per-IP and per-domain rate limits from DB.
+	eng.IPPoolMasterProvider = func() (perMin, perHour, perDay, intervalSec int) {
+		return appdb.GetIPPoolMasterLimits()
+	}
 	eng.IPPoolProvider = func() []delivery.IPEntry {
 		if appdb.GetSetting("ip_pool_enabled", "false") != "true" {
 			return nil

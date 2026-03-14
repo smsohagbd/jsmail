@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/emersion/go-sasl"
@@ -13,6 +15,7 @@ import (
 
 	appdb "smtp-server/internal/db"
 	"smtp-server/internal/config"
+	"smtp-server/internal/email"
 	"smtp-server/internal/queue"
 )
 
@@ -21,10 +24,11 @@ type UserLookup func(username, password string) bool
 
 // backend implements smtp.Backend.
 type backend struct {
-	cfg        config.SMTPConfig
-	queue      *queue.Queue
-	users      map[string]string // fallback from config
-	userLookup UserLookup        // dynamic lookup from DB
+	cfg             config.SMTPConfig
+	queue           *queue.Queue
+	users           map[string]string // fallback from config
+	userLookup      UserLookup        // dynamic lookup from DB
+	forceFromRotate atomic.Uint64     // round-robin index for force-from domains
 }
 
 func newBackend(cfg config.SMTPConfig, q *queue.Queue, lookup UserLookup) *backend {
@@ -125,9 +129,26 @@ func (s *session) Data(r io.Reader) error {
 	log.Printf("[SMTP]   DATA received        ip=%s size=%d bytes from=%s to=%v",
 		s.remoteIP, len(data), s.from, s.to)
 
+	from := s.from
+	// Force From: when enabled, replace From with rotated address (local@domain from list).
+	if appdb.GetForceFromEnabled() {
+		domains := appdb.GetForceFromDomains()
+		if len(domains) > 0 {
+			localPart := extractLocalPart(from)
+			if localPart == "" {
+				localPart = "noreply"
+			}
+			idx := s.backend.forceFromRotate.Add(1) - 1
+			domain := domains[int(idx)%len(domains)]
+			from = localPart + "@" + domain
+			data = email.RewriteFromHeader(data, from)
+			log.Printf("[SMTP]   force-from applied   ip=%s new_from=%s", s.remoteIP, from)
+		}
+	}
+
 	msg := &queue.Message{
 		Username: s.authUser,
-		From:     s.from,
+		From:     from,
 		To:       s.to,
 		Data:     data,
 	}
@@ -140,6 +161,20 @@ func (s *session) Data(r io.Reader) error {
 	log.Printf("[SMTP] ✓ message queued       ip=%s id=%s from=%s to=%v",
 		s.remoteIP, msg.ID, msg.From, msg.To)
 	return nil
+}
+
+// extractLocalPart parses the local part from an email address (e.g. user from user@domain.com or <user@domain.com>).
+func extractLocalPart(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if start := strings.LastIndex(addr, "<"); start >= 0 {
+		if end := strings.Index(addr[start:], ">"); end >= 0 {
+			addr = addr[start+1 : start+end]
+		}
+	}
+	if at := strings.Index(addr, "@"); at > 0 {
+		return strings.TrimSpace(addr[:at])
+	}
+	return ""
 }
 
 func (s *session) Reset() {

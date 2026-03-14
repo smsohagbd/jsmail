@@ -1,0 +1,47 @@
+{{define "title"}}Force From Address — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Force From Address</div>
+    <div class="page-sub">Override the From address on every incoming email with a rotated address from your domains</div>
+  </div>
+</div>
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<div class="card" style="margin-bottom:16px;padding:20px;">
+  <div class="card-header" style="margin-bottom:16px;">
+    <span class="card-title">Override From Address</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">When enabled, every email received via SMTP will have its From address replaced with a rotated address</span>
+  </div>
+  <form method="POST" action="/admin/forcefrom/save">
+    <div style="margin-bottom:16px;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+        <input type="checkbox" name="enabled" value="on" {{if .Enabled}}checked{{end}}
+          style="width:16px;height:16px;accent-color:#818cf8;"/>
+        <span style="font-size:14px;font-weight:600;color:#e4e4e7;">Enable Force From</span>
+      </label>
+      <p style="font-size:12px;color:#71717a;margin:0 0 16px 26px;">
+        {{if .Enabled}}<span style="color:#4ade80;">● Active</span> — Mautic, API, or any client's From address will be replaced with <code style="color:#a78bfa;">local@domain</code> rotated from your list below.{{else}}<span style="color:#71717a;">● Inactive</span> — Original From addresses are preserved.{{end}}
+      </p>
+    </div>
+    <div class="form-group" style="margin-bottom:16px;">
+      <label class="form-label">Domains (one per line)</label>
+      <textarea class="form-input" name="domains" rows="10"
+        style="font-family:monospace;font-size:13px;resize:vertical;"
+        placeholder="domain1.com
+domain2.com
+domain3.com
+# lines starting with # are ignored">{{.Domains}}</textarea>
+      <p style="font-size:12px;color:#52525b;margin:8px 0 0;">
+        The local part (e.g. <code>noreply</code>) is taken from the original From address. Each incoming email rotates to the next domain: <code>noreply@domain1.com</code> → <code>noreply@domain2.com</code> → …
+      </p>
+    </div>
+    <button type="submit" class="btn btn-primary">Save</button>
+  </form>
+</div>
+
+</div>
+{{end}}
