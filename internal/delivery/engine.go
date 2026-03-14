@@ -44,36 +44,50 @@ type domainCooldownEntry struct {
 
 // ThrottleLimit holds per-user per-domain send-rate limits.
 type ThrottleLimit struct {
-	PerSec   int
-	PerMin   int
-	PerHour  int
-	PerDay   int
-	PerMonth int
+	PerSec      int
+	PerMin      int
+	PerHour     int
+	PerDay      int
+	PerMonth    int
+	IntervalSec int // min seconds between emails (e.g. 5 = 1 every 5 sec)
 }
 
 // throttleCounter tracks rolling send counts for one user+domain window.
 type throttleCounter struct {
-	secCount   int
-	minCount   int
-	hourCount  int
-	dayCount   int
-	monthCount int
-	secReset   time.Time
-	minReset   time.Time
-	hourReset  time.Time
-	dayReset   time.Time
-	monthReset time.Time
+	secCount    int
+	minCount    int
+	hourCount   int
+	dayCount    int
+	monthCount  int
+	secReset    time.Time
+	minReset    time.Time
+	hourReset   time.Time
+	dayReset    time.Time
+	monthReset  time.Time
+	lastSendAt  time.Time // for IntervalSec
+}
+
+// IPDomainRule holds per-domain rate limits for an IP.
+type IPDomainRule struct {
+	Domain      string
+	PerMin      int
+	PerHour     int
+	PerDay      int
+	IntervalSec int
 }
 
 // IPEntry describes one outbound IP in the pool with optional rate limits.
 // Hostname should match the IP's rDNS/PTR record — used as HELO when sending from this IP.
+// DomainRules override base limits when sending to matching recipient domains.
 type IPEntry struct {
 	IP           string
 	Hostname     string // rDNS hostname for this IP; used as HELO (must match PTR)
-	PerMin       int    // 0 = unlimited
+	PerMin       int    // 0 = unlimited (base; used when no domain rule matches)
 	PerHour      int
 	PerDay       int
 	WarmupPerDay int // >0 when IP is in warmup phase; overrides PerDay
+	IntervalSec  int // min seconds between emails from this IP
+	DomainRules  []IPDomainRule
 }
 
 // SMTPRelay describes a custom outbound SMTP relay server.
@@ -88,14 +102,15 @@ type SMTPRelay struct {
 	FromAddress string // override From when sending via this relay (required for rotation)
 }
 
-// ipCounter tracks rolling send counts for one outbound IP.
+// ipCounter tracks rolling send counts for one outbound IP (or IP+domain).
 type ipCounter struct {
-	minCount  int
-	hourCount int
-	dayCount  int
-	minReset  time.Time
-	hourReset time.Time
-	dayReset  time.Time
+	minCount   int
+	hourCount  int
+	dayCount   int
+	minReset   time.Time
+	hourReset  time.Time
+	dayReset   time.Time
+	lastSendAt time.Time // for IntervalSec
 }
 
 // Engine delivers queued messages to remote SMTP servers.
@@ -723,7 +738,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 
 			// Respect per-MX connection limit.
 			e.acquireMXSlot(mx.Host)
-			mxErr := e.sendToMX(from, mx.Host, port, rcpts, data, onRcptBounce)
+			mxErr := e.sendToMX(from, domain, mx.Host, port, rcpts, data, onRcptBounce)
 			e.releaseMXSlot(mx.Host)
 
 			if mxErr == nil {
@@ -778,12 +793,30 @@ func (e *ipPoolLimitedError) Error() string {
 	return fmt.Sprintf("ip pool: all IPs rate-limited — retry in %v", e.waitFor)
 }
 
+// ipEffectiveLimits returns per-min/hour/day and interval for an IP+domain.
+func (entry *IPEntry) ipEffectiveLimits(domain string) (perMin, perHour, perDay, intervalSec int) {
+	domain = strings.ToLower(domain)
+	for _, r := range entry.DomainRules {
+		if r.Domain == domain {
+			perMin, perHour, perDay = r.PerMin, r.PerHour, r.PerDay
+			if r.IntervalSec > 0 {
+				intervalSec = r.IntervalSec
+			} else {
+				intervalSec = entry.IntervalSec
+			}
+			return
+		}
+	}
+	return entry.PerMin, entry.PerHour, entry.PerDay, entry.IntervalSec
+}
+
 // nextOutboundIP selects the next available IP from the pool using round-robin.
+// domain is the recipient domain (e.g. gmail.com) for domain-specific rate limits.
 // Returns:
 //   - (ip, hostname, nil) — ip selected; hostname is the IP's rDNS (for HELO); counters reserved
 //   - ("", "", nil)      — pool disabled/empty; use system default IP and global HELO
 //   - ("", "", limitedErr) — pool active but all IPs rate-limited; caller must defer
-func (e *Engine) nextOutboundIP() (ip, hostname string, err error) {
+func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) {
 	if e.IPPoolProvider == nil {
 		return "", "", nil
 	}
@@ -798,21 +831,22 @@ func (e *Engine) nextOutboundIP() (ip, hostname string, err error) {
 	now := time.Now()
 	n := len(entries)
 
-	// Try each IP in round-robin order; pick the first one under its limits.
 	for i := 0; i < n; i++ {
 		entry := entries[(e.ipIdx+i)%n]
+		perMin, perHour, perDay, intervalSec := entry.ipEffectiveLimits(domain)
 
-		c, ok := e.ipCounters[entry.IP]
+		// Counter key: ip|domain for per-domain tracking
+		counterKey := entry.IP + "|" + domain
+		c, ok := e.ipCounters[counterKey]
 		if !ok {
 			c = &ipCounter{
 				minReset:  now.Add(time.Minute),
 				hourReset: now.Add(time.Hour),
 				dayReset:  now.Add(24 * time.Hour),
 			}
-			e.ipCounters[entry.IP] = c
+			e.ipCounters[counterKey] = c
 		}
 
-		// Reset expired windows.
 		if now.After(c.minReset) {
 			c.minCount = 0
 			c.minReset = now.Add(time.Minute)
@@ -826,61 +860,73 @@ func (e *Engine) nextOutboundIP() (ip, hostname string, err error) {
 			c.dayReset = now.Add(24 * time.Hour)
 		}
 
-		// Effective daily limit: warmup overrides static PerDay when active.
-		effectivePerDay := entry.PerDay
+		effectivePerDay := perDay
 		if entry.WarmupPerDay > 0 {
 			effectivePerDay = entry.WarmupPerDay
-			if entry.PerDay > 0 && entry.PerDay < effectivePerDay {
-				effectivePerDay = entry.PerDay
+			if perDay > 0 && perDay < effectivePerDay {
+				effectivePerDay = perDay
 			}
 		}
 
-		// Check limits (0 = unlimited).
-		if entry.PerMin > 0 && c.minCount >= entry.PerMin {
-			log.Printf("[IPPOOL]   IP %s: per-min limit %d reached, skipping", entry.IP, entry.PerMin)
+		if intervalSec > 0 && !c.lastSendAt.IsZero() {
+			elapsed := time.Since(c.lastSendAt).Seconds()
+			if elapsed < float64(intervalSec) {
+				wait := time.Duration(intervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
+				log.Printf("[IPPOOL]   IP %s: interval %ds not met for %s (wait %v)", entry.IP, intervalSec, domain, wait.Round(time.Second))
+				continue
+			}
+		}
+
+		if perMin > 0 && c.minCount >= perMin {
+			log.Printf("[IPPOOL]   IP %s: per-min limit %d reached for %s, skipping", entry.IP, perMin, domain)
 			continue
 		}
-		if entry.PerHour > 0 && c.hourCount >= entry.PerHour {
-			log.Printf("[IPPOOL]   IP %s: per-hour limit %d reached, skipping", entry.IP, entry.PerHour)
+		if perHour > 0 && c.hourCount >= perHour {
+			log.Printf("[IPPOOL]   IP %s: per-hour limit %d reached for %s, skipping", entry.IP, perHour, domain)
 			continue
 		}
 		if effectivePerDay > 0 && c.dayCount >= effectivePerDay {
-			src := "per-day"
-			if entry.WarmupPerDay > 0 {
-				src = "warmup"
-			}
-			log.Printf("[IPPOOL]   IP %s: %s limit %d reached, skipping", entry.IP, src, effectivePerDay)
+			log.Printf("[IPPOOL]   IP %s: per-day limit %d reached for %s, skipping", entry.IP, effectivePerDay, domain)
 			continue
 		}
 
-		// Reserve a slot and advance the round-robin index.
 		c.minCount++
 		c.hourCount++
 		c.dayCount++
+		c.lastSendAt = now
 		e.ipIdx = (e.ipIdx + i + 1) % n
 		return entry.IP, entry.Hostname, nil
 	}
 
-	// Pool is active but every IP is at its limit.
-	// Calculate the minimum wait until the earliest counter window resets.
 	minWait := 24 * time.Hour
 	for _, entry := range entries {
-		c, ok := e.ipCounters[entry.IP]
+		perMin, perHour, perDay, intervalSec := entry.ipEffectiveLimits(domain)
+		counterKey := entry.IP + "|" + domain
+		c, ok := e.ipCounters[counterKey]
 		if !ok {
 			minWait = time.Minute
 			break
 		}
-		if entry.PerMin > 0 && c.minCount >= entry.PerMin {
+		if intervalSec > 0 && !c.lastSendAt.IsZero() {
+			elapsed := time.Since(c.lastSendAt).Seconds()
+			if elapsed < float64(intervalSec) {
+				w := time.Duration(intervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
+				if w > 0 && w < minWait {
+					minWait = w
+				}
+			}
+		}
+		if perMin > 0 && c.minCount >= perMin {
 			if w := time.Until(c.minReset); w > 0 && w < minWait {
 				minWait = w
 			}
 		}
-		if entry.PerHour > 0 && c.hourCount >= entry.PerHour {
+		if perHour > 0 && c.hourCount >= perHour {
 			if w := time.Until(c.hourReset); w > 0 && w < minWait {
 				minWait = w
 			}
 		}
-		if entry.PerDay > 0 && c.dayCount >= entry.PerDay {
+		if perDay > 0 && c.dayCount >= perDay {
 			if w := time.Until(c.dayReset); w > 0 && w < minWait {
 				minWait = w
 			}
@@ -893,12 +939,12 @@ func (e *Engine) nextOutboundIP() (ip, hostname string, err error) {
 	return "", "", &ipPoolLimitedError{waitFor: minWait}
 }
 
-// undoIPCount returns a previously reserved rate-limit slot for an IP.
-// Call this when the OS-level bind to the IP failed so counters stay accurate.
-func (e *Engine) undoIPCount(ip string) {
+// undoIPCount returns a previously reserved rate-limit slot for an IP+domain.
+func (e *Engine) undoIPCount(ip, domain string) {
 	e.ipMu.Lock()
 	defer e.ipMu.Unlock()
-	if c, ok := e.ipCounters[ip]; ok {
+	key := ip + "|" + domain
+	if c, ok := e.ipCounters[key]; ok {
 		if c.minCount > 0 {
 			c.minCount--
 		}
@@ -919,7 +965,7 @@ func (e *Engine) checkThrottle(username, domain string, consume bool) (reason st
 		return "", 0
 	}
 	lim := e.ThrottleProvider(username, domain)
-	if lim.PerSec == 0 && lim.PerMin == 0 && lim.PerHour == 0 && lim.PerDay == 0 && lim.PerMonth == 0 {
+	if lim.PerSec == 0 && lim.PerMin == 0 && lim.PerHour == 0 && lim.PerDay == 0 && lim.PerMonth == 0 && lim.IntervalSec == 0 {
 		return "", 0 // no limits configured
 	}
 
@@ -946,6 +992,15 @@ func (e *Engine) checkThrottle(username, domain string, consume bool) (reason st
 	if now.After(c.hourReset)  { c.hourCount = 0;  c.hourReset  = now.Add(time.Hour)            }
 	if now.After(c.dayReset)   { c.dayCount = 0;   c.dayReset   = now.Add(24 * time.Hour)       }
 	if now.After(c.monthReset) { c.monthCount = 0; c.monthReset = now.Add(30 * 24 * time.Hour)  }
+
+	// IntervalSec: min seconds between emails (e.g. 5 = 1 email every 5 sec)
+	if lim.IntervalSec > 0 && !c.lastSendAt.IsZero() {
+		elapsed := time.Since(c.lastSendAt).Seconds()
+		if elapsed < float64(lim.IntervalSec) {
+			wait := time.Duration(lim.IntervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
+			return fmt.Sprintf("user %q: wait %ds between emails for %s", username, lim.IntervalSec, domain), wait
+		}
+	}
 
 	// Check limits.
 	if lim.PerSec > 0 && c.secCount >= lim.PerSec {
@@ -976,6 +1031,7 @@ func (e *Engine) checkThrottle(username, domain string, consume bool) (reason st
 		c.hourCount++
 		c.dayCount++
 		c.monthCount++
+		c.lastSendAt = now
 	}
 	return "", 0
 }
@@ -1100,7 +1156,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 	return nil
 }
 
-func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte,
+func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, data []byte,
 	onRcptBounce func(rcpt, reason string)) error {
 	addr := net.JoinHostPort(mxHost, port)
 	log.Printf("[DELIVERY]   connecting to %s …", addr)
@@ -1108,7 +1164,7 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 	var conn net.Conn
 	var err error
 
-	outIP, outHostname, ipErr := e.nextOutboundIP()
+	outIP, outHostname, ipErr := e.nextOutboundIP(domain)
 	if ipErr != nil {
 		// Pool is active but ALL IPs are rate-limited — signal the caller to defer.
 		return ipErr
@@ -1124,7 +1180,7 @@ func (e *Engine) sendToMX(from, mxHost, port string, rcpts []string, data []byte
 		if err != nil {
 			// Binding to this pool IP failed (not assigned to interface or OS error).
 			// Undo the reservation so the counter stays accurate, then fall back.
-			e.undoIPCount(outIP)
+			e.undoIPCount(outIP, domain)
 			log.Printf("[IPPOOL] ✗ bind to %s FAILED: %v", outIP, err)
 			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
@@ -1472,17 +1528,21 @@ type IPCounterSnapshot struct {
 }
 
 // GetIPStats returns the current in-memory send counters for every tracked IP.
-// Counters automatically reset at the end of each time window.
+// Keys are "ip|domain"; we aggregate by IP for display.
 func (e *Engine) GetIPStats() map[string]IPCounterSnapshot {
 	e.ipMu.Lock()
 	defer e.ipMu.Unlock()
-	result := make(map[string]IPCounterSnapshot, len(e.ipCounters))
-	for ip, c := range e.ipCounters {
-		result[ip] = IPCounterSnapshot{
-			MinCount:  c.minCount,
-			HourCount: c.hourCount,
-			DayCount:  c.dayCount,
+	result := make(map[string]IPCounterSnapshot)
+	for key, c := range e.ipCounters {
+		ip := key
+		if idx := strings.Index(key, "|"); idx > 0 {
+			ip = key[:idx]
 		}
+		s := result[ip]
+		s.MinCount += c.minCount
+		s.HourCount += c.hourCount
+		s.DayCount += c.dayCount
+		result[ip] = s
 	}
 	return result
 }

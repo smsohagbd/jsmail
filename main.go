@@ -84,11 +84,12 @@ func main() {
 	eng.ThrottleProvider = func(username, domain string) delivery.ThrottleLimit {
 		lim := appdb.GetEffectiveThrottle(username, domain)
 		return delivery.ThrottleLimit{
-			PerSec:   lim.PerSec,
-			PerMin:   lim.PerMin,
-			PerHour:  lim.PerHour,
-			PerDay:   lim.PerDay,
-			PerMonth: lim.PerMonth,
+			PerSec:      lim.PerSec,
+			PerMin:      lim.PerMin,
+			PerHour:     lim.PerHour,
+			PerDay:      lim.PerDay,
+			PerMonth:    lim.PerMonth,
+			IntervalSec: lim.IntervalSec,
 		}
 	}
 
@@ -123,7 +124,7 @@ func main() {
 		return mode, out
 	}
 
-	// IP pool: round-robin with per-IP rate limits from DB table.
+	// IP pool: round-robin with per-IP and per-domain rate limits from DB.
 	eng.IPPoolProvider = func() []delivery.IPEntry {
 		if appdb.GetSetting("ip_pool_enabled", "false") != "true" {
 			return nil
@@ -131,6 +132,17 @@ func main() {
 		pool := appdb.GetActiveIPPool()
 		entries := make([]delivery.IPEntry, 0, len(pool))
 		for _, p := range pool {
+			rules := appdb.GetIPPoolDomainRules(p.ID)
+			domainRules := make([]delivery.IPDomainRule, 0, len(rules))
+			for _, r := range rules {
+				domainRules = append(domainRules, delivery.IPDomainRule{
+					Domain:      r.Domain,
+					PerMin:      r.PerMin,
+					PerHour:     r.PerHour,
+					PerDay:      r.PerDay,
+					IntervalSec: r.IntervalSec,
+				})
+			}
 			entries = append(entries, delivery.IPEntry{
 				IP:           p.IP,
 				Hostname:     p.Hostname,
@@ -138,6 +150,8 @@ func main() {
 				PerHour:      p.PerHour,
 				PerDay:       p.PerDay,
 				WarmupPerDay: p.WarmupDayLimit(),
+				IntervalSec:  p.IntervalSec,
+				DomainRules:  domainRules,
 			})
 		}
 		return entries

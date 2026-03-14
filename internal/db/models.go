@@ -66,13 +66,14 @@ type DailyStats struct {
 
 type ThrottleRule struct {
 	gorm.Model
-	Username string // empty = global master rule
-	Domain   string // empty = applies to all domains
-	PerSec   int    `gorm:"default:0"`
-	PerMin   int    `gorm:"default:0"`
-	PerHour  int    `gorm:"default:0"`
-	PerDay   int    `gorm:"default:0"`
-	PerMonth int    `gorm:"default:0"`
+	Username    string // empty = global master rule
+	Domain      string // empty = applies to all domains
+	PerSec      int    `gorm:"default:0"`
+	PerMin      int    `gorm:"default:0"`
+	PerHour     int    `gorm:"default:0"`
+	PerDay      int    `gorm:"default:0"`
+	PerMonth    int    `gorm:"default:0"`
+	IntervalSec int    `gorm:"default:0"` // min seconds between emails (e.g. 5 = 1 email every 5 sec)
 }
 
 type UpstreamSMTP struct {
@@ -106,18 +107,31 @@ type BounceList struct {
 // IPPool holds outbound IP addresses with optional per-IP send rate limits.
 type IPPool struct {
 	gorm.Model
-	IP       string `gorm:"uniqueIndex;size:45;not null"`
-	Hostname string // optional label / rDNS name
-	Active   bool   `gorm:"default:true"`
-	PerMin   int    `gorm:"default:0"` // 0 = unlimited
-	PerHour  int    `gorm:"default:0"`
-	PerDay   int    `gorm:"default:0"`
-	Note     string
+	IP          string `gorm:"uniqueIndex;size:45;not null"`
+	Hostname    string // optional label / rDNS name
+	Active      bool   `gorm:"default:true"`
+	PerMin      int    `gorm:"default:0"` // 0 = unlimited (base limits; overridden by domain rules)
+	PerHour     int    `gorm:"default:0"`
+	PerDay      int    `gorm:"default:0"`
+	IntervalSec int    `gorm:"default:0"` // min seconds between emails from this IP (0 = no delay)
+	Note        string
 
 	// Warmup: gradually increase sending volume over N days.
 	WarmupEnabled   bool       `gorm:"default:false"`
 	WarmupStartedAt *time.Time // when warmup began (nil = not started); avoids MySQL '0000-00-00' error
 	WarmupDays      int        `gorm:"default:14"` // total warmup period
+}
+
+// IPPoolDomainRule holds per-domain rate limits for a specific IP.
+// When sending to domain X, use this rule if it matches; else use IP base limits.
+type IPPoolDomainRule struct {
+	gorm.Model
+	IPPoolID   uint   `gorm:"index;not null"`
+	Domain     string `gorm:"size:191;not null"` // e.g. gmail.com, yahoo.com
+	PerMin     int    `gorm:"default:0"`
+	PerHour    int    `gorm:"default:0"`
+	PerDay     int    `gorm:"default:0"`
+	IntervalSec int   `gorm:"default:0"` // min seconds between emails to this domain from this IP
 }
 
 // WarmupDayLimit returns the maximum emails/day this IP may send today based on

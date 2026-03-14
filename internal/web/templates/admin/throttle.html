@@ -4,7 +4,7 @@
   <div style="display:flex;align-items:center;justify-content:space-between;">
     <div>
       <div class="page-title">Throttling</div>
-      <div class="page-sub">Rate limits per user or domain. 0 = unlimited.</div>
+      <div class="page-sub">Rate limits per user or domain. 0 = unlimited. Interval = min seconds between emails.</div>
     </div>
     <button class="btn btn-primary" onclick="openModal()">
       <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
@@ -17,7 +17,7 @@
   <div style="overflow-x:auto;">
     <table class="data-table">
       <thead><tr>
-        <th style="padding-left:20px;">User</th><th>Domain</th><th>/sec</th><th>/min</th><th>/hour</th><th>/day</th><th>/month</th><th style="padding-right:20px;">Actions</th>
+        <th style="padding-left:20px;">User</th><th>Domain</th><th>/sec</th><th>/min</th><th>/hour</th><th>/day</th><th>/month</th><th>Interval</th><th style="padding-right:20px;">Actions</th>
       </tr></thead>
       <tbody>
         {{range .Rules}}
@@ -29,9 +29,10 @@
           <td style="color:#d4d4d8;">{{if .PerHour}}{{.PerHour}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
           <td style="color:#d4d4d8;">{{if .PerDay}}{{.PerDay}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
           <td style="color:#d4d4d8;">{{if .PerMonth}}{{.PerMonth}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="color:#d4d4d8;">{{if .IntervalSec}}{{.IntervalSec}}s{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
           <td style="padding-right:20px;">
             <div style="display:flex;gap:6px;">
-              <button class="btn btn-secondary btn-sm" onclick="editRule({{.ID}},'{{.Username}}','{{.Domain}}',{{.PerSec}},{{.PerMin}},{{.PerHour}},{{.PerDay}},{{.PerMonth}})">Edit</button>
+              <button class="btn btn-secondary btn-sm" onclick="editRule({{.ID}},'{{.Username}}','{{.Domain}}',{{.PerSec}},{{.PerMin}},{{.PerHour}},{{.PerDay}},{{.PerMonth}},{{.IntervalSec}})">Edit</button>
               <form method="POST" action="/admin/throttle/delete" style="display:inline;">
                 <input type="hidden" name="id" value="{{.ID}}"/>
                 <button type="submit" class="btn btn-danger">Del</button>
@@ -40,7 +41,7 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="8" class="empty-state" style="padding-left:20px;">No rules. All sending is unlimited.</td></tr>
+        <tr><td colspan="9" class="empty-state" style="padding-left:20px;">No rules. All sending is unlimited.</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -64,12 +65,17 @@
           <input class="form-input" type="text" name="domain" id="r-domain" placeholder="gmail.com"/>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px;">
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px;">
         <div><label class="form-label">Per Sec</label><input class="form-input" type="number" name="per_sec" id="r-sec" value="0" min="0"/></div>
         <div><label class="form-label">Per Min</label><input class="form-input" type="number" name="per_min" id="r-min" value="0" min="0"/></div>
         <div><label class="form-label">Per Hour</label><input class="form-input" type="number" name="per_hour" id="r-hour" value="0" min="0"/></div>
         <div><label class="form-label">Per Day</label><input class="form-input" type="number" name="per_day" id="r-day" value="0" min="0"/></div>
         <div><label class="form-label">Per Month</label><input class="form-input" type="number" name="per_month" id="r-month" value="0" min="0"/></div>
+      </div>
+      <div style="margin-bottom:20px;">
+        <label class="form-label">Interval (sec between emails)</label>
+        <input class="form-input" type="number" name="interval_sec" id="r-interval" value="0" min="0" placeholder="e.g. 5 = 1 email every 5 sec"/>
+        <p style="font-size:11px;color:#52525b;margin:4px 0 0;">0 = no delay. When set, enforces min seconds between each email.</p>
       </div>
       <div style="display:flex;gap:10px;">
         <button type="submit" class="btn btn-primary" style="flex:1;justify-content:center;">Save Rule</button>
@@ -81,7 +87,7 @@
 <script>
 function openModal(){document.getElementById('rule-modal').style.display='flex';}
 function closeModal(){document.getElementById('rule-modal').style.display='none';document.getElementById('rule-id').value='0';document.getElementById('modal-title').textContent='Add Throttle Rule';}
-function editRule(id,u,d,ps,pm,ph,pd,pmo){
+function editRule(id,u,d,ps,pm,ph,pd,pmo,interval){
   document.getElementById('modal-title').textContent='Edit Rule';
   document.getElementById('rule-id').value=id;
   document.getElementById('r-user').value=u;
@@ -91,6 +97,7 @@ function editRule(id,u,d,ps,pm,ph,pd,pmo){
   document.getElementById('r-hour').value=ph;
   document.getElementById('r-day').value=pd;
   document.getElementById('r-month').value=pmo;
+  document.getElementById('r-interval').value=interval||0;
   openModal();
 }
 </script>

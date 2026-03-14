@@ -63,12 +63,13 @@ type Handler struct {
 	IPStatsProvider func() map[string]delivery.IPCounterSnapshot
 }
 
-// ipEntryView combines a DB pool entry with live send counters.
+// ipEntryView combines a DB pool entry with live send counters and domain rules.
 type ipEntryView struct {
 	appdb.IPPool
-	MinSent  int
-	HourSent int
-	DaySent  int
+	MinSent      int
+	HourSent     int
+	DaySent      int
+	DomainRules  []appdb.IPPoolDomainRule
 }
 
 type TemplateRenderer interface {
@@ -417,12 +418,14 @@ func (h *Handler) SaveThrottle(w http.ResponseWriter, r *http.Request) {
 	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
 	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
 	perMonth, _ := strconv.Atoi(r.FormValue("per_month"))
+	intervalSec, _ := strconv.Atoi(r.FormValue("interval_sec"))
 
 	rule := appdb.ThrottleRule{
-		Username: r.FormValue("username"),
-		Domain:   r.FormValue("domain"),
-		PerSec:   perSec, PerMin: perMin, PerHour: perHour,
+		Username:    r.FormValue("username"),
+		Domain:      r.FormValue("domain"),
+		PerSec:      perSec, PerMin: perMin, PerHour: perHour,
 		PerDay: perDay, PerMonth: perMonth,
+		IntervalSec: intervalSec,
 	}
 	if id > 0 {
 		h.DB.Model(&appdb.ThrottleRule{}).Where("id = ?", id).Updates(rule)
@@ -657,7 +660,13 @@ func (h *Handler) IPPool(w http.ResponseWriter, r *http.Request) {
 	views := make([]ipEntryView, len(entries))
 	for i, e := range entries {
 		s := stats[e.IP]
-		views[i] = ipEntryView{IPPool: e, MinSent: s.MinCount, HourSent: s.HourCount, DaySent: s.DayCount}
+		views[i] = ipEntryView{
+			IPPool:      e,
+			MinSent:     s.MinCount,
+			HourSent:    s.HourCount,
+			DaySent:     s.DayCount,
+			DomainRules: appdb.GetIPPoolDomainRules(e.ID),
+		}
 	}
 
 	h.Tmpl.Render(w, "admin/ippool", map[string]interface{}{
@@ -702,6 +711,7 @@ func (h *Handler) AddIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 	if warmupDays == 0 {
 		warmupDays = 14
 	}
+	intervalSec, _ := strconv.Atoi(r.FormValue("interval_sec"))
 	entry := &appdb.IPPool{
 		IP:            ip,
 		Hostname:      strings.TrimSpace(r.FormValue("hostname")),
@@ -709,6 +719,7 @@ func (h *Handler) AddIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 		PerMin:        perMin,
 		PerHour:       perHour,
 		PerDay:        perDay,
+		IntervalSec:   intervalSec,
 		Note:          strings.TrimSpace(r.FormValue("note")),
 		WarmupEnabled: warmupEnabled,
 		WarmupDays:    warmupDays,
@@ -749,6 +760,7 @@ func (h *Handler) UpdateIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 	entry.PerMin = perMin
 	entry.PerHour = perHour
 	entry.PerDay = perDay
+	entry.IntervalSec, _ = strconv.Atoi(r.FormValue("interval_sec"))
 	entry.Note = strings.TrimSpace(r.FormValue("note"))
 	entry.WarmupDays = warmupDays
 	// Only reset warmup start time if toggling warmup on.
@@ -768,6 +780,54 @@ func (h *Handler) DeleteIPPoolEntry(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
 	appdb.DeleteIPPoolEntry(uint(id))
 	http.Redirect(w, r, "/admin/ippool?ok=deleted", http.StatusFound)
+}
+
+func (h *Handler) AddIPPoolDomainRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	ipPoolID, _ := strconv.ParseUint(r.FormValue("ip_pool_id"), 10, 64)
+	domain := strings.TrimSpace(r.FormValue("domain"))
+	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
+	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
+	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
+	intervalSec, _ := strconv.Atoi(r.FormValue("interval_sec"))
+	if err := appdb.AddIPPoolDomainRule(uint(ipPoolID), domain, perMin, perHour, perDay, intervalSec); err != nil {
+		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ippool?ok=Domain+rule+added", http.StatusFound)
+}
+
+func (h *Handler) UpdateIPPoolDomainRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	ipPoolID, _ := strconv.ParseUint(r.FormValue("ip_pool_id"), 10, 64)
+	domain := strings.TrimSpace(r.FormValue("domain"))
+	perMin, _ := strconv.Atoi(r.FormValue("per_min"))
+	perHour, _ := strconv.Atoi(r.FormValue("per_hour"))
+	perDay, _ := strconv.Atoi(r.FormValue("per_day"))
+	intervalSec, _ := strconv.Atoi(r.FormValue("interval_sec"))
+	if err := appdb.UpdateIPPoolDomainRule(uint(id), uint(ipPoolID), domain, perMin, perHour, perDay, intervalSec); err != nil {
+		http.Redirect(w, r, "/admin/ippool?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/ippool?ok=Domain+rule+updated", http.StatusFound)
+}
+
+func (h *Handler) DeleteIPPoolDomainRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	ipPoolID, _ := strconv.ParseUint(r.FormValue("ip_pool_id"), 10, 64)
+	appdb.DeleteIPPoolDomainRule(uint(id), uint(ipPoolID))
+	http.Redirect(w, r, "/admin/ippool?ok=Domain+rule+removed", http.StatusFound)
 }
 
 func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {

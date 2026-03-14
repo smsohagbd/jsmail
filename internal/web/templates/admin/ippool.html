@@ -74,6 +74,7 @@
         <th style="text-align:right;">Limit/Min</th>
         <th style="text-align:right;">Limit/Hour</th>
         <th style="text-align:right;">Limit/Day</th>
+        <th style="text-align:right;">Interval</th>
         <th style="text-align:right;color:#60a5fa;">Sent/Min</th>
         <th style="text-align:right;color:#60a5fa;">Sent/Hour</th>
         <th style="text-align:right;color:#60a5fa;">Sent Today</th>
@@ -92,6 +93,7 @@
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerMin}}{{.PerMin}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerHour}}{{.PerHour}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
           <td style="text-align:right;font-family:monospace;font-size:12px;">{{if .PerDay}}{{.PerDay}}{{else}}<span style="color:#3f3f46;">∞</span>{{end}}</td>
+          <td style="text-align:right;font-size:12px;">{{if .IntervalSec}}{{.IntervalSec}}s{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
           <!-- Live send counters (in-memory, resets on restart) -->
           <td style="text-align:right;font-family:monospace;font-size:12px;color:{{if gt .MinSent 0}}#34d399{{else}}#3f3f46{{end}};">{{.MinSent}}</td>
           <td style="text-align:right;font-family:monospace;font-size:12px;color:{{if gt .HourSent 0}}#60a5fa{{else}}#3f3f46{{end}};">{{.HourSent}}</td>
@@ -102,8 +104,9 @@
             <span id="test-result-{{.ID}}" style="font-size:11px;"></span>
           </td>
           <td style="padding-right:12px;text-align:right;white-space:nowrap;">
+            <button class="btn btn-ghost" style="font-size:11px;color:#a78bfa;" onclick="openDomainRules({{.ID}},'{{.IP}}')" title="Domain rules">Rules</button>
             <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;"
-              onclick="openEdit({{.ID}},'{{.IP}}','{{.Hostname}}',{{.Active}},{{.PerMin}},{{.PerHour}},{{.PerDay}},'{{.Note}}')">Edit</button>
+              onclick="openEdit({{.ID}},'{{.IP}}','{{.Hostname}}',{{.Active}},{{.PerMin}},{{.PerHour}},{{.PerDay}},{{.IntervalSec}},'{{.Note}}')">Edit</button>
             <form method="POST" action="/admin/ippool/delete" style="display:inline;">
               <input type="hidden" name="id" value="{{.ID}}"/>
               <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#f87171;" onclick="return confirm('Remove IP {{.IP}}?')">Remove</button>
@@ -111,7 +114,7 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="11" style="text-align:center;color:#52525b;padding:32px;">No IPs yet — click "Add IP" or "Bulk Import"</td></tr>
+        <tr><td colspan="12" style="text-align:center;color:#52525b;padding:32px;">No IPs yet — click "Add IP" or "Bulk Import"</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -198,6 +201,10 @@
             <input class="form-input" name="per_day" type="number" min="0" value="0"/>
           </div>
           <div class="form-group">
+            <label class="form-label">Interval (sec) <span style="color:#52525b;">(0=none)</span></label>
+            <input class="form-input" name="interval_sec" type="number" min="0" value="0" placeholder="e.g. 5"/>
+          </div>
+          <div class="form-group">
             <label class="form-label">Status</label>
             <select class="form-input" name="active">
               <option value="on">Active</option>
@@ -250,6 +257,10 @@
             <input class="form-input" name="per_day" id="edit-perday" type="number" min="0"/>
           </div>
           <div class="form-group">
+            <label class="form-label">Interval (sec) <span style="color:#52525b;">(0=none)</span></label>
+            <input class="form-input" name="interval_sec" id="edit-interval" type="number" min="0" value="0"/>
+          </div>
+          <div class="form-group">
             <label class="form-label">Status</label>
             <select class="form-input" name="active" id="edit-active">
               <option value="on">Active</option>
@@ -270,6 +281,77 @@
   </div>
 </div>
 
+<!-- Domain rules modal -->
+<div id="rules-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;">
+  <div class="card" style="width:560px;max-width:95vw;">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+      <span class="card-title">Domain rules — IP <span id="rules-ip"></span></span>
+      <button onclick="document.getElementById('rules-modal').style.display='none'" class="btn btn-ghost" style="font-size:11px;">✕</button>
+    </div>
+    <div class="card-body" style="padding:20px;">
+      <input type="hidden" id="rules-ip-pool-id" value=""/>
+      {{range .Entries}}
+      <div id="rules-content-{{.ID}}" style="display:none;">
+        <table class="data-table" style="margin-bottom:16px;">
+          <thead><tr><th style="padding-left:20px;">Domain</th><th>/min</th><th>/hour</th><th>/day</th><th>Interval</th><th></th></tr></thead>
+          <tbody>
+            {{range .DomainRules}}
+            <tr>
+              <td style="padding-left:20px;">{{.Domain}}</td>
+              <td>{{if .PerMin}}{{.PerMin}}{{else}}—{{end}}</td>
+              <td>{{if .PerHour}}{{.PerHour}}{{else}}—{{end}}</td>
+              <td>{{if .PerDay}}{{.PerDay}}{{else}}—{{end}}</td>
+              <td>{{if .IntervalSec}}{{.IntervalSec}}s{{else}}—{{end}}</td>
+              <td>
+                <button class="btn btn-ghost" style="font-size:11px;color:#60a5fa;" onclick="editDomainRule({{.ID}},{{.IPPoolID}},'{{.Domain}}',{{.PerMin}},{{.PerHour}},{{.PerDay}},{{.IntervalSec}})">Edit</button>
+                <form method="POST" action="/admin/ippool/domain-rule/delete" style="display:inline;">
+                  <input type="hidden" name="id" value="{{.ID}}"/>
+                  <input type="hidden" name="ip_pool_id" value="{{.IPPoolID}}"/>
+                  <button type="submit" class="btn btn-ghost" style="font-size:11px;color:#f87171;" onclick="return confirm('Remove this rule?')">Del</button>
+                </form>
+              </td>
+            </tr>
+            {{else}}
+            <tr><td colspan="6" style="padding:16px 20px;color:#52525b;">No domain rules. Base limits apply to all domains.</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+        <form method="POST" action="/admin/ippool/domain-rule/add" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+          <input type="hidden" name="ip_pool_id" value="{{.ID}}"/>
+          <div><label class="form-label">Domain</label><input class="form-input" name="domain" placeholder="gmail.com" style="width:120px;"/></div>
+          <div><label class="form-label">/min</label><input class="form-input" name="per_min" type="number" min="0" value="0" style="width:70px;"/></div>
+          <div><label class="form-label">/hour</label><input class="form-input" name="per_hour" type="number" min="0" value="0" style="width:70px;"/></div>
+          <div><label class="form-label">/day</label><input class="form-input" name="per_day" type="number" min="0" value="0" style="width:70px;"/></div>
+          <div><label class="form-label">Interval</label><input class="form-input" name="interval_sec" type="number" min="0" value="0" placeholder="sec" style="width:60px;"/></div>
+          <button type="submit" class="btn btn-primary">Add rule</button>
+        </form>
+      </div>
+      {{end}}
+    </div>
+  </div>
+</div>
+
+<!-- Edit domain rule modal -->
+<div id="edit-rule-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:101;align-items:center;justify-content:center;">
+  <div class="card" style="width:400px;">
+    <div class="card-header"><span class="card-title">Edit domain rule</span><button onclick="document.getElementById('edit-rule-modal').style.display='none'" class="btn btn-ghost">✕</button></div>
+    <div class="card-body" style="padding:20px;">
+      <form method="POST" action="/admin/ippool/domain-rule/update">
+        <input type="hidden" name="id" id="er-id"/>
+        <input type="hidden" name="ip_pool_id" id="er-ip-pool-id"/>
+        <div class="form-group"><label class="form-label">Domain</label><input class="form-input" name="domain" id="er-domain" required/></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+          <div class="form-group"><label class="form-label">/min</label><input class="form-input" name="per_min" id="er-permin" type="number" min="0"/></div>
+          <div class="form-group"><label class="form-label">/hour</label><input class="form-input" name="per_hour" id="er-perhour" type="number" min="0"/></div>
+          <div class="form-group"><label class="form-label">/day</label><input class="form-input" name="per_day" id="er-perday" type="number" min="0"/></div>
+        </div>
+        <div class="form-group"><label class="form-label">Interval (sec)</label><input class="form-input" name="interval_sec" id="er-interval" type="number" min="0" value="0"/></div>
+        <div style="display:flex;gap:8px;margin-top:12px;"><button type="submit" class="btn btn-primary">Save</button><button type="button" class="btn btn-ghost" onclick="document.getElementById('edit-rule-modal').style.display='none'">Cancel</button></div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <script>
 var currentView = null;
 function toggleView(v) {
@@ -280,16 +362,36 @@ function toggleView(v) {
   if (v === null)   { currentView = null; }
 }
 
-function openEdit(id, ip, hostname, active, perMin, perHour, perDay, note) {
+function openEdit(id, ip, hostname, active, perMin, perHour, perDay, intervalSec, note) {
   document.getElementById('edit-id').value      = id;
   document.getElementById('edit-ip').value       = ip;
   document.getElementById('edit-hostname').value = hostname;
   document.getElementById('edit-permin').value   = perMin;
-  document.getElementById('edit-perhour').value  = perHour;
-  document.getElementById('edit-perday').value   = perDay;
+  document.getElementById('edit-perhour').value = perHour;
+  document.getElementById('edit-perday').value  = perDay;
+  document.getElementById('edit-interval').value = intervalSec || 0;
   document.getElementById('edit-active').value   = active ? 'on' : 'off';
-  document.getElementById('edit-note').value     = note;
+  document.getElementById('edit-note').value     = note || '';
   document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function openDomainRules(ipPoolId, ip) {
+  document.getElementById('rules-ip-pool-id').value = ipPoolId;
+  document.getElementById('rules-ip').textContent = ip;
+  document.querySelectorAll('[id^="rules-content-"]').forEach(function(el){ el.style.display='none'; });
+  var content = document.getElementById('rules-content-'+ipPoolId);
+  if (content) content.style.display = 'block';
+  document.getElementById('rules-modal').style.display = 'flex';
+}
+function editDomainRule(id, ipPoolId, domain, perMin, perHour, perDay, intervalSec) {
+  document.getElementById('er-id').value = id;
+  document.getElementById('er-ip-pool-id').value = ipPoolId;
+  document.getElementById('er-domain').value = domain || '';
+  document.getElementById('er-permin').value = perMin || 0;
+  document.getElementById('er-perhour').value = perHour || 0;
+  document.getElementById('er-perday').value = perDay || 0;
+  document.getElementById('er-interval').value = intervalSec || 0;
+  document.getElementById('edit-rule-modal').style.display = 'flex';
 }
 
 function testIP(ip, id) {

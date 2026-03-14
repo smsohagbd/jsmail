@@ -66,6 +66,7 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 		&BounceList{},
 		&Domain{},
 		&IPPool{},
+		&IPPoolDomainRule{},
 		&UserSMTP{},
 		&Suppression{},
 	); err != nil {
@@ -344,7 +345,46 @@ func SaveIPPoolEntry(e *IPPool) error {
 }
 
 func DeleteIPPoolEntry(id uint) {
+	DB.Unscoped().Where("ip_pool_id = ?", id).Delete(&IPPoolDomainRule{})
 	DB.Unscoped().Delete(&IPPool{}, id)
+}
+
+// GetIPPoolDomainRules returns all domain rules for an IP.
+func GetIPPoolDomainRules(ipPoolID uint) []IPPoolDomainRule {
+	var rules []IPPoolDomainRule
+	DB.Where("ip_pool_id = ?", ipPoolID).Order("domain asc").Find(&rules)
+	return rules
+}
+
+func AddIPPoolDomainRule(ipPoolID uint, domain string, perMin, perHour, perDay, intervalSec int) error {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return fmt.Errorf("domain required")
+	}
+	return DB.Create(&IPPoolDomainRule{
+		IPPoolID:   ipPoolID,
+		Domain:     domain,
+		PerMin:     perMin,
+		PerHour:    perHour,
+		PerDay:     perDay,
+		IntervalSec: intervalSec,
+	}).Error
+}
+
+func UpdateIPPoolDomainRule(id, ipPoolID uint, domain string, perMin, perHour, perDay, intervalSec int) error {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	return DB.Model(&IPPoolDomainRule{}).Where("id = ? AND ip_pool_id = ?", id, ipPoolID).
+		Updates(map[string]interface{}{
+			"domain":       domain,
+			"per_min":      perMin,
+			"per_hour":     perHour,
+			"per_day":      perDay,
+			"interval_sec": intervalSec,
+		}).Error
+}
+
+func DeleteIPPoolDomainRule(id, ipPoolID uint) {
+	DB.Where("id = ? AND ip_pool_id = ?", id, ipPoolID).Delete(&IPPoolDomainRule{})
 }
 
 // ──────────────────────────── Settings ───────────────────────────────────────
@@ -467,11 +507,12 @@ func SetUserSMTPMode(username, mode string, rotation bool, maxSMTP int) {
 
 // ThrottleLimit holds effective send-rate limits for one user+domain combination.
 type ThrottleLimit struct {
-	PerSec   int
-	PerMin   int
-	PerHour  int
-	PerDay   int
-	PerMonth int
+	PerSec      int
+	PerMin      int
+	PerHour     int
+	PerDay      int
+	PerMonth    int
+	IntervalSec int // min seconds between emails (e.g. 5 = 1 every 5 sec)
 }
 
 // GetEffectiveThrottle returns the most restrictive applicable throttle rule for
@@ -496,11 +537,12 @@ func GetEffectiveThrottle(username, domain string) ThrottleLimit {
 		if score > bestScore {
 			bestScore = score
 			best = ThrottleLimit{
-				PerSec:   r.PerSec,
-				PerMin:   r.PerMin,
-				PerHour:  r.PerHour,
-				PerDay:   r.PerDay,
-				PerMonth: r.PerMonth,
+				PerSec:      r.PerSec,
+				PerMin:      r.PerMin,
+				PerHour:     r.PerHour,
+				PerDay:      r.PerDay,
+				PerMonth:    r.PerMonth,
+				IntervalSec: r.IntervalSec,
 			}
 		}
 	}
