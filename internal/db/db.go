@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -23,6 +24,9 @@ import (
 )
 
 var DB *gorm.DB
+
+// forceEmailRotate is the round-robin index for force-email address rotation.
+var forceEmailRotate atomic.Uint64
 
 // Init opens the database (SQLite or MySQL), runs migrations, and seeds the admin user.
 // cfg must have Driver set ("sqlite" or "mysql") and the appropriate connection fields.
@@ -486,6 +490,109 @@ func SetForceFromConfig(enabled bool, domains string) error {
 		return err
 	}
 	return SetSetting("force_from_domains", domains)
+}
+
+// ──────────────────────────── Force Email Address ──────────────────────────────
+
+// GetForceEmailEnabled returns true if force-email is enabled.
+func GetForceEmailEnabled() bool {
+	return GetSetting("force_email_enabled", "false") == "true"
+}
+
+// GetForceEmailAddressesRaw returns the raw addresses string (newline-separated) for editing.
+func GetForceEmailAddressesRaw() string {
+	return GetSetting("force_email_addresses", "")
+}
+
+// GetForceEmailAddresses returns the list of full addresses for rotation (one per line).
+// Each line can be "email@domain.com" or "Name <email@domain.com>".
+func GetForceEmailAddresses() []string {
+	raw := GetSetting("force_email_addresses", "")
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		s := strings.TrimSpace(line)
+		if s != "" && !strings.HasPrefix(s, "#") && strings.Contains(s, "@") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// SetForceEmailConfig saves the force-email enabled flag, addresses, subject, and body.
+func SetForceEmailConfig(enabled bool, addresses, subject, body string) error {
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+	if err := SetSetting("force_email_enabled", val); err != nil {
+		return err
+	}
+	if err := SetSetting("force_email_addresses", addresses); err != nil {
+		return err
+	}
+	if err := SetSetting("force_email_subject", subject); err != nil {
+		return err
+	}
+	return SetSetting("force_email_body", body)
+}
+
+// GetForceEmailSubject returns the forced subject (empty = do not override).
+func GetForceEmailSubject() string {
+	return GetSetting("force_email_subject", "")
+}
+
+// GetForceEmailBody returns the forced body (empty = do not override). Accepts plain text or HTML.
+func GetForceEmailBody() string {
+	return GetSetting("force_email_body", "")
+}
+
+// GetNextForceEmailAddress returns the next address from the rotation pool, or "" if disabled/empty.
+func GetNextForceEmailAddress() string {
+	addrs := GetForceEmailAddresses()
+	if len(addrs) == 0 {
+		return ""
+	}
+	idx := forceEmailRotate.Add(1) - 1
+	return addrs[int(idx)%len(addrs)]
+}
+
+// ApplyForceAddress returns the From address to use and whether any rewrite was applied.
+// Caller should use email.RewriteFromHeader(data, newFrom) when applied is true.
+func ApplyForceAddress(originalFrom string) (newFrom string, applied bool) {
+	if GetForceEmailEnabled() {
+		next := GetNextForceEmailAddress()
+		if next != "" {
+			return next, true
+		}
+	}
+	if GetForceFromEnabled() {
+		domains := GetForceFromDomains()
+		if len(domains) > 0 {
+			local := extractLocalPartFromAddr(originalFrom)
+			if local == "" {
+				local = "noreply"
+			}
+			idx := forceFromRotate.Add(1) - 1
+			domain := domains[int(idx)%len(domains)]
+			return local + "@" + domain, true
+		}
+	}
+	return originalFrom, false
+}
+
+var forceFromRotate atomic.Uint64
+
+func extractLocalPartFromAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if start := strings.LastIndex(addr, "<"); start >= 0 {
+		if end := strings.Index(addr[start:], ">"); end >= 0 {
+			addr = addr[start+1 : start+end]
+		}
+	}
+	if at := strings.Index(addr, "@"); at > 0 {
+		return strings.TrimSpace(addr[:at])
+	}
+	return ""
 }
 
 // ──────────────────────────── Settings ───────────────────────────────────────

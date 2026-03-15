@@ -888,12 +888,16 @@ func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	h.Tmpl.Render(w, "admin/forcefrom", map[string]interface{}{
-		"Page":       "forcefrom",
-		"ActiveUser": claims.Username,
-		"Enabled":    appdb.GetForceFromEnabled(),
-		"Domains":    appdb.GetForceFromDomainsRaw(),
-		"FlashOK":    r.URL.Query().Get("ok"),
-		"FlashErr":   r.URL.Query().Get("err"),
+		"Page":              "forcefrom",
+		"ActiveUser":        claims.Username,
+		"Enabled":           appdb.GetForceFromEnabled(),
+		"Domains":           appdb.GetForceFromDomainsRaw(),
+		"ForceEmailEnabled": appdb.GetForceEmailEnabled(),
+		"ForceEmailAddrs":   appdb.GetForceEmailAddressesRaw(),
+		"ForceEmailSubject": appdb.GetForceEmailSubject(),
+		"ForceEmailBody":   appdb.GetForceEmailBody(),
+		"FlashOK":           r.URL.Query().Get("ok"),
+		"FlashErr":          r.URL.Query().Get("err"),
 	})
 }
 
@@ -907,6 +911,15 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 	if err := appdb.SetForceFromConfig(enabled, domains); err != nil {
 		log.Printf("forcefrom: failed to save: %v", err)
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	forceEmailEnabled := r.FormValue("force_email_enabled") == "on"
+	forceEmailAddrs := strings.TrimSpace(r.FormValue("force_email_addresses"))
+	forceEmailSubject := strings.TrimSpace(r.FormValue("force_email_subject"))
+	forceEmailBody := r.FormValue("force_email_body")
+	if err := appdb.SetForceEmailConfig(forceEmailEnabled, forceEmailAddrs, forceEmailSubject, forceEmailBody); err != nil {
+		log.Printf("forceemail: failed to save: %v", err)
+		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save+Force+Email", http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, "/admin/forcefrom?ok=Config+updated", http.StatusFound)

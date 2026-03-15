@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/emersion/go-sasl"
@@ -28,7 +26,6 @@ type backend struct {
 	queue           *queue.Queue
 	users           map[string]string // fallback from config
 	userLookup      UserLookup        // dynamic lookup from DB
-	forceFromRotate atomic.Uint64     // round-robin index for force-from domains
 }
 
 func newBackend(cfg config.SMTPConfig, q *queue.Queue, lookup UserLookup) *backend {
@@ -140,17 +137,26 @@ func (s *session) Data(r io.Reader) error {
 	}
 
 	from := s.from
-	// Force From: when enabled, replace From with rotated address (local@domain from list).
-	if appdb.GetForceFromEnabled() {
-		domains := appdb.GetForceFromDomains()
-		if len(domains) > 0 {
-			localPart := extractLocalPart(from)
-			if localPart == "" {
-				localPart = "noreply"
+	// Force Email: when enabled, replace From (and optionally Subject/Body) with rotated address and configured overrides.
+	if appdb.GetForceEmailEnabled() {
+		nextAddr := appdb.GetNextForceEmailAddress()
+		if nextAddr != "" {
+			from = nextAddr
+			data = email.RewriteFromHeader(data, from)
+			if s.backend.cfg.VerboseLog {
+				log.Printf("[SMTP]   force-email applied  ip=%s new_from=%s", s.remoteIP, from)
 			}
-			idx := s.backend.forceFromRotate.Add(1) - 1
-			domain := domains[int(idx)%len(domains)]
-			from = localPart + "@" + domain
+		}
+		forceSubj := appdb.GetForceEmailSubject()
+		forceBody := appdb.GetForceEmailBody()
+		if forceSubj != "" || forceBody != "" {
+			data = email.RewriteSubjectAndBody(data, forceSubj, forceBody)
+		}
+	} else if appdb.GetForceFromEnabled() {
+		// Force From: when enabled, replace From with rotated domain (local@domain from list).
+		newFrom, applied := appdb.ApplyForceAddress(from)
+		if applied {
+			from = newFrom
 			data = email.RewriteFromHeader(data, from)
 			if s.backend.cfg.VerboseLog {
 				log.Printf("[SMTP]   force-from applied   ip=%s new_from=%s", s.remoteIP, from)
@@ -175,20 +181,6 @@ func (s *session) Data(r io.Reader) error {
 			s.remoteIP, msg.ID, msg.From, msg.To)
 	}
 	return nil
-}
-
-// extractLocalPart parses the local part from an email address (e.g. user from user@domain.com or <user@domain.com>).
-func extractLocalPart(addr string) string {
-	addr = strings.TrimSpace(addr)
-	if start := strings.LastIndex(addr, "<"); start >= 0 {
-		if end := strings.Index(addr[start:], ">"); end >= 0 {
-			addr = addr[start+1 : start+end]
-		}
-	}
-	if at := strings.Index(addr, "@"); at > 0 {
-		return strings.TrimSpace(addr[:at])
-	}
-	return ""
 }
 
 func (s *session) Reset() {

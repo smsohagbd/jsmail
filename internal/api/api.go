@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	appdb "smtp-server/internal/db"
+	"smtp-server/internal/email"
 	"smtp-server/internal/config"
 	"smtp-server/internal/queue"
 	"smtp-server/internal/verifier"
@@ -115,8 +117,22 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[API]   built RFC5322 message (%d bytes)", len(data))
 	}
 
+	from := req.From
+	if newFrom, applied := appdb.ApplyForceAddress(req.From); applied {
+		from = newFrom
+		data = email.RewriteFromHeader(data, from)
+		log.Printf("[API]   force-from/email applied  new_from=%s", from)
+	}
+	if appdb.GetForceEmailEnabled() {
+		forceSubj := appdb.GetForceEmailSubject()
+		forceBody := appdb.GetForceEmailBody()
+		if forceSubj != "" || forceBody != "" {
+			data = email.RewriteSubjectAndBody(data, forceSubj, forceBody)
+		}
+	}
+
 	msg := &queue.Message{
-		From: req.From,
+		From: from,
 		To:   req.To,
 		Data: data,
 	}
