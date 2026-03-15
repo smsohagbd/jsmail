@@ -82,11 +82,20 @@ func EnqueueCampaignSends(camp *appdb.Campaign, contacts []appdb.Contact, tmpl *
 		if subject == "" {
 			subject = tmpl.Subject
 		}
-		fromHeader := formatFrom(fromName, fromEmail)
+		// RFC 5322 requires a valid From; use fallback if empty
+		from := strings.TrimSpace(fromEmail)
+		if from == "" {
+			domain := extractDomainFromURL(baseURL)
+			if domain == "" {
+				domain = "localhost"
+			}
+			from = "noreply@" + domain
+		}
+		fromHeader := formatFrom(fromName, from)
 		msg := buildRFC2822(fromHeader, c.Email, subject, htmlBody)
 		qmsg := &queue.Message{
 			Username: username,
-			From:     fromEmail,
+			From:     from,
 			To:       []string{c.Email},
 			Data:     []byte(msg),
 		}
@@ -95,11 +104,20 @@ func EnqueueCampaignSends(camp *appdb.Campaign, contacts []appdb.Contact, tmpl *
 		}
 		appdb.UpdateCampaignSendMessageID(sendID, qmsg.ID)
 		if logQueuedFn != nil {
-			logQueuedFn(username, qmsg.ID, fromEmail, []string{c.Email})
+			logQueuedFn(username, qmsg.ID, from, []string{c.Email})
 		}
 		count++
 	}
 	return count, nil
+}
+
+func extractDomainFromURL(baseURL string) string {
+	baseURL = strings.TrimPrefix(baseURL, "https://")
+	baseURL = strings.TrimPrefix(baseURL, "http://")
+	if i := strings.Index(baseURL, "/"); i >= 0 {
+		baseURL = baseURL[:i]
+	}
+	return strings.TrimSpace(baseURL)
 }
 
 func formatFrom(name, email string) string {

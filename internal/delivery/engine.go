@@ -298,7 +298,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 	e.logV("[DELIVERY]   attempt = %d / %d", msg.RetryCount+1, e.cfg.MaxRetries+1)
 	e.logV("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
-	data := injectMissingHeaders(msg.Data, e.cfg.HeloName)
+	data := injectMissingHeaders(msg.Data, e.cfg.HeloName, msg.From)
 
 	// ── Unsubscribe header injection ───────────────────────────────────────
 	if e.UnsubBaseURL != "" && e.UnsubTokenFn != nil {
@@ -1328,8 +1328,8 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 // ---- Header injection ----
 
 // injectMissingHeaders ensures the message has the required RFC 5322 headers
-// (Message-ID and Date) that Gmail and other providers reject without.
-func injectMissingHeaders(data []byte, domain string) []byte {
+// (From, Message-ID, Date) that Gmail and other providers reject without.
+func injectMissingHeaders(data []byte, domain, fromAddr string) []byte {
 	header, body, found := bytes.Cut(data, []byte("\r\n\r\n"))
 	if !found {
 		// Try Unix line endings
@@ -1340,8 +1340,24 @@ func injectMissingHeaders(data []byte, domain string) []byte {
 	}
 
 	headerStr := string(header)
-	var inject strings.Builder
+	// From header is required by RFC 5322; Gmail rejects messages without it
+	if getFromHeaderValue(headerStr) == "" {
+		addr := strings.TrimSpace(fromAddr)
+		if addr == "" {
+			addr = "noreply@" + domain
+		}
+		if addr != "" && !strings.Contains(addr, "@") {
+			addr = "noreply@" + domain
+		}
+		if addr != "" {
+			if !strings.Contains(addr, "<") {
+				addr = "<" + addr + ">"
+			}
+			headerStr = fixOrInjectFromHeader(headerStr, "From: "+addr)
+		}
+	}
 
+	var inject strings.Builder
 	if !containsHeader(headerStr, "Message-ID") {
 		b := make([]byte, 12)
 		rand.Read(b)
@@ -1359,7 +1375,7 @@ func injectMissingHeaders(data []byte, domain string) []byte {
 	}
 
 	sep := "\r\n\r\n"
-	if !found {
+	if !bytes.Contains(data, []byte("\r\n\r\n")) {
 		sep = "\n\n"
 	}
 	return []byte(inject.String() + headerStr + sep + string(body))
@@ -1395,6 +1411,59 @@ func containsHeader(header, name string) bool {
 	lower := strings.ToLower(header)
 	return strings.Contains(lower, "\n"+strings.ToLower(name)+":") ||
 		strings.HasPrefix(lower, strings.ToLower(name)+":")
+}
+
+// fixOrInjectFromHeader replaces an empty/missing From header with a valid one.
+func fixOrInjectFromHeader(headerStr, fromLine string) string {
+	needsFrom := getFromHeaderValue(headerStr) == ""
+	if !needsFrom {
+		return headerStr
+	}
+	lines := strings.Split(strings.ReplaceAll(headerStr, "\r\n", "\n"), "\n")
+	var out []string
+	added := false
+	skipNext := false
+	for _, line := range lines {
+		if skipNext {
+			if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+				continue
+			}
+			skipNext = false
+		}
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) >= 5 && strings.EqualFold(trimmed[:5], "From:") {
+			// Replace empty From with valid one
+			out = append(out, fromLine)
+			added = true
+			skipNext = true
+			continue
+		}
+		out = append(out, line)
+	}
+	if !added {
+		out = append([]string{fromLine}, out...)
+	}
+	return strings.ReplaceAll(strings.Join(out, "\n"), "\n", "\r\n")
+}
+
+// getFromHeaderValue returns the value of the From header, or empty if missing/invalid.
+func getFromHeaderValue(headerStr string) string {
+	lower := strings.ToLower(headerStr)
+	idx := strings.Index(lower, "from:")
+	if idx < 0 {
+		return ""
+	}
+	// Get rest of line after "from:"
+	rest := headerStr[idx+5:]
+	if nl := strings.IndexAny(rest, "\r\n"); nl >= 0 {
+		rest = rest[:nl]
+	}
+	val := strings.TrimSpace(rest)
+	// Must contain @ to be a valid address
+	if val == "" || !strings.Contains(val, "@") {
+		return ""
+	}
+	return val
 }
 
 // ---- DKIM helpers ----
