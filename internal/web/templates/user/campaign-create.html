@@ -36,12 +36,13 @@
       </div>
       <div class="form-group">
         <label class="form-label">Template</label>
-        <select class="form-input" name="template_id" required>
+        <select class="form-input" name="template_id" id="template_id" required>
           <option value="">— Select —</option>
           {{range .Templates}}
           <option value="{{.ID}}">{{.Name}}</option>
           {{end}}
         </select>
+        <small class="form-hint">Selecting a template fills Subject, From Name, From Email, and Reply-To below</small>
       </div>
       <div class="form-group">
         <label class="form-label">Contact List</label>
@@ -60,4 +61,24 @@
   </form>
 </div>
 </div>
+<script>
+(function(){
+  var templatesData = {{.TemplatesJSON}};
+  var sel = document.getElementById('template_id');
+  if (!sel) return;
+  sel.addEventListener('change', function(){
+    var id = this.value;
+    var d = templatesData[id];
+    if (!d) return;
+    var fn = document.querySelector('input[name="from_name"]');
+    var fe = document.querySelector('input[name="from_email"]');
+    var rt = document.querySelector('input[name="reply_to"]');
+    var subj = document.querySelector('input[name="subject"]');
+    if (fn && d.from_name) fn.value = d.from_name;
+    if (fe && d.from_email) fe.value = d.from_email;
+    if (rt && d.reply_to) rt.value = d.reply_to;
+    if (subj && d.subject) subj.value = d.subject;
+  });
+})();
+</script>
 {{end}}

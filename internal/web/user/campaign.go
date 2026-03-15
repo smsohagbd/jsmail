@@ -3,6 +3,8 @@ package user
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
+	"html/template"
 	"io"
 	"net/http"
 	"net/url"
@@ -232,6 +234,9 @@ func (h *Handler) TemplateEdit(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		name := strings.TrimSpace(r.FormValue("name"))
 		subject := strings.TrimSpace(r.FormValue("subject"))
+		fromName := strings.TrimSpace(r.FormValue("from_name"))
+		fromEmail := strings.TrimSpace(r.FormValue("from_email"))
+		replyTo := strings.TrimSpace(r.FormValue("reply_to"))
 		htmlBody := r.FormValue("html_body")
 		textBody := r.FormValue("text_body")
 		if name == "" || htmlBody == "" {
@@ -241,9 +246,9 @@ func (h *Handler) TemplateEdit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if t != nil {
-			appdb.UpdateTemplate(t.ID, claims.Username, name, subject, htmlBody, textBody)
+			appdb.UpdateTemplate(t.ID, claims.Username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody)
 		} else {
-			if _, err := appdb.CreateTemplate(claims.Username, name, subject, htmlBody, textBody); err != nil {
+			if _, err := appdb.CreateTemplate(claims.Username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody); err != nil {
 				h.Tmpl.Render(w, "user/template-edit", merge(h.base(claims.Username), map[string]interface{}{
 					"Page": "templates", "Template": t, "Error": err.Error(),
 				}))
@@ -253,8 +258,13 @@ func (h *Handler) TemplateEdit(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/user/templates", http.StatusFound)
 		return
 	}
+	initialHTML := template.HTML("null")
+	if t != nil && t.HTMLBody != "" {
+		b, _ := json.Marshal(t.HTMLBody)
+		initialHTML = template.HTML(string(b))
+	}
 	h.Tmpl.Render(w, "user/template-edit", merge(h.base(claims.Username), map[string]interface{}{
-		"Page": "templates", "Template": t,
+		"Page": "templates", "Template": t, "InitialHTML": initialHTML,
 	}))
 }
 
@@ -270,6 +280,20 @@ func (h *Handler) TemplateDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─── Campaigns ───────────────────────────────────────────────────────────────
+
+func buildTemplatesJSON(tmpls []appdb.CampaignTemplate) string {
+	tmplData := make(map[string]map[string]string)
+	for _, tm := range tmpls {
+		tmplData[strconv.FormatUint(uint64(tm.ID), 10)] = map[string]string{
+			"subject":    tm.Subject,
+			"from_name":  tm.FromName,
+			"from_email": tm.FromEmail,
+			"reply_to":   tm.ReplyTo,
+		}
+	}
+	b, _ := json.Marshal(tmplData)
+	return string(b)
+}
 
 func (h *Handler) Campaigns(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
@@ -291,9 +315,10 @@ func (h *Handler) CampaignCreate(w http.ResponseWriter, r *http.Request) {
 		replyTo := strings.TrimSpace(r.FormValue("reply_to"))
 		templateID, _ := strconv.ParseUint(r.FormValue("template_id"), 10, 64)
 		listID, _ := strconv.ParseUint(r.FormValue("list_id"), 10, 64)
+		tmplData := buildTemplatesJSON(tmpls)
 		if name == "" || subject == "" || fromEmail == "" || templateID == 0 || listID == 0 {
 			h.Tmpl.Render(w, "user/campaign-create", merge(h.base(claims.Username), map[string]interface{}{
-				"Page": "campaigns", "Lists": lists, "Templates": tmpls, "Error": "All fields required",
+				"Page": "campaigns", "Lists": lists, "Templates": tmpls, "TemplatesJSON": tmplData, "Error": "All fields required",
 			}))
 			return
 		}
@@ -303,7 +328,7 @@ func (h *Handler) CampaignCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := appdb.CreateCampaign(claims.Username, camp); err != nil {
 			h.Tmpl.Render(w, "user/campaign-create", merge(h.base(claims.Username), map[string]interface{}{
-				"Page": "campaigns", "Lists": lists, "Templates": tmpls, "Error": err.Error(),
+				"Page": "campaigns", "Lists": lists, "Templates": tmpls, "TemplatesJSON": tmplData, "Error": err.Error(),
 			}))
 			return
 		}
@@ -311,7 +336,7 @@ func (h *Handler) CampaignCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Tmpl.Render(w, "user/campaign-create", merge(h.base(claims.Username), map[string]interface{}{
-		"Page": "campaigns", "Lists": lists, "Templates": tmpls,
+		"Page": "campaigns", "Lists": lists, "Templates": tmpls, "TemplatesJSON": buildTemplatesJSON(tmpls),
 	}))
 }
 

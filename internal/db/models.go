@@ -209,7 +209,10 @@ type CampaignTemplate struct {
 	gorm.Model
 	OwnerUsername string `gorm:"index;size:191;not null"`
 	Name          string `gorm:"size:191;not null"`
-	Subject       string `gorm:"size:500"` // default subject line
+	Subject       string `gorm:"size:500"`   // default subject line
+	FromName      string `gorm:"size:191"`   // default From display name
+	FromEmail     string `gorm:"size:191"`    // default From email address
+	ReplyTo       string `gorm:"size:191"`   // default Reply-To
 	HTMLBody      string `gorm:"type:text;not null"`
 	TextBody      string `gorm:"type:text"`
 }

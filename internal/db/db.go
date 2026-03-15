@@ -1252,7 +1252,7 @@ func GetTemplateByID(id uint, username string) *CampaignTemplate {
 	return &t
 }
 
-func CreateTemplate(username, name, subject, htmlBody, textBody string) (*CampaignTemplate, error) {
+func CreateTemplate(username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody string) (*CampaignTemplate, error) {
 	_, _, _, maxTmpl := GetUserLimits(username)
 	if maxTmpl > 0 {
 		n := CountTemplates(username)
@@ -1260,13 +1260,21 @@ func CreateTemplate(username, name, subject, htmlBody, textBody string) (*Campai
 			return nil, errors.New("template limit reached")
 		}
 	}
-	t := &CampaignTemplate{OwnerUsername: username, Name: name, Subject: subject, HTMLBody: htmlBody, TextBody: textBody}
+	t := &CampaignTemplate{
+		OwnerUsername: username, Name: name, Subject: subject,
+		FromName: fromName, FromEmail: fromEmail, ReplyTo: replyTo,
+		HTMLBody: htmlBody, TextBody: textBody,
+	}
 	return t, DB.Create(t).Error
 }
 
-func UpdateTemplate(id uint, username, name, subject, htmlBody, textBody string) error {
+func UpdateTemplate(id uint, username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody string) error {
 	return DB.Model(&CampaignTemplate{}).Where("id = ? AND owner_username = ?", id, username).
-		Updates(map[string]interface{}{"name": name, "subject": subject, "html_body": htmlBody, "text_body": textBody}).Error
+		Updates(map[string]interface{}{
+			"name": name, "subject": subject,
+			"from_name": fromName, "from_email": fromEmail, "reply_to": replyTo,
+			"html_body": htmlBody, "text_body": textBody,
+		}).Error
 }
 
 func DeleteTemplate(id uint, username string) error {
