@@ -1227,6 +1227,15 @@ func CountContactsInList(listID uint) int64 {
 	return n
 }
 
+func GetContactByListAndEmail(listID uint, email string) *Contact {
+	email = strings.ToLower(strings.TrimSpace(email))
+	var c Contact
+	if DB.Where("list_id = ? AND email = ?", listID, email).First(&c).Error != nil {
+		return nil
+	}
+	return &c
+}
+
 // ─── Campaign Templates ──────────────────────────────────────────────────────
 
 func GetTemplates(username string) []CampaignTemplate {
@@ -1446,6 +1455,15 @@ func GetUserLimits(username string) (maxCamp, maxAuto, maxLists, maxTmpl int) {
 		return 0, 0, 0, 0
 	}
 	return u.MaxCampaigns, u.MaxAutomations, u.MaxLists, u.MaxTemplates
+}
+
+// GetCampaignStatsUser returns total sent, opens, clicks for a user's campaigns.
+func GetCampaignStatsUser(username string) (sent, opens, clicks int) {
+	var s, o, c int64
+	DB.Model(&Campaign{}).Where("owner_username = ? AND status = ?", username, "sent").Select("COALESCE(SUM(total_sent),0)").Scan(&s)
+	DB.Model(&Campaign{}).Where("owner_username = ? AND status = ?", username, "sent").Select("COALESCE(SUM(opens),0)").Scan(&o)
+	DB.Model(&Campaign{}).Where("owner_username = ? AND status = ?", username, "sent").Select("COALESCE(SUM(clicks),0)").Scan(&c)
+	return int(s), int(o), int(c)
 }
 
 // Admin: all campaigns across users

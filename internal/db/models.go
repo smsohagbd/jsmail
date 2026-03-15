@@ -220,6 +220,7 @@ type Campaign struct {
 	OwnerUsername string     `gorm:"index;size:191;not null"`
 	Name         string     `gorm:"size:191;not null"`
 	Subject      string     `gorm:"size:500;not null"`
+	FromName     string     `gorm:"size:191"`     // e.g. "John Doe" → "John Doe <email>"
 	FromEmail    string     `gorm:"size:191;not null"`
 	ReplyTo      string     `gorm:"size:191"`
 	TemplateID   uint       `gorm:"index"`
@@ -261,6 +262,7 @@ type Automation struct {
 	gorm.Model
 	OwnerUsername string `gorm:"index;size:191;not null"`
 	Name          string `gorm:"size:191;not null"`
+	FromName      string `gorm:"size:191"`     // e.g. "John Doe" → "John Doe <email>"
 	TriggerType   string `gorm:"size:50;not null"` // subscribe | tag_added | email_opened | email_clicked | delay
 	TriggerListID uint  `gorm:"index"`            // for subscribe: which list
 	TriggerSendID  uint  `gorm:"index"`           // for email_opened/clicked: which campaign send

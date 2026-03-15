@@ -1,6 +1,9 @@
 package user
 
 import (
+	"bufio"
+	"encoding/csv"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -67,9 +70,15 @@ func (h *Handler) ListContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contacts := appdb.GetContacts(uint(id), claims.Username)
-	h.Tmpl.Render(w, "user/list-contacts", merge(h.base(claims.Username), map[string]interface{}{
-		"Page": "lists", "List": list, "Contacts": contacts,
-	}))
+	data := map[string]interface{}{"Page": "lists", "List": list, "Contacts": contacts}
+	if e := r.URL.Query().Get("err"); e != "" {
+		data["Error"] = e
+	}
+	if imp := r.URL.Query().Get("imported"); imp != "" {
+		data["Imported"], _ = strconv.Atoi(imp)
+		data["Skipped"], _ = strconv.Atoi(r.URL.Query().Get("skipped"))
+	}
+	h.Tmpl.Render(w, "user/list-contacts", merge(h.base(claims.Username), data))
 }
 
 func (h *Handler) ContactAdd(w http.ResponseWriter, r *http.Request) {
@@ -86,8 +95,105 @@ func (h *Handler) ContactAdd(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/user/lists/contacts?id="+r.FormValue("list_id")+"&err=email", http.StatusFound)
 		return
 	}
-	appdb.AddContact(uint(listID), claims.Username, email, firstName, lastName, "")
+	if appdb.AddContact(uint(listID), claims.Username, email, firstName, lastName, "") != nil {
+		http.Redirect(w, r, "/user/lists/contacts?id="+r.FormValue("list_id")+"&err=add", http.StatusFound)
+		return
+	}
+	// Trigger subscribe automations
+	contact := appdb.GetContactByListAndEmail(uint(listID), email)
+	if contact != nil {
+		domain := h.ConfigSnapshot["smtp_domain"]
+		if domain == "" {
+			domain = "localhost"
+		}
+		fromEmail := "noreply@" + domain
+		campaign.TriggerSubscribeAutomations(uint(listID), *contact, claims.Username, fromEmail, h.Queue)
+	}
 	http.Redirect(w, r, "/user/lists/contacts?id="+r.FormValue("list_id"), http.StatusFound)
+}
+
+func (h *Handler) ContactBulkImport(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/lists", http.StatusFound)
+		return
+	}
+	listID, _ := strconv.ParseUint(r.FormValue("list_id"), 10, 64)
+	list := appdb.GetContactListByID(uint(listID), claims.Username)
+	if list == nil {
+		http.Redirect(w, r, "/user/lists", http.StatusFound)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Redirect(w, r, "/user/lists/contacts?id="+r.FormValue("list_id")+"&err=no_file", http.StatusFound)
+		return
+	}
+	defer file.Close()
+	added, skipped := 0, 0
+	useCSV := strings.HasSuffix(strings.ToLower(header.Filename), ".csv")
+	if useCSV {
+		reader := csv.NewReader(file)
+		reader.FieldsPerRecord = -1
+		for {
+			row, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil || len(row) == 0 {
+				continue
+			}
+			email := strings.TrimSpace(strings.ToLower(row[0]))
+			if email == "" || !strings.Contains(email, "@") {
+				skipped++
+				continue
+			}
+			first, last := "", ""
+			if len(row) > 1 {
+				first = strings.TrimSpace(row[1])
+			}
+			if len(row) > 2 {
+				last = strings.TrimSpace(row[2])
+			}
+			if appdb.AddContact(uint(listID), claims.Username, email, first, last, "") == nil {
+				added++
+				contact := appdb.GetContactByListAndEmail(uint(listID), email)
+				if contact != nil {
+					domain := h.ConfigSnapshot["smtp_domain"]
+					if domain == "" {
+						domain = "localhost"
+					}
+					campaign.TriggerSubscribeAutomations(uint(listID), *contact, claims.Username, "noreply@"+domain, h.Queue)
+				}
+			} else {
+				skipped++
+			}
+		}
+	} else {
+		// TXT: one email per line
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			email := strings.TrimSpace(strings.ToLower(scanner.Text()))
+			if email == "" || strings.HasPrefix(email, "#") || !strings.Contains(email, "@") {
+				skipped++
+				continue
+			}
+			if appdb.AddContact(uint(listID), claims.Username, email, "", "", "") == nil {
+				added++
+				contact := appdb.GetContactByListAndEmail(uint(listID), email)
+				if contact != nil {
+					domain := h.ConfigSnapshot["smtp_domain"]
+					if domain == "" {
+						domain = "localhost"
+					}
+					campaign.TriggerSubscribeAutomations(uint(listID), *contact, claims.Username, "noreply@"+domain, h.Queue)
+				}
+			} else {
+				skipped++
+			}
+		}
+	}
+	http.Redirect(w, r, "/user/lists/contacts?id="+r.FormValue("list_id")+"&imported="+strconv.Itoa(added)+"&skipped="+strconv.Itoa(skipped), http.StatusFound)
 }
 
 func (h *Handler) ContactDelete(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +286,7 @@ func (h *Handler) CampaignCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		name := strings.TrimSpace(r.FormValue("name"))
 		subject := strings.TrimSpace(r.FormValue("subject"))
+		fromName := strings.TrimSpace(r.FormValue("from_name"))
 		fromEmail := strings.TrimSpace(r.FormValue("from_email"))
 		replyTo := strings.TrimSpace(r.FormValue("reply_to"))
 		templateID, _ := strconv.ParseUint(r.FormValue("template_id"), 10, 64)
@@ -191,7 +298,7 @@ func (h *Handler) CampaignCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		camp := &appdb.Campaign{
-			Name: name, Subject: subject, FromEmail: fromEmail, ReplyTo: replyTo,
+			Name: name, Subject: subject, FromName: fromName, FromEmail: fromEmail, ReplyTo: replyTo,
 			TemplateID: uint(templateID), ListID: uint(listID), Status: "draft",
 		}
 		if err := appdb.CreateCampaign(claims.Username, camp); err != nil {
@@ -230,7 +337,7 @@ func (h *Handler) CampaignSend(w http.ResponseWriter, r *http.Request) {
 	if baseURL == "" {
 		baseURL = "https://" + h.ConfigSnapshot["smtp_domain"]
 	}
-	count, _ := campaign.EnqueueCampaignSends(camp, contacts, tmpl, baseURL, claims.Username, camp.FromEmail, h.Queue)
+	count, _ := campaign.EnqueueCampaignSends(camp, contacts, tmpl, baseURL, claims.Username, camp.FromEmail, camp.FromName, h.Queue, appdb.LogQueued)
 	now := time.Now()
 	appdb.UpdateCampaign(uint(id), claims.Username, map[string]interface{}{
 		"status": "sent", "total_sent": count, "sent_at": now,
@@ -269,6 +376,7 @@ func (h *Handler) AutomationCreate(w http.ResponseWriter, r *http.Request) {
 	tmpls := appdb.GetTemplates(claims.Username)
 	if r.Method == http.MethodPost {
 		name := strings.TrimSpace(r.FormValue("name"))
+		fromName := strings.TrimSpace(r.FormValue("from_name"))
 		triggerType := r.FormValue("trigger_type")
 		triggerListID, _ := strconv.ParseUint(r.FormValue("trigger_list_id"), 10, 64)
 		if name == "" || triggerType == "" {
@@ -276,7 +384,7 @@ func (h *Handler) AutomationCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a := &appdb.Automation{
-			Name: name, TriggerType: triggerType, TriggerListID: uint(triggerListID),
+			Name: name, FromName: fromName, TriggerType: triggerType, TriggerListID: uint(triggerListID),
 			Status: "active",
 		}
 		if err := appdb.CreateAutomation(claims.Username, a); err != nil {

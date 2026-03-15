@@ -683,6 +683,12 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 	totalSent, delivered, hardBounce, failed, deferred, queued := s.Sent, s.Delivered, s.HardBounce, s.Failed, s.Deferred, s.Queued
 	softBounce := s.SoftBounce + s.Deferred // combined for display
 
+	campSent, campOpens, campClicks := appdb.GetCampaignStatsUser(uname)
+	recentCampaigns := appdb.GetCampaigns(uname)
+	if len(recentCampaigns) > 10 {
+		recentCampaigns = recentCampaigns[:10]
+	}
+
 	attempted := totalSent - queued - deferred
 	var deliveryRate float64
 	if attempted > 0 {
@@ -703,19 +709,23 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 	bouncedJSON, _ := json.Marshal(chartBounced)
 
 	h.Tmpl.Render(w, "user/reports", merge(h.base(uname), map[string]interface{}{
-		"Page":           "reports",
-		"TotalSent":      totalSent,
-		"Delivered":      delivered,
-		"HardBounce":     hardBounce,
-		"SoftBounce":     softBounce,
-		"Failed":         failed,
-		"Deferred":       deferred,
-		"Queued":         queued,
-		"DeliveryRate":   deliveryRate,
-		"TopDomains":     topDomains,
-		"ChartLabels":    string(labelsJSON),
-		"ChartDelivered": string(deliveredJSON),
-		"ChartBounced":   string(bouncedJSON),
+		"Page":            "reports",
+		"TotalSent":       totalSent,
+		"Delivered":       delivered,
+		"HardBounce":      hardBounce,
+		"SoftBounce":      softBounce,
+		"Failed":          failed,
+		"Deferred":        deferred,
+		"Queued":          queued,
+		"DeliveryRate":    deliveryRate,
+		"TopDomains":      topDomains,
+		"ChartLabels":     string(labelsJSON),
+		"ChartDelivered":  string(deliveredJSON),
+		"ChartBounced":    string(bouncedJSON),
+		"CampaignSent":    campSent,
+		"CampaignOpens":   campOpens,
+		"CampaignClicks":  campClicks,
+		"RecentCampaigns": recentCampaigns,
 	}))
 }
 

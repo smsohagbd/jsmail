@@ -56,8 +56,9 @@ func wrapLinksWithTracking(html, baseURL, token string) string {
 }
 
 // EnqueueCampaignSends creates CampaignSend records, builds emails, and enqueues for each contact.
+// LogQueuedFn is called for each enqueued message (for send logs). Can be nil.
 func EnqueueCampaignSends(camp *appdb.Campaign, contacts []appdb.Contact, tmpl *appdb.CampaignTemplate,
-	baseURL, username, fromEmail string, q *queue.Queue) (int, error) {
+	baseURL, username, fromEmail, fromName string, q *queue.Queue, logQueuedFn func(username, msgID, from string, to []string)) (int, error) {
 	count := 0
 	for _, c := range contacts {
 		if c.Status != "subscribed" {
@@ -77,23 +78,34 @@ func EnqueueCampaignSends(camp *appdb.Campaign, contacts []appdb.Contact, tmpl *
 			mergeVars["Name"] = c.Email
 		}
 		htmlBody := BuildCampaignEmail(tmpl.HTMLBody, baseURL, token, mergeVars)
-		// Build RFC 2822 message
 		subject := camp.Subject
 		if subject == "" {
 			subject = tmpl.Subject
 		}
-		msg := buildRFC2822(fromEmail, c.Email, subject, htmlBody)
-		if err := q.Enqueue(&queue.Message{
+		fromHeader := formatFrom(fromName, fromEmail)
+		msg := buildRFC2822(fromHeader, c.Email, subject, htmlBody)
+		qmsg := &queue.Message{
 			Username: username,
 			From:     fromEmail,
 			To:       []string{c.Email},
 			Data:     []byte(msg),
-		}); err != nil {
+		}
+		if err := q.Enqueue(qmsg); err != nil {
 			continue
+		}
+		if logQueuedFn != nil {
+			logQueuedFn(username, qmsg.ID, fromEmail, []string{c.Email})
 		}
 		count++
 	}
 	return count, nil
+}
+
+func formatFrom(name, email string) string {
+	if name != "" {
+		return name + " <" + email + ">"
+	}
+	return email
 }
 
 func buildRFC2822(from, to, subject, htmlBody string) string {

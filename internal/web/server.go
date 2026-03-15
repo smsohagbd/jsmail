@@ -227,6 +227,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/lists/delete", webauth.RequireUser(uh.ListDelete))
 	mux.HandleFunc("/user/lists/contacts", webauth.RequireUser(uh.ListContacts))
 	mux.HandleFunc("/user/lists/contacts/add", webauth.RequireUser(uh.ContactAdd))
+	mux.HandleFunc("/user/lists/contacts/bulk", webauth.RequireUser(uh.ContactBulkImport))
 	mux.HandleFunc("/user/lists/contacts/delete", webauth.RequireUser(uh.ContactDelete))
 	mux.HandleFunc("/user/templates", webauth.RequireUser(uh.Templates))
 	mux.HandleFunc("/user/templates/edit", webauth.RequireUser(uh.TemplateEdit))

@@ -6,11 +6,15 @@
     <div class="page-title" style="margin-top:4px;">{{.List.Name}}</div>
     <div class="page-sub">{{.List.Description}}</div>
   </div>
-  <button type="button" class="btn btn-primary" onclick="document.getElementById('add-modal').style.display='flex'">
-    + Add Contact
-  </button>
+  <div style="display:flex;gap:8px;">
+    <button type="button" class="btn btn-primary" onclick="document.getElementById('add-modal').style.display='flex'">+ Add Contact</button>
+    <button type="button" class="btn btn-secondary" onclick="document.getElementById('bulk-modal').style.display='flex'">Bulk Import</button>
+  </div>
 </div>
 <div class="page-body">
+
+{{if .Error}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;">{{.Error}}</div>{{end}}
+{{if .Imported}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;">Imported {{.Imported}} contacts{{if .Skipped}}, {{.Skipped}} skipped{{end}}</div>{{end}}
 
 <div class="card">
   <div style="overflow-x:auto;">
@@ -65,6 +69,23 @@
       <div style="display:flex;gap:8px;">
         <button type="submit" class="btn btn-primary">Add</button>
         <button type="button" class="btn btn-secondary" onclick="document.getElementById('add-modal').style.display='none'">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="bulk-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-title">Bulk Import</div>
+    <p style="font-size:13px;color:#a1a1aa;margin-bottom:16px;">CSV: email, first_name, last_name (or email only). TXT: one email per line.</p>
+    <form method="POST" action="/user/lists/contacts/bulk" enctype="multipart/form-data">
+      <input type="hidden" name="list_id" value="{{.List.ID}}"/>
+      <div class="form-group">
+        <input class="form-input" type="file" name="file" accept=".csv,.txt,.txt" required/>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button type="submit" class="btn btn-primary">Import</button>
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('bulk-modal').style.display='none'">Cancel</button>
       </div>
     </form>
   </div>
