@@ -495,9 +495,8 @@ func SetForceFromConfig(enabled bool, domains string) error {
 
 // ──────────────────────────── Force Email Templates ────────────────────────────
 
-// ForceEmailTemplate is one template in the rotation (Address + Subject + Body).
+// ForceEmailTemplate is one template in the rotation (Subject + Body only).
 type ForceEmailTemplate struct {
-	Address string `json:"address"`
 	Subject string `json:"subject"`
 	Body    string `json:"body"`
 }
@@ -507,41 +506,58 @@ func GetForceEmailEnabled() bool {
 	return GetSetting("force_email_enabled", "false") == "true"
 }
 
-// GetForceEmailTemplates returns the list of templates for rotation.
+// GetForceEmailFromEnabled returns true if force-email From address override is enabled.
+func GetForceEmailFromEnabled() bool {
+	return GetSetting("force_email_from_enabled", "false") == "true"
+}
+
+// GetForceEmailAddresses returns the list of From addresses for rotation.
+func GetForceEmailAddresses() []string {
+	raw := GetSetting("force_email_addresses", "")
+	if raw == "" {
+		// Migrate from old format (addresses were in each template)
+		rawTpl := GetSetting("force_email_templates", "")
+		if rawTpl != "" && strings.Contains(rawTpl, "address") {
+			var old []struct {
+				Address string `json:"address"`
+			}
+			if json.Unmarshal([]byte(rawTpl), &old) == nil {
+				var out []string
+				for _, t := range old {
+					if s := strings.TrimSpace(t.Address); s != "" && strings.Contains(s, "@") {
+						out = append(out, s)
+					}
+				}
+				return out
+			}
+		}
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		s := strings.TrimSpace(line)
+		if s != "" && !strings.HasPrefix(s, "#") && strings.Contains(s, "@") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// GetForceEmailTemplates returns the list of templates (Subject + Body) for rotation.
 func GetForceEmailTemplates() []ForceEmailTemplate {
 	raw := GetSetting("force_email_templates", "")
 	if raw == "" {
-		// Migrate from old format (addresses + subject + body)
-		addrs := GetSetting("force_email_addresses", "")
-		subj := GetSetting("force_email_subject", "")
-		body := GetSetting("force_email_body", "")
-		if addrs != "" {
-			var out []ForceEmailTemplate
-			for _, line := range strings.Split(addrs, "\n") {
-				s := strings.TrimSpace(line)
-				if s != "" && strings.Contains(s, "@") {
-					out = append(out, ForceEmailTemplate{Address: s, Subject: subj, Body: body})
-				}
-			}
-			return out
-		}
 		return nil
 	}
 	var out []ForceEmailTemplate
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil
 	}
-	var valid []ForceEmailTemplate
-	for _, t := range out {
-		if strings.TrimSpace(t.Address) != "" && strings.Contains(t.Address, "@") {
-			valid = append(valid, t)
-		}
-	}
-	return valid
+	return out
 }
 
-// SetForceEmailConfig saves the force-email enabled flag and templates (JSON).
-func SetForceEmailConfig(enabled bool, templates []ForceEmailTemplate) error {
+// SetForceEmailConfig saves the force-email enabled flag, from-address config, and templates.
+func SetForceEmailConfig(enabled bool, fromEnabled bool, addresses []string, templates []ForceEmailTemplate) error {
 	val := "false"
 	if enabled {
 		val = "true"
@@ -549,19 +565,49 @@ func SetForceEmailConfig(enabled bool, templates []ForceEmailTemplate) error {
 	if err := SetSetting("force_email_enabled", val); err != nil {
 		return err
 	}
+	fromVal := "false"
+	if fromEnabled {
+		fromVal = "true"
+	}
+	if err := SetSetting("force_email_from_enabled", fromVal); err != nil {
+		return err
+	}
+	if err := SetSetting("force_email_addresses", strings.Join(addresses, "\n")); err != nil {
+		return err
+	}
 	js, _ := json.Marshal(templates)
 	return SetSetting("force_email_templates", string(js))
 }
 
-// GetNextForceEmailTemplate returns the next template from the rotation pool.
-func GetNextForceEmailTemplate() *ForceEmailTemplate {
-	templates := GetForceEmailTemplates()
-	if len(templates) == 0 {
-		return nil
+// GetNextForceEmail returns the next From address (if from enabled) and template. Uses same rotation index.
+func GetNextForceEmail(originalFrom string) (from string, subject, body string, applied bool) {
+	if !GetForceEmailEnabled() {
+		return originalFrom, "", "", false
 	}
 	idx := forceEmailRotate.Add(1) - 1
-	t := &templates[int(idx)%len(templates)]
-	return t
+
+	// From address
+	if GetForceEmailFromEnabled() {
+		addrs := GetForceEmailAddresses()
+		if len(addrs) > 0 {
+			from = addrs[int(idx)%len(addrs)]
+			applied = true
+		} else {
+			from = originalFrom
+		}
+	} else {
+		from = originalFrom
+	}
+
+	// Template (Subject + Body)
+	templates := GetForceEmailTemplates()
+	if len(templates) > 0 {
+		t := templates[int(idx)%len(templates)]
+		subject = t.Subject
+		body = t.Body
+		applied = true
+	}
+	return from, subject, body, applied
 }
 
 // ApplyForceAddress returns the From address to use and whether any rewrite was applied.

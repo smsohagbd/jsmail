@@ -13,21 +13,51 @@
 
 <form method="POST" action="/admin/forcefrom/save">
 
-<!-- Force Email: rotate through email templates (Address + Subject + Body) -->
+<!-- Force Email -->
 <div class="card" style="margin-bottom:16px;padding:20px;">
   <div class="card-header" style="margin-bottom:16px;">
-    <span class="card-title">Force Email — Rotate Templates</span>
-    <span style="font-size:12px;color:#52525b;font-weight:400;">Each template has Address, Subject, Body. Add as many as you need — all rotate per email.</span>
+    <span class="card-title">Force Email</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">Override From address and/or Subject/Body. Both rotate per email.</span>
   </div>
-  <div style="margin-bottom:16px;">
+  <div style="margin-bottom:20px;">
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
       <input type="checkbox" name="force_email_enabled" value="on" {{if .ForceEmailEnabled}}checked{{end}}
         style="width:16px;height:16px;accent-color:#818cf8;"/>
       <span style="font-size:14px;font-weight:600;color:#e4e4e7;">Enable Force Email</span>
     </label>
-    <p style="font-size:12px;color:#71717a;margin:0 0 16px 26px;">
-      {{if .ForceEmailEnabled}}<span style="color:#4ade80;">● Active</span> — Each incoming email uses the next template in rotation.{{else}}<span style="color:#71717a;">● Inactive</span>{{end}}
+    <p style="font-size:12px;color:#71717a;margin:0 0 0 26px;">
+      {{if .ForceEmailEnabled}}<span style="color:#4ade80;">● Active</span>{{else}}<span style="color:#71717a;">● Inactive</span>{{end}}
     </p>
+  </div>
+
+  <!-- From Address: separate section with enable/disable -->
+  <div style="margin-bottom:24px;padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
+    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+      <input type="checkbox" name="force_email_from_enabled" value="on" {{if .ForceEmailFromEnabled}}checked{{end}}
+        style="width:16px;height:16px;accent-color:#818cf8;"/>
+      <span style="font-size:13px;font-weight:600;color:#e4e4e7;">From Address</span>
+    </label>
+    <p style="font-size:12px;color:#71717a;margin:0 0 12px 26px;">When enabled, rotate through addresses below. Add as many as you need.</p>
+    <div id="force-email-addresses" style="display:flex;flex-direction:column;gap:8px;">
+      {{range .ForceEmailAddresses}}
+      <div class="force-email-addr-row" style="display:flex;gap:8px;align-items:center;">
+        <input type="text" name="force_email_addresses" class="form-input" value="{{.}}" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;font-size:13px;"/>
+        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailAddr(this)">✕</button>
+      </div>
+      {{else}}
+      <div class="force-email-addr-row" style="display:flex;gap:8px;align-items:center;">
+        <input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;font-size:13px;"/>
+        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailAddr(this)">✕</button>
+      </div>
+      {{end}}
+    </div>
+    <button type="button" class="btn btn-secondary" onclick="addForceEmailAddr()" style="margin-top:8px;font-size:13px;">+ Add Address</button>
+  </div>
+
+  <!-- Templates: Subject + Body only -->
+  <div>
+    <span style="font-size:13px;font-weight:600;color:#e4e4e7;">Templates (Subject + Body)</span>
+    <p style="font-size:12px;color:#71717a;margin:4px 0 12px 0;">Each template has Subject and Body. Add as many as you need — all rotate per email.</p>
   </div>
   <input type="hidden" name="force_email_templates_json" id="force_email_templates_json"/>
   <div id="force-email-templates" style="display:flex;flex-direction:column;gap:16px;">
@@ -36,10 +66,6 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>
         <button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>
-      </div>
-      <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label" style="font-size:12px;">From Address</label>
-        <input type="text" class="form-input force-tpl-address" value="{{.Address}}" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="font-size:13px;"/>
       </div>
       <div class="form-group" style="margin-bottom:10px;">
         <label class="form-label" style="font-size:12px;">Subject (optional)</label>
@@ -57,10 +83,6 @@
         <button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>
       </div>
       <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label" style="font-size:12px;">From Address</label>
-        <input type="text" class="form-input force-tpl-address" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="font-size:13px;"/>
-      </div>
-      <div class="form-group" style="margin-bottom:10px;">
         <label class="form-label" style="font-size:12px;">Subject (optional)</label>
         <input type="text" class="form-input force-tpl-subject" placeholder="Leave empty to keep original" style="font-size:13px;"/>
       </div>
@@ -75,7 +97,7 @@
     <button type="button" class="btn btn-primary" onclick="addForceEmailTemplate()">+ Add Template</button>
   </div>
   <p style="font-size:12px;color:#52525b;margin:12px 0 0;">
-    Each incoming email rotates to the next template. Leave Subject/Body empty in a template to keep the original. Mautic tracking links preserved when body is not overridden.
+    Leave Subject/Body empty to keep original. Mautic tracking links preserved when body is not overridden.
   </p>
 </div>
 
@@ -111,6 +133,19 @@ domain2.com">{{.Domains}}</textarea>
 </form>
 
 <script>
+function addForceEmailAddr() {
+  var container = document.getElementById('force-email-addresses');
+  var row = document.createElement('div');
+  row.className = 'force-email-addr-row';
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;';
+  row.innerHTML = '<input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;font-size:13px;"/>' +
+    '<button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailAddr(this)">✕</button>';
+  container.appendChild(row);
+}
+function removeForceEmailAddr(btn) {
+  var rows = document.querySelectorAll('.force-email-addr-row');
+  if (rows.length > 1) btn.closest('.force-email-addr-row').remove();
+}
 function addForceEmailTemplate() {
   var container = document.getElementById('force-email-templates');
   var tpl = document.createElement('div');
@@ -120,8 +155,6 @@ function addForceEmailTemplate() {
     '<span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>' +
     '<button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>' +
     '</div>' +
-    '<div class="form-group" style="margin-bottom:10px;"><label class="form-label" style="font-size:12px;">From Address</label>' +
-    '<input type="text" class="form-input force-tpl-address" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="font-size:13px;"/></div>' +
     '<div class="form-group" style="margin-bottom:10px;"><label class="form-label" style="font-size:12px;">Subject (optional)</label>' +
     '<input type="text" class="form-input force-tpl-subject" placeholder="Leave empty to keep original" style="font-size:13px;"/></div>' +
     '<div class="form-group" style="margin-bottom:0;"><label class="form-label" style="font-size:12px;">Body (optional — plain text or HTML)</label>' +
@@ -135,14 +168,10 @@ function removeForceEmailTemplate(btn) {
 function collectForceEmailTemplates() {
   var arr = [];
   document.querySelectorAll('.force-email-template').forEach(function(el) {
-    var addr = (el.querySelector('.force-tpl-address') || {}).value || '';
-    if (addr.trim()) {
-      arr.push({
-        address: addr.trim(),
-        subject: ((el.querySelector('.force-tpl-subject') || {}).value || '').trim(),
-        body: (el.querySelector('.force-tpl-body') || {}).value || ''
-      });
-    }
+    arr.push({
+      subject: ((el.querySelector('.force-tpl-subject') || {}).value || '').trim(),
+      body: (el.querySelector('.force-tpl-body') || {}).value || ''
+    });
   });
   document.getElementById('force_email_templates_json').value = JSON.stringify(arr);
 }

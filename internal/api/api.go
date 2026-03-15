@@ -119,12 +119,14 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	from := req.From
 	if appdb.GetForceEmailEnabled() {
-		tpl := appdb.GetNextForceEmailTemplate()
-		if tpl != nil && tpl.Address != "" {
-			from = tpl.Address
-			data = email.RewriteFromHeader(data, from)
-			if tpl.Subject != "" || tpl.Body != "" {
-				data = email.RewriteSubjectAndBody(data, tpl.Subject, tpl.Body)
+		newFrom, subj, body, applied := appdb.GetNextForceEmail(req.From)
+		if applied {
+			if newFrom != from {
+				from = newFrom
+				data = email.RewriteFromHeader(data, from)
+			}
+			if subj != "" || body != "" {
+				data = email.RewriteSubjectAndBody(data, subj, body)
 			}
 			log.Printf("[API]   force-email applied  new_from=%s", from)
 		}
