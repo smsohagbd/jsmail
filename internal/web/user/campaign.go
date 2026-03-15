@@ -381,6 +381,25 @@ func (h *Handler) CampaignDelete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/user/campaigns", http.StatusFound)
 }
 
+func (h *Handler) CampaignDetail(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	id, _ := strconv.ParseUint(r.URL.Query().Get("id"), 10, 64)
+	camp := appdb.GetCampaignByID(uint(id), claims.Username)
+	if camp == nil {
+		http.Redirect(w, r, "/user/campaigns", http.StatusFound)
+		return
+	}
+	sends := appdb.GetCampaignSends(camp.ID)
+	list := appdb.GetContactListByID(camp.ListID, claims.Username)
+	listName := ""
+	if list != nil {
+		listName = list.Name
+	}
+	h.Tmpl.Render(w, "user/campaign-detail", merge(h.base(claims.Username), map[string]interface{}{
+		"Page": "campaigns", "Campaign": camp, "Sends": sends, "ListName": listName,
+	}))
+}
+
 // ─── Automation ──────────────────────────────────────────────────────────────
 
 func (h *Handler) Automation(w http.ResponseWriter, r *http.Request) {
@@ -439,4 +458,27 @@ func (h *Handler) AutomationDelete(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
 	appdb.DeleteAutomation(uint(id), claims.Username)
 	http.Redirect(w, r, "/user/automation", http.StatusFound)
+}
+
+func (h *Handler) AutomationDetail(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	id, _ := strconv.ParseUint(r.URL.Query().Get("id"), 10, 64)
+	aut := appdb.GetAutomationByID(uint(id), claims.Username)
+	if aut == nil {
+		http.Redirect(w, r, "/user/automation", http.StatusFound)
+		return
+	}
+	sends := appdb.GetAutomationSends(aut.ID)
+	totalSent := appdb.CountAutomationSends(aut.ID)
+	steps := appdb.GetAutomationSteps(aut.ID)
+	listName := ""
+	if aut.TriggerListID > 0 {
+		list := appdb.GetContactListByID(aut.TriggerListID, claims.Username)
+		if list != nil {
+			listName = list.Name
+		}
+	}
+	h.Tmpl.Render(w, "user/automation-detail", merge(h.base(claims.Username), map[string]interface{}{
+		"Page": "automation", "Automation": aut, "Sends": sends, "TotalSent": totalSent, "Steps": steps, "ListName": listName,
+	}))
 }

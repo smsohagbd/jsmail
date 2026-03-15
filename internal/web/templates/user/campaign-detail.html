@@ -1,0 +1,81 @@
+{{define "title"}}{{.Campaign.Name}} — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <a href="/user/campaigns" style="font-size:12px;color:#71717a;text-decoration:none;">← Back to campaigns</a>
+    <div class="page-title" style="margin-top:4px;">{{.Campaign.Name}}</div>
+    <div class="page-sub">{{.Campaign.Subject}}{{if .ListName}} · List: {{.ListName}}{{end}}</div>
+  </div>
+  {{if eq .Campaign.Status "draft"}}
+  <form method="POST" action="/user/campaigns/send" style="display:inline;" onsubmit="return confirm('Send this campaign now?')">
+    <input type="hidden" name="id" value="{{.Campaign.ID}}"/>
+    <button type="submit" class="btn btn-primary">Send Now</button>
+  </form>
+  {{end}}
+</div>
+<div class="page-body">
+
+<!-- Stats -->
+<div class="reports-kpi-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Status</div>
+    <div style="font-size:20px;font-weight:700;"><span class="badge {{if eq .Campaign.Status "sent"}}badge-delivered{{else}}badge-queued{{end}}">{{.Campaign.Status}}</span></div>
+  </div>
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Sent</div>
+    <div style="font-size:24px;font-weight:700;color:#e4e4e7;">{{.Campaign.TotalSent}}</div>
+  </div>
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Opens</div>
+    <div style="font-size:24px;font-weight:700;color:#4ade80;">{{.Campaign.Opens}}</div>
+  </div>
+  <div class="card" style="padding:20px;">
+    <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Clicks</div>
+    <div style="font-size:24px;font-weight:700;color:#60a5fa;">{{.Campaign.Clicks}}</div>
+  </div>
+</div>
+
+<!-- Info -->
+<div class="card" style="margin-bottom:20px;">
+  <div class="card-header"><span class="card-title">Campaign Info</span></div>
+  <div class="card-body" style="padding:20px;">
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;font-size:13px;">
+      <div><span style="color:#71717a;">From:</span> {{if .Campaign.FromName}}{{.Campaign.FromName}} &lt;{{.Campaign.FromEmail}}&gt;{{else}}{{.Campaign.FromEmail}}{{end}}</div>
+      <div><span style="color:#71717a;">Reply-To:</span> {{if .Campaign.ReplyTo}}{{.Campaign.ReplyTo}}{{else}}—{{end}}</div>
+      <div><span style="color:#71717a;">Created:</span> {{.Campaign.CreatedAt.Format "2006-01-02 15:04"}}</div>
+      {{if .Campaign.SentAt}}<div><span style="color:#71717a;">Sent:</span> {{.Campaign.SentAt.Format "2006-01-02 15:04"}}</div>{{end}}
+    </div>
+  </div>
+</div>
+
+<!-- Send log -->
+<div class="card">
+  <div class="card-header"><span class="card-title">Send Log ({{len .Sends}} recipients)</span></div>
+  <div style="overflow-x:auto;">
+    <table class="data-table reports-simple-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Email</th>
+        <th>Status</th>
+        <th>Opened</th>
+        <th>Clicked</th>
+        <th style="padding-right:20px;">Sent</th>
+      </tr></thead>
+      <tbody>
+        {{range .Sends}}
+        <tr>
+          <td style="padding-left:20px;">{{.Email}}</td>
+          <td><span class="badge badge-queued">{{.Status}}</span></td>
+          <td>{{if .OpenedAt}}{{.OpenedAt.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
+          <td>{{if .ClickedAt}}{{.ClickedAt.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
+          <td style="padding-right:20px;">{{if .SentAt}}{{.SentAt.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" style="text-align:center;color:#52525b;padding:24px;">No sends yet</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div>
+{{end}}

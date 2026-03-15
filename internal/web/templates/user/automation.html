@@ -23,7 +23,7 @@
       <tbody>
         {{range .Automations}}
         <tr>
-          <td style="padding-left:20px;font-weight:600;">{{.Name}}</td>
+          <td style="padding-left:20px;font-weight:600;"><a href="/user/automation/detail?id={{.ID}}" style="color:#e4e4e7;text-decoration:none;" onmouseover="this.style.color='#818cf8'" onmouseout="this.style.color='#e4e4e7'">{{.Name}}</a></td>
           <td style="font-size:12px;color:#71717a;">{{.TriggerType}}</td>
           <td><span class="badge {{if eq .Status "active"}}badge-active{{else}}badge-inactive{{end}}">{{.Status}}</span></td>
           <td style="padding-right:20px;">

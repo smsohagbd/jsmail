@@ -52,6 +52,7 @@ func TriggerSubscribeAutomations(listID uint, contact appdb.Contact, username, f
 				}
 				if q.Enqueue(qmsg) == nil {
 					appdb.LogQueued(username, qmsg.ID, fromEmail, []string{contact.Email})
+					appdb.CreateAutomationSend(a.ID, contact.ID, contact.Email)
 					count++
 				}
 				break // only first send_email step

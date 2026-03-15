@@ -283,6 +283,16 @@ type AutomationStep struct {
 	TagName      string `gorm:"size:191"`
 }
 
+// AutomationSend tracks each automation email sent (for reports).
+type AutomationSend struct {
+	gorm.Model
+	AutomationID uint       `gorm:"index;not null"`
+	ContactID    uint       `gorm:"index;not null"`
+	Email        string     `gorm:"size:191;not null"`
+	Status       string     `gorm:"size:20;default:sent"` // sent | failed
+	SentAt       *time.Time
+}
+
 // Domain represents a verified sending domain with its DKIM keys and DNS records.
 type Domain struct {
 	gorm.Model

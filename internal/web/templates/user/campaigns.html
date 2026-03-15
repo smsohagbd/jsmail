@@ -24,7 +24,7 @@
       <tbody>
         {{range .Campaigns}}
         <tr>
-          <td style="padding-left:20px;font-weight:600;">{{.Name}}</td>
+          <td style="padding-left:20px;font-weight:600;"><a href="/user/campaigns/detail?id={{.ID}}" style="color:#e4e4e7;text-decoration:none;" onmouseover="this.style.color='#818cf8'" onmouseout="this.style.color='#e4e4e7'">{{.Name}}</a></td>
           <td style="font-size:12px;color:#71717a;">{{.Subject}}</td>
           <td><span class="badge {{if eq .Status "sent"}}badge-delivered{{else}}badge-queued{{end}}">{{.Status}}</span></td>
           <td>{{.TotalSent}}</td>

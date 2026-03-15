@@ -78,6 +78,7 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 		&TrackEvent{},
 		&Automation{},
 		&AutomationStep{},
+		&AutomationSend{},
 	); err != nil {
 		return err
 	}
@@ -1361,6 +1362,13 @@ func RecordOpen(token string, ip, ua string) bool {
 	return true
 }
 
+// GetCampaignSends returns all sends for a campaign. Caller must verify campaign ownership.
+func GetCampaignSends(campaignID uint) []CampaignSend {
+	var sends []CampaignSend
+	DB.Where("campaign_id = ?", campaignID).Order("created_at desc").Find(&sends)
+	return sends
+}
+
 func RecordClick(token string, url string, ip, ua string) bool {
 	s := CampaignSendByToken(token)
 	if s == nil {
@@ -1426,6 +1434,26 @@ func AddAutomationStep(automationID uint, order int, actionType string, template
 
 func DeleteAutomationStep(id uint) error {
 	return DB.Delete(&AutomationStep{}, id).Error
+}
+
+// CreateAutomationSend records an automation email send.
+func CreateAutomationSend(automationID, contactID uint, email string) error {
+	now := time.Now()
+	return DB.Create(&AutomationSend{AutomationID: automationID, ContactID: contactID, Email: email, Status: "sent", SentAt: &now}).Error
+}
+
+// GetAutomationSends returns all sends for an automation. Caller must verify automation ownership.
+func GetAutomationSends(automationID uint) []AutomationSend {
+	var sends []AutomationSend
+	DB.Where("automation_id = ?", automationID).Order("created_at desc").Find(&sends)
+	return sends
+}
+
+// CountAutomationSends returns total sends for an automation.
+func CountAutomationSends(automationID uint) int64 {
+	var n int64
+	DB.Model(&AutomationSend{}).Where("automation_id = ?", automationID).Count(&n)
+	return n
 }
 
 // CountCampaigns returns the number of campaigns for a user.

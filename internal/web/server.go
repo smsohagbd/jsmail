@@ -234,10 +234,12 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/templates/delete", webauth.RequireUser(uh.TemplateDelete))
 	mux.HandleFunc("/user/campaigns", webauth.RequireUser(uh.Campaigns))
 	mux.HandleFunc("/user/campaigns/create", webauth.RequireUser(uh.CampaignCreate))
+	mux.HandleFunc("/user/campaigns/detail", webauth.RequireUser(uh.CampaignDetail))
 	mux.HandleFunc("/user/campaigns/send", webauth.RequireUser(uh.CampaignSend))
 	mux.HandleFunc("/user/campaigns/delete", webauth.RequireUser(uh.CampaignDelete))
 	mux.HandleFunc("/user/automation", webauth.RequireUser(uh.Automation))
 	mux.HandleFunc("/user/automation/create", webauth.RequireUser(uh.AutomationCreate))
+	mux.HandleFunc("/user/automation/detail", webauth.RequireUser(uh.AutomationDetail))
 	mux.HandleFunc("/user/automation/delete", webauth.RequireUser(uh.AutomationDelete))
 
 	log.Printf("web: UI server listening on %s", s.addr)
