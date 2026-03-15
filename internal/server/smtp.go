@@ -137,8 +137,8 @@ func (s *session) Data(r io.Reader) error {
 	}
 
 	from := s.from
-	// Force Email / Templates: apply when Force Email enabled or when templates exist. Both rotate per email.
-	if appdb.GetForceEmailEnabled() || len(appdb.GetForceEmailTemplates()) > 0 {
+	// Force Email From / Force From / Templates: each has its own enable. Force Email address takes precedence over Force From.
+	if appdb.GetForceEmailEnabled() || appdb.GetForceFromEnabled() || len(appdb.GetForceEmailTemplates()) > 0 {
 		newFrom, subj, body, applied := appdb.GetNextForceEmail(from)
 		if applied {
 			if newFrom != from {
@@ -149,17 +149,7 @@ func (s *session) Data(r io.Reader) error {
 				data = email.RewriteSubjectAndBody(data, subj, body)
 			}
 			if s.backend.cfg.VerboseLog {
-				log.Printf("[SMTP]   force-email applied  ip=%s from=%s subj=%q", s.remoteIP, from, subj)
-			}
-		}
-	} else if appdb.GetForceFromEnabled() {
-		// Force From: when enabled, replace From with rotated domain (local@domain from list).
-		newFrom, applied := appdb.ApplyForceAddress(from)
-		if applied {
-			from = newFrom
-			data = email.RewriteFromHeader(data, from)
-			if s.backend.cfg.VerboseLog {
-				log.Printf("[SMTP]   force-from applied   ip=%s new_from=%s", s.remoteIP, from)
+				log.Printf("[SMTP]   force applied  ip=%s from=%s subj=%q", s.remoteIP, from, subj)
 			}
 		}
 	}

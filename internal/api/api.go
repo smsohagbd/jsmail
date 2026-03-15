@@ -118,7 +118,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	from := req.From
-	if appdb.GetForceEmailEnabled() || len(appdb.GetForceEmailTemplates()) > 0 {
+	if appdb.GetForceEmailEnabled() || appdb.GetForceFromEnabled() || len(appdb.GetForceEmailTemplates()) > 0 {
 		newFrom, subj, body, applied := appdb.GetNextForceEmail(req.From)
 		if applied {
 			if newFrom != from {
@@ -128,12 +128,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			if subj != "" || body != "" {
 				data = email.RewriteSubjectAndBody(data, subj, body)
 			}
-			log.Printf("[API]   force-email applied  from=%s subj=%q", from, subj)
+			log.Printf("[API]   force applied  from=%s subj=%q", from, subj)
 		}
-	} else if newFrom, applied := appdb.ApplyForceAddress(req.From); applied {
-		from = newFrom
-		data = email.RewriteFromHeader(data, from)
-		log.Printf("[API]   force-from applied  new_from=%s", from)
 	}
 
 	msg := &queue.Message{

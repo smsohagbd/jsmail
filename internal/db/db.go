@@ -594,26 +594,41 @@ func SetForceEmailTemplates(templates []ForceEmailTemplate) error {
 	return SetSetting("force_email_templates", string(js))
 }
 
-// GetNextForceEmail returns the next From address (if enabled) and template. Uses same rotation index.
-// Templates apply whenever templates exist. From override applies only when Force Email is enabled.
+// GetNextForceEmail returns the next From address and template. Both work independently with their own enable/disable.
+// From: Force Email address (when enabled) takes precedence; else Force From domain (when enabled).
+// Templates: apply whenever templates exist.
 func GetNextForceEmail(originalFrom string) (from string, subject, body string, applied bool) {
 	templates := GetForceEmailTemplates()
 	hasTemplates := len(templates) > 0
 	forceEmailOn := GetForceEmailEnabled()
+	forceEmailFromOn := GetForceEmailFromEnabled()
+	forceFromOn := GetForceFromEnabled()
 
 	// Nothing to apply
-	if !forceEmailOn && !hasTemplates {
+	if !forceEmailOn && !hasTemplates && !forceFromOn {
 		return originalFrom, "", "", false
 	}
 
 	idx := forceEmailRotate.Add(1) - 1
 	from = originalFrom
 
-	// From address: only when Force Email enabled AND From enabled
-	if forceEmailOn && GetForceEmailFromEnabled() {
+	// From address: Force Email address takes precedence over Force From
+	if forceEmailOn && forceEmailFromOn {
 		addrs := GetForceEmailAddresses()
 		if len(addrs) > 0 {
 			from = addrs[int(idx)%len(addrs)]
+			applied = true
+		}
+	} else if forceFromOn {
+		domains := GetForceFromDomains()
+		if len(domains) > 0 {
+			local := extractLocalPartFromAddr(originalFrom)
+			if local == "" {
+				local = "noreply"
+			}
+			domainIdx := forceFromRotate.Add(1) - 1
+			domain := domains[int(domainIdx)%len(domains)]
+			from = local + "@" + domain
 			applied = true
 		}
 	}
@@ -628,8 +643,7 @@ func GetNextForceEmail(originalFrom string) (from string, subject, body string, 
 	return from, subject, body, applied
 }
 
-// ApplyForceAddress returns the From address to use and whether any rewrite was applied.
-// For Force From only. When Force Email is enabled, use GetNextForceEmailTemplate() instead.
+// ApplyForceAddress returns the From address when Force From is enabled. Used when GetNextForceEmail is not called.
 func ApplyForceAddress(originalFrom string) (newFrom string, applied bool) {
 	if GetForceFromEnabled() {
 		domains := GetForceFromDomains()
