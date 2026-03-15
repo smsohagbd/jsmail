@@ -64,7 +64,7 @@
         {{range .Sends}}
         <tr>
           <td style="padding-left:20px;">{{.Email}}</td>
-          <td><span class="badge badge-queued">{{.Status}}</span></td>
+          <td><span class="badge {{if eq .Status "sent"}}badge-delivered{{else if eq .Status "failed"}}badge-failed{{else}}badge-queued{{end}}">{{.Status}}</span></td>
           <td>{{if .OpenedAt}}{{.OpenedAt.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
           <td>{{if .ClickedAt}}{{.ClickedAt.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
           <td style="padding-right:20px;">{{if .SentAt}}{{.SentAt.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>

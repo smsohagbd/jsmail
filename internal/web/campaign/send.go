@@ -64,7 +64,7 @@ func EnqueueCampaignSends(camp *appdb.Campaign, contacts []appdb.Contact, tmpl *
 		if c.Status != "subscribed" {
 			continue
 		}
-		token, err := appdb.CreateCampaignSend(camp.ID, c.ID, c.Email)
+		token, sendID, err := appdb.CreateCampaignSend(camp.ID, c.ID, c.Email)
 		if err != nil {
 			continue
 		}
@@ -93,6 +93,7 @@ func EnqueueCampaignSends(camp *appdb.Campaign, contacts []appdb.Contact, tmpl *
 		if err := q.Enqueue(qmsg); err != nil {
 			continue
 		}
+		appdb.UpdateCampaignSendMessageID(sendID, qmsg.ID)
 		if logQueuedFn != nil {
 			logQueuedFn(username, qmsg.ID, fromEmail, []string{c.Email})
 		}

@@ -1321,17 +1321,31 @@ func DeleteCampaign(id uint, username string) error {
 	return DB.Where("id = ? AND owner_username = ?", id, username).Delete(&Campaign{}).Error
 }
 
-// CreateCampaignSend creates a send record with a unique tracking token. Returns the token.
-func CreateCampaignSend(campaignID, contactID uint, email string) (string, error) {
+// CreateCampaignSend creates a send record with a unique tracking token. Returns (token, sendID, error).
+func CreateCampaignSend(campaignID, contactID uint, email string) (string, uint, error) {
 	token, err := generateTrackToken()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	s := &CampaignSend{CampaignID: campaignID, ContactID: contactID, Email: email, TrackToken: token, Status: "queued"}
 	if err := DB.Create(s).Error; err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return token, nil
+	return token, s.ID, nil
+}
+
+// UpdateCampaignSendMessageID stores the queue message ID for delivery status lookup.
+func UpdateCampaignSendMessageID(sendID uint, messageID string) {
+	DB.Model(&CampaignSend{}).Where("id = ?", sendID).Update("message_id", messageID)
+}
+
+// UpdateCampaignSendByMessageID updates status and sent_at when delivery completes.
+func UpdateCampaignSendByMessageID(messageID, status string) {
+	updates := map[string]interface{}{"status": status}
+	if status == "sent" {
+		updates["sent_at"] = time.Now()
+	}
+	DB.Model(&CampaignSend{}).Where("message_id = ?", messageID).Updates(updates)
 }
 
 func generateTrackToken() (string, error) {

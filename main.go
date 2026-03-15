@@ -53,14 +53,18 @@ func main() {
 		switch evt.Status {
 		case "delivered":
 			appdb.LogDelivered(evt.Username, evt.MessageID, evt.To, evt.MXHost)
+			appdb.UpdateCampaignSendByMessageID(evt.MessageID, "sent")
 		case "failed":
 			appdb.LogFailed(evt.Username, evt.MessageID, evt.To, evt.Error)
+			appdb.UpdateCampaignSendByMessageID(evt.MessageID, "failed")
 		case "deferred":
 			appdb.LogDeferred(evt.Username, evt.MessageID, evt.To, evt.Error)
 		case "hard_bounce":
 			appdb.LogHardBounce(evt.Username, evt.MessageID, evt.To, evt.Error)
+			appdb.UpdateCampaignSendByMessageID(evt.MessageID, "failed")
 		case "suppressed":
 			appdb.LogSuppressed(evt.Username, evt.MessageID, evt.To, evt.Error)
+			appdb.UpdateCampaignSendByMessageID(evt.MessageID, "failed")
 		}
 	}
 

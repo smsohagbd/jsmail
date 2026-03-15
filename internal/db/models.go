@@ -243,6 +243,7 @@ type CampaignSend struct {
 	CampaignID uint       `gorm:"index;not null"`
 	ContactID  uint       `gorm:"index;not null"`
 	Email      string     `gorm:"size:191;not null"`
+	MessageID  string     `gorm:"index;size:64"` // queue message ID, for delivery status updates
 	Status     string     `gorm:"size:20;default:queued"` // queued | sent | failed
 	SentAt     *time.Time
 	OpenedAt   *time.Time
