@@ -1,0 +1,75 @@
+{{define "title"}}Force Template — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Force Template</div>
+    <div class="page-sub">Manage email templates (Subject + Body). Templates apply to all incoming emails (SMTP, API, Mautic) and rotate per email. For From address override, enable Force Email on Force From page.</div>
+  </div>
+  <a href="/admin/forcefrom" class="btn btn-ghost" style="font-size:13px;">← Back to Force From</a>
+</div>
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<!-- Add Template form -->
+<div class="card" style="margin-bottom:24px;padding:20px;">
+  <div class="card-header" style="margin-bottom:16px;">
+    <span class="card-title">Add Template</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">Subject and Body. Leave empty to keep original when this template is used.</span>
+  </div>
+  <form method="POST" action="/admin/forcetemplate/add">
+    <div class="form-group" style="margin-bottom:12px;">
+      <label class="form-label">Subject (optional)</label>
+      <input class="form-input" name="subject" placeholder="Leave empty to keep original"/>
+    </div>
+    <div class="form-group" style="margin-bottom:16px;">
+      <label class="form-label">Body (optional — plain text or HTML)</label>
+      <textarea class="form-input" name="body" rows="6" style="font-family:monospace;font-size:13px;resize:vertical;"
+        placeholder="Leave empty to keep original. Mautic tracking links preserved when not overridden."></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">+ Add Template</button>
+  </form>
+</div>
+
+<!-- Template list -->
+<div class="card" style="padding:0;">
+  <div class="card-header" style="padding:16px 20px;border-bottom:1px solid #27272a;">
+    <span class="card-title">All Templates</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">{{len .Templates}} template(s)</span>
+  </div>
+  {{if .Templates}}
+  <table class="table" style="margin:0;">
+    <thead>
+      <tr>
+        <th style="width:40px;">#</th>
+        <th>Subject</th>
+        <th>Body</th>
+        <th style="width:100px;">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $i, $t := .Templates}}
+      <tr>
+        <td style="color:#71717a;font-size:13px;">{{add $i 1}}</td>
+        <td style="font-size:13px;">{{if $t.Subject}}{{$t.Subject}}{{else}}<span style="color:#52525b;">(keep original)</span>{{end}}</td>
+        <td style="font-size:12px;color:#71717a;max-width:300px;">{{if $t.Body}}{{truncate $t.Body 80}}{{else}}<span style="color:#52525b;">(keep original)</span>{{end}}</td>
+        <td>
+          <form method="POST" action="/admin/forcetemplate/delete" style="display:inline;" onsubmit="return confirm('Remove this template?');">
+            <input type="hidden" name="index" value="{{$i}}"/>
+            <button type="submit" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div style="padding:32px 20px;text-align:center;color:#71717a;font-size:14px;">
+    No templates yet. Add one above.
+  </div>
+  {{end}}
+</div>
+
+</div>
+{{end}}

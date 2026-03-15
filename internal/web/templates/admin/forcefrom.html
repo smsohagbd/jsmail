@@ -45,51 +45,19 @@ John &lt;john@domain2.com&gt;
 support@domain3.com">{{.ForceEmailAddressesRaw}}</textarea>
   </div>
 
-  <!-- Templates: Subject + Body only -->
-  <div>
-    <span style="font-size:13px;font-weight:600;color:#e4e4e7;">Templates (Subject + Body)</span>
-    <p style="font-size:12px;color:#71717a;margin:4px 0 12px 0;">Each template has Subject and Body. Add as many as you need — all rotate per email.</p>
-  </div>
-  <input type="hidden" name="force_email_templates_json" id="force_email_templates_json"/>
-  <div id="force-email-templates" style="display:flex;flex-direction:column;gap:16px;">
-    {{range .ForceEmailTemplates}}
-    <div class="force-email-template card" style="padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>
-        <button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>
+  <!-- Templates: link to dedicated page -->
+  <div style="margin-top:20px;padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+      <div>
+        <span style="font-size:13px;font-weight:600;color:#e4e4e7;">Templates (Subject + Body)</span>
+        <p style="font-size:12px;color:#71717a;margin:4px 0 0;">Manage templates used when Force Email is enabled. All rotate per email.</p>
       </div>
-      <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label" style="font-size:12px;">Subject (optional)</label>
-        <input type="text" class="form-input force-tpl-subject" value="{{.Subject}}" placeholder="Leave empty to keep original" style="font-size:13px;"/>
-      </div>
-      <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label" style="font-size:12px;">Body (optional — plain text or HTML)</label>
-        <textarea class="form-input force-tpl-body" rows="6" style="font-size:13px;font-family:monospace;resize:vertical;">{{.Body}}</textarea>
-      </div>
+      <a href="/admin/forcetemplate" class="btn btn-primary">Force Template</a>
     </div>
-    {{else}}
-    <div class="force-email-template card" style="padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>
-        <button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>
-      </div>
-      <div class="form-group" style="margin-bottom:10px;">
-        <label class="form-label" style="font-size:12px;">Subject (optional)</label>
-        <input type="text" class="form-input force-tpl-subject" placeholder="Leave empty to keep original" style="font-size:13px;"/>
-      </div>
-      <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label" style="font-size:12px;">Body (optional — plain text or HTML)</label>
-        <textarea class="form-input force-tpl-body" rows="6" style="font-size:13px;font-family:monospace;resize:vertical;"></textarea>
-      </div>
-    </div>
+    {{if gt .ForceTemplateCount 0}}
+    <p style="font-size:12px;color:#4ade80;margin:12px 0 0;">{{.ForceTemplateCount}} template(s) configured</p>
     {{end}}
   </div>
-  <div style="margin-top:12px;">
-    <button type="button" class="btn btn-primary" onclick="addForceEmailTemplate()">+ Add Template</button>
-  </div>
-  <p style="font-size:12px;color:#52525b;margin:12px 0 0;">
-    Leave Subject/Body empty to keep original. Mautic tracking links preserved when body is not overridden.
-  </p>
 </div>
 
 <!-- Force From: domain rotation -->
@@ -122,41 +90,6 @@ domain2.com">{{.Domains}}</textarea>
 
 <button type="submit" class="btn btn-primary">Save</button>
 </form>
-
-<script>
-function addForceEmailTemplate() {
-  var container = document.getElementById('force-email-templates');
-  var tpl = document.createElement('div');
-  tpl.className = 'force-email-template card';
-  tpl.style.cssText = 'padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;';
-  tpl.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-    '<span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>' +
-    '<button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>' +
-    '</div>' +
-    '<div class="form-group" style="margin-bottom:10px;"><label class="form-label" style="font-size:12px;">Subject (optional)</label>' +
-    '<input type="text" class="form-input force-tpl-subject" placeholder="Leave empty to keep original" style="font-size:13px;"/></div>' +
-    '<div class="form-group" style="margin-bottom:0;"><label class="form-label" style="font-size:12px;">Body (optional — plain text or HTML)</label>' +
-    '<textarea class="form-input force-tpl-body" rows="6" style="font-size:13px;font-family:monospace;resize:vertical;"></textarea></div>';
-  container.appendChild(tpl);
-}
-function removeForceEmailTemplate(btn) {
-  var tpls = document.querySelectorAll('.force-email-template');
-  if (tpls.length > 1) btn.closest('.force-email-template').remove();
-}
-function collectForceEmailTemplates() {
-  var arr = [];
-  document.querySelectorAll('.force-email-template').forEach(function(el) {
-    arr.push({
-      subject: ((el.querySelector('.force-tpl-subject') || {}).value || '').trim(),
-      body: (el.querySelector('.force-tpl-body') || {}).value || ''
-    });
-  });
-  document.getElementById('force_email_templates_json').value = JSON.stringify(arr);
-}
-document.querySelector('form[action="/admin/forcefrom/save"]').addEventListener('submit', function() {
-  collectForceEmailTemplates();
-});
-</script>
 
 </div>
 {{end}}

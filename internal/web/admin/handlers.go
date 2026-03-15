@@ -887,17 +887,18 @@ func (h *Handler) SaveIPPool(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
+	templates := appdb.GetForceEmailTemplates()
 	h.Tmpl.Render(w, "admin/forcefrom", map[string]interface{}{
-		"Page":                  "forcefrom",
-		"ActiveUser":            claims.Username,
-		"Enabled":               appdb.GetForceFromEnabled(),
-		"Domains":               appdb.GetForceFromDomainsRaw(),
-		"ForceEmailEnabled":     appdb.GetForceEmailEnabled(),
-		"ForceEmailFromEnabled":   appdb.GetForceEmailFromEnabled(),
-		"ForceEmailAddressesRaw":  appdb.GetForceEmailAddressesRaw(),
-		"ForceEmailTemplates":   appdb.GetForceEmailTemplates(),
-		"FlashOK":               r.URL.Query().Get("ok"),
-		"FlashErr":              r.URL.Query().Get("err"),
+		"Page":                   "forcefrom",
+		"ActiveUser":             claims.Username,
+		"Enabled":                appdb.GetForceFromEnabled(),
+		"Domains":                appdb.GetForceFromDomainsRaw(),
+		"ForceEmailEnabled":      appdb.GetForceEmailEnabled(),
+		"ForceEmailFromEnabled":  appdb.GetForceEmailFromEnabled(),
+		"ForceEmailAddressesRaw": appdb.GetForceEmailAddressesRaw(),
+		"ForceTemplateCount":     len(templates),
+		"FlashOK":                r.URL.Query().Get("ok"),
+		"FlashErr":               r.URL.Query().Get("err"),
 	})
 }
 
@@ -920,20 +921,70 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 	forceEmailEnabled := r.FormValue("force_email_enabled") == "on"
 	forceEmailFromEnabled := r.FormValue("force_email_from_enabled") == "on"
 	addressesRaw := r.FormValue("force_email_addresses")
-	var templates []appdb.ForceEmailTemplate
-	if jsonStr := strings.TrimSpace(r.FormValue("force_email_templates_json")); jsonStr != "" {
-		if err := json.Unmarshal([]byte(jsonStr), &templates); err != nil {
-			log.Printf("forceemail: invalid templates JSON: %v", err)
-			http.Redirect(w, r, "/admin/forcefrom?err=Invalid+templates", http.StatusFound)
-			return
-		}
-	}
-	if err := appdb.SetForceEmailConfig(forceEmailEnabled, forceEmailFromEnabled, addressesRaw, templates); err != nil {
+	if err := appdb.SetForceEmailBasicConfig(forceEmailEnabled, forceEmailFromEnabled, addressesRaw); err != nil {
 		log.Printf("forceemail: failed to save: %v", err)
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save+Force+Email", http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, "/admin/forcefrom?ok=Config+updated", http.StatusFound)
+}
+
+// ──────────────────────────── Force Template ────────────────────────────────────
+
+func (h *Handler) ForceTemplate(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	h.Tmpl.Render(w, "admin/forcetemplate", map[string]interface{}{
+		"Page":       "forcetemplate",
+		"ActiveUser": claims.Username,
+		"Templates":  appdb.GetForceEmailTemplates(),
+		"FlashOK":   r.URL.Query().Get("ok"),
+		"FlashErr":  r.URL.Query().Get("err"),
+	})
+}
+
+func (h *Handler) AddForceTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/forcetemplate", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/forcetemplate?err=Invalid+form", http.StatusFound)
+		return
+	}
+	subject := strings.TrimSpace(r.FormValue("subject"))
+	body := r.FormValue("body")
+	templates := appdb.GetForceEmailTemplates()
+	templates = append(templates, appdb.ForceEmailTemplate{Subject: subject, Body: body})
+	if err := appdb.SetForceEmailTemplates(templates); err != nil {
+		log.Printf("forcetemplate: failed to add: %v", err)
+		http.Redirect(w, r, "/admin/forcetemplate?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/forcetemplate?ok=Template+added", http.StatusFound)
+}
+
+func (h *Handler) DeleteForceTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/forcetemplate", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/forcetemplate?err=Invalid+form", http.StatusFound)
+		return
+	}
+	idx, _ := strconv.Atoi(r.FormValue("index"))
+	templates := appdb.GetForceEmailTemplates()
+	if idx < 0 || idx >= len(templates) {
+		http.Redirect(w, r, "/admin/forcetemplate?err=Invalid+index", http.StatusFound)
+		return
+	}
+	templates = append(templates[:idx], templates[idx+1:]...)
+	if err := appdb.SetForceEmailTemplates(templates); err != nil {
+		log.Printf("forcetemplate: failed to delete: %v", err)
+		http.Redirect(w, r, "/admin/forcetemplate?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/forcetemplate?ok=Template+removed", http.StatusFound)
 }
 
 func (h *Handler) AddIPPoolMasterDomainRule(w http.ResponseWriter, r *http.Request) {

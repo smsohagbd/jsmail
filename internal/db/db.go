@@ -563,6 +563,14 @@ func GetForceEmailTemplates() []ForceEmailTemplate {
 
 // SetForceEmailConfig saves the force-email enabled flag, from-address config, and templates.
 func SetForceEmailConfig(enabled bool, fromEnabled bool, addressesRaw string, templates []ForceEmailTemplate) error {
+	if err := SetForceEmailBasicConfig(enabled, fromEnabled, addressesRaw); err != nil {
+		return err
+	}
+	return SetForceEmailTemplates(templates)
+}
+
+// SetForceEmailBasicConfig saves only enabled, from-enabled, and addresses (not templates).
+func SetForceEmailBasicConfig(enabled bool, fromEnabled bool, addressesRaw string) error {
 	val := "false"
 	if enabled {
 		val = "true"
@@ -577,36 +585,41 @@ func SetForceEmailConfig(enabled bool, fromEnabled bool, addressesRaw string, te
 	if err := SetSetting("force_email_from_enabled", fromVal); err != nil {
 		return err
 	}
-	if err := SetSetting("force_email_addresses", addressesRaw); err != nil {
-		return err
-	}
+	return SetSetting("force_email_addresses", addressesRaw)
+}
+
+// SetForceEmailTemplates saves only the templates list.
+func SetForceEmailTemplates(templates []ForceEmailTemplate) error {
 	js, _ := json.Marshal(templates)
 	return SetSetting("force_email_templates", string(js))
 }
 
-// GetNextForceEmail returns the next From address (if from enabled) and template. Uses same rotation index.
+// GetNextForceEmail returns the next From address (if enabled) and template. Uses same rotation index.
+// Templates apply whenever templates exist. From override applies only when Force Email is enabled.
 func GetNextForceEmail(originalFrom string) (from string, subject, body string, applied bool) {
-	if !GetForceEmailEnabled() {
+	templates := GetForceEmailTemplates()
+	hasTemplates := len(templates) > 0
+	forceEmailOn := GetForceEmailEnabled()
+
+	// Nothing to apply
+	if !forceEmailOn && !hasTemplates {
 		return originalFrom, "", "", false
 	}
-	idx := forceEmailRotate.Add(1) - 1
 
-	// From address
-	if GetForceEmailFromEnabled() {
+	idx := forceEmailRotate.Add(1) - 1
+	from = originalFrom
+
+	// From address: only when Force Email enabled AND From enabled
+	if forceEmailOn && GetForceEmailFromEnabled() {
 		addrs := GetForceEmailAddresses()
 		if len(addrs) > 0 {
 			from = addrs[int(idx)%len(addrs)]
 			applied = true
-		} else {
-			from = originalFrom
 		}
-	} else {
-		from = originalFrom
 	}
 
-	// Template (Subject + Body)
-	templates := GetForceEmailTemplates()
-	if len(templates) > 0 {
+	// Templates: apply whenever we have templates (rotates through all)
+	if hasTemplates {
 		t := templates[int(idx)%len(templates)]
 		subject = t.Subject
 		body = t.Body

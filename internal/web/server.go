@@ -47,6 +47,13 @@ func (r *tmplRenderer) Render(w http.ResponseWriter, name string, data map[strin
 			"mul":    func(a, b int) int { return a * b },
 			"int64":  func(n int) int64 { return int64(n) },
 			"printf": fmt.Sprintf,
+			"truncate": func(s string, n int) string {
+				s = strings.TrimSpace(s)
+				if len(s) <= n {
+					return s
+				}
+				return s[:n] + "..."
+			},
 			"min": func(a, b int64) int64 {
 				if a < b {
 					return a
@@ -174,6 +181,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/ippool/master/delete", webauth.RequireAdmin(ah.DeleteIPPoolMasterDomainRule))
 	mux.HandleFunc("/admin/forcefrom", webauth.RequireAdmin(ah.ForceFrom))
 	mux.HandleFunc("/admin/forcefrom/save", webauth.RequireAdmin(ah.SaveForceFrom))
+	mux.HandleFunc("/admin/forcetemplate", webauth.RequireAdmin(ah.ForceTemplate))
+	mux.HandleFunc("/admin/forcetemplate/add", webauth.RequireAdmin(ah.AddForceTemplate))
+	mux.HandleFunc("/admin/forcetemplate/delete", webauth.RequireAdmin(ah.DeleteForceTemplate))
 	mux.HandleFunc("/admin/config", webauth.RequireAdmin(ah.ConfigEditor))
 	mux.HandleFunc("/admin/ssl", webauth.RequireAdmin(ah.SSL))
 	mux.HandleFunc("/admin/ssl/save", webauth.RequireAdmin(ah.SaveTLSConfig))
