@@ -38,6 +38,7 @@ type WebConfig struct {
 	ListenAddr string `yaml:"listen_addr"`
 	SecretKey  string `yaml:"secret_key"`
 	DBPath     string `yaml:"db_path"`
+	BaseURL    string `yaml:"base_url"` // e.g. https://mail.example.com — for tracking pixel/click URLs
 }
 
 type SMTPConfig struct {
@@ -162,6 +163,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Web.ListenAddr == "" {
 		cfg.Web.ListenAddr = ":8090"
+	}
+	if cfg.Web.BaseURL == "" && cfg.SMTP.Domain != "" {
+		cfg.Web.BaseURL = "https://" + cfg.SMTP.Domain
 	}
 	if cfg.Web.SecretKey == "" {
 		cfg.Web.SecretKey = "change-this-32-char-secret-key!!"

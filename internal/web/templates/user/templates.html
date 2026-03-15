@@ -1,0 +1,41 @@
+{{define "title"}}Templates — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Email Templates</div>
+    <div class="page-sub">Reusable templates with merge tags: {{"{{.Name}}"}}, {{"{{.Email}}"}}, {{"{{.FirstName}}"}}, {{"{{.LastName}}"}}</div>
+  </div>
+  <a href="/user/templates/edit" class="btn btn-primary">+ New Template</a>
+</div>
+<div class="page-body">
+
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table reports-simple-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Name</th>
+        <th>Subject</th>
+        <th style="padding-right:20px;"></th>
+      </tr></thead>
+      <tbody>
+        {{range .Templates}}
+        <tr>
+          <td style="padding-left:20px;font-weight:600;">{{.Name}}</td>
+          <td style="font-size:12px;color:#71717a;">{{.Subject}}</td>
+          <td style="padding-right:20px;">
+            <a href="/user/templates/edit?id={{.ID}}" class="btn btn-secondary btn-sm">Edit</a>
+            <form method="POST" action="/user/templates/delete" style="display:inline;" onsubmit="return confirm('Delete this template?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="3" class="empty-state" style="padding:32px;">No templates. Create one to build campaigns.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div>
+{{end}}

@@ -1,0 +1,54 @@
+{{define "title"}}Campaigns — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Campaigns</div>
+    <div class="page-sub">Create and send email campaigns to your contact lists</div>
+  </div>
+  <a href="/user/campaigns/create" class="btn btn-primary">+ New Campaign</a>
+</div>
+<div class="page-body">
+
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Name</th>
+        <th>Subject</th>
+        <th>Status</th>
+        <th>Sent</th>
+        <th>Opens</th>
+        <th>Clicks</th>
+        <th style="padding-right:20px;"></th>
+      </tr></thead>
+      <tbody>
+        {{range .Campaigns}}
+        <tr>
+          <td style="padding-left:20px;font-weight:600;">{{.Name}}</td>
+          <td style="font-size:12px;color:#71717a;">{{.Subject}}</td>
+          <td><span class="badge {{if eq .Status "sent"}}badge-delivered{{else}}badge-queued{{end}}">{{.Status}}</span></td>
+          <td>{{.TotalSent}}</td>
+          <td>{{.Opens}}</td>
+          <td>{{.Clicks}}</td>
+          <td style="padding-right:20px;">
+            {{if eq .Status "draft"}}
+            <form method="POST" action="/user/campaigns/send" style="display:inline;" onsubmit="return confirm('Send this campaign now?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-primary btn-sm">Send Now</button>
+            </form>
+            {{end}}
+            <form method="POST" action="/user/campaigns/delete" style="display:inline;" onsubmit="return confirm('Delete this campaign?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="7" class="empty-state" style="padding:32px;">No campaigns. Create one to send to your lists.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div>
+{{end}}

@@ -1,0 +1,44 @@
+{{define "title"}}Automation — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Automation</div>
+    <div class="page-sub">Trigger-based workflows: welcome series, abandoned cart, etc.</div>
+  </div>
+  <a href="/user/automation/create" class="btn btn-primary">+ New Automation</a>
+</div>
+<div class="page-body">
+
+{{if .Error}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;">{{.Error}}</div>{{end}}
+
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table reports-simple-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Name</th>
+        <th>Trigger</th>
+        <th>Status</th>
+        <th style="padding-right:20px;"></th>
+      </tr></thead>
+      <tbody>
+        {{range .Automations}}
+        <tr>
+          <td style="padding-left:20px;font-weight:600;">{{.Name}}</td>
+          <td style="font-size:12px;color:#71717a;">{{.TriggerType}}</td>
+          <td><span class="badge {{if eq .Status "active"}}badge-active{{else}}badge-inactive{{end}}">{{.Status}}</span></td>
+          <td style="padding-right:20px;">
+            <form method="POST" action="/user/automation/delete" style="display:inline;" onsubmit="return confirm('Delete this automation?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4" class="empty-state" style="padding:32px;">No automations. Create one to automate your emails.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div>
+{{end}}

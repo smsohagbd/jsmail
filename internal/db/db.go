@@ -70,6 +70,14 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 		&IPPoolMasterDomainRule{},
 		&UserSMTP{},
 		&Suppression{},
+		&ContactList{},
+		&Contact{},
+		&CampaignTemplate{},
+		&Campaign{},
+		&CampaignSend{},
+		&TrackEvent{},
+		&Automation{},
+		&AutomationStep{},
 	); err != nil {
 		return err
 	}
@@ -1130,4 +1138,326 @@ func DeleteAllData() (emailLogs int64, dailyStats int64) {
 	emailLogs = DeleteAllEmailLogs()
 	res := DB.Unscoped().Where("1=1").Delete(&DailyStats{})
 	return emailLogs, res.RowsAffected
+}
+
+// ─── Contact Lists ───────────────────────────────────────────────────────────
+
+func GetContactLists(username string) []ContactList {
+	var lists []ContactList
+	DB.Where("owner_username = ?", username).Order("name").Find(&lists)
+	return lists
+}
+
+func GetContactListByID(id uint, username string) *ContactList {
+	var c ContactList
+	if err := DB.Where("id = ? AND owner_username = ?", id, username).First(&c).Error; err != nil {
+		return nil
+	}
+	return &c
+}
+
+func CreateContactList(username, name, desc string) (*ContactList, error) {
+	maxLists, _, _, _ := GetUserLimits(username)
+	if maxLists > 0 {
+		n := CountContactLists(username)
+		if n >= int64(maxLists) {
+			return nil, errors.New("contact list limit reached")
+		}
+	}
+	c := &ContactList{OwnerUsername: username, Name: name, Description: desc}
+	return c, DB.Create(c).Error
+}
+
+func UpdateContactList(id uint, username, name, desc string) error {
+	return DB.Model(&ContactList{}).Where("id = ? AND owner_username = ?", id, username).
+		Updates(map[string]interface{}{"name": name, "description": desc}).Error
+}
+
+func DeleteContactList(id uint, username string) error {
+	return DB.Where("id = ? AND owner_username = ?", id, username).Delete(&ContactList{}).Error
+}
+
+// ─── Contacts ─────────────────────────────────────────────────────────────────
+
+func GetContacts(listID uint, username string) []Contact {
+	var list ContactList
+	if DB.Where("id = ? AND owner_username = ?", listID, username).First(&list).Error != nil {
+		return nil
+	}
+	var contacts []Contact
+	DB.Where("list_id = ?", listID).Order("email").Find(&contacts)
+	return contacts
+}
+
+func AddContact(listID uint, username, email, firstName, lastName, customFields string) error {
+	var list ContactList
+	if DB.Where("id = ? AND owner_username = ?", listID, username).First(&list).Error != nil {
+		return errors.New("list not found")
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	var c Contact
+	if err := DB.Where("list_id = ? AND email = ?", listID, email).First(&c).Error; err == nil {
+		DB.Model(&c).Updates(map[string]interface{}{
+			"first_name": firstName, "last_name": lastName, "custom_fields": customFields,
+			"status": "subscribed",
+		})
+		return nil
+	}
+	return DB.Create(&Contact{
+		ListID: listID, Email: email, FirstName: firstName, LastName: lastName,
+		CustomFields: customFields, Status: "subscribed",
+	}).Error
+}
+
+func DeleteContact(id uint, username string) error {
+	var c Contact
+	if DB.First(&c, id).Error != nil {
+		return errors.New("contact not found")
+	}
+	var list ContactList
+	if DB.Where("id = ? AND owner_username = ?", c.ListID, username).First(&list).Error != nil {
+		return errors.New("list not found")
+	}
+	return DB.Delete(&c).Error
+}
+
+func CountContactsInList(listID uint) int64 {
+	var n int64
+	DB.Model(&Contact{}).Where("list_id = ? AND status = ?", listID, "subscribed").Count(&n)
+	return n
+}
+
+// ─── Campaign Templates ──────────────────────────────────────────────────────
+
+func GetTemplates(username string) []CampaignTemplate {
+	var t []CampaignTemplate
+	DB.Where("owner_username = ?", username).Order("name").Find(&t)
+	return t
+}
+
+func GetTemplateByID(id uint, username string) *CampaignTemplate {
+	var t CampaignTemplate
+	if DB.Where("id = ? AND owner_username = ?", id, username).First(&t).Error != nil {
+		return nil
+	}
+	return &t
+}
+
+func CreateTemplate(username, name, subject, htmlBody, textBody string) (*CampaignTemplate, error) {
+	_, _, _, maxTmpl := GetUserLimits(username)
+	if maxTmpl > 0 {
+		n := CountTemplates(username)
+		if n >= int64(maxTmpl) {
+			return nil, errors.New("template limit reached")
+		}
+	}
+	t := &CampaignTemplate{OwnerUsername: username, Name: name, Subject: subject, HTMLBody: htmlBody, TextBody: textBody}
+	return t, DB.Create(t).Error
+}
+
+func UpdateTemplate(id uint, username, name, subject, htmlBody, textBody string) error {
+	return DB.Model(&CampaignTemplate{}).Where("id = ? AND owner_username = ?", id, username).
+		Updates(map[string]interface{}{"name": name, "subject": subject, "html_body": htmlBody, "text_body": textBody}).Error
+}
+
+func DeleteTemplate(id uint, username string) error {
+	return DB.Where("id = ? AND owner_username = ?", id, username).Delete(&CampaignTemplate{}).Error
+}
+
+// ─── Campaigns ───────────────────────────────────────────────────────────────
+
+func GetCampaigns(username string) []Campaign {
+	var c []Campaign
+	DB.Where("owner_username = ?", username).Order("created_at desc").Find(&c)
+	return c
+}
+
+func GetCampaignByID(id uint, username string) *Campaign {
+	var c Campaign
+	if DB.Where("id = ? AND owner_username = ?", id, username).First(&c).Error != nil {
+		return nil
+	}
+	return &c
+}
+
+func CreateCampaign(username string, camp *Campaign) error {
+	maxCamp, _, _, _ := GetUserLimits(username)
+	if maxCamp > 0 {
+		n := CountCampaigns(username)
+		if n >= int64(maxCamp) {
+			return errors.New("campaign limit reached")
+		}
+	}
+	camp.OwnerUsername = username
+	return DB.Create(camp).Error
+}
+
+func UpdateCampaign(id uint, username string, updates map[string]interface{}) error {
+	return DB.Model(&Campaign{}).Where("id = ? AND owner_username = ?", id, username).Updates(updates).Error
+}
+
+func DeleteCampaign(id uint, username string) error {
+	return DB.Where("id = ? AND owner_username = ?", id, username).Delete(&Campaign{}).Error
+}
+
+// CreateCampaignSend creates a send record with a unique tracking token. Returns the token.
+func CreateCampaignSend(campaignID, contactID uint, email string) (string, error) {
+	token, err := generateTrackToken()
+	if err != nil {
+		return "", err
+	}
+	s := &CampaignSend{CampaignID: campaignID, ContactID: contactID, Email: email, TrackToken: token, Status: "queued"}
+	if err := DB.Create(s).Error; err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func generateTrackToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// CampaignSendByToken finds a send by its tracking token (for pixel/click).
+func CampaignSendByToken(token string) *CampaignSend {
+	var s CampaignSend
+	if DB.Where("track_token = ?", token).First(&s).Error != nil {
+		return nil
+	}
+	return &s
+}
+
+func RecordOpen(token string, ip, ua string) bool {
+	s := CampaignSendByToken(token)
+	if s == nil {
+		return false
+	}
+	now := time.Now()
+	if s.OpenedAt == nil {
+		DB.Model(s).Updates(map[string]interface{}{"opened_at": now})
+		DB.Model(&Campaign{}).Where("id = ?", s.CampaignID).UpdateColumn("opens", gorm.Expr("opens + 1"))
+	}
+	DB.Create(&TrackEvent{SendID: s.ID, EventType: "open", IP: ip, UserAgent: ua, EventAt: now})
+	return true
+}
+
+func RecordClick(token string, url string, ip, ua string) bool {
+	s := CampaignSendByToken(token)
+	if s == nil {
+		return false
+	}
+	now := time.Now()
+	if s.ClickedAt == nil {
+		DB.Model(s).Updates(map[string]interface{}{"clicked_at": now})
+		DB.Model(&Campaign{}).Where("id = ?", s.CampaignID).UpdateColumn("clicks", gorm.Expr("clicks + 1"))
+	}
+	DB.Create(&TrackEvent{SendID: s.ID, EventType: "click", URL: url, IP: ip, UserAgent: ua, EventAt: now})
+	return true
+}
+
+// ─── Automations ─────────────────────────────────────────────────────────────
+
+func GetAutomations(username string) []Automation {
+	var a []Automation
+	DB.Where("owner_username = ?", username).Order("created_at desc").Find(&a)
+	return a
+}
+
+func GetAutomationByID(id uint, username string) *Automation {
+	var a Automation
+	if DB.Where("id = ? AND owner_username = ?", id, username).First(&a).Error != nil {
+		return nil
+	}
+	return &a
+}
+
+func CreateAutomation(username string, a *Automation) error {
+	_, maxAuto, _, _ := GetUserLimits(username)
+	if maxAuto > 0 {
+		n := CountAutomations(username)
+		if n >= int64(maxAuto) {
+			return errors.New("automation limit reached")
+		}
+	}
+	a.OwnerUsername = username
+	return DB.Create(a).Error
+}
+
+func UpdateAutomation(id uint, username string, updates map[string]interface{}) error {
+	return DB.Model(&Automation{}).Where("id = ? AND owner_username = ?", id, username).Updates(updates).Error
+}
+
+func DeleteAutomation(id uint, username string) error {
+	return DB.Where("id = ? AND owner_username = ?", id, username).Delete(&Automation{}).Error
+}
+
+func GetAutomationSteps(automationID uint) []AutomationStep {
+	var s []AutomationStep
+	DB.Where("automation_id = ?", automationID).Order("step_order").Find(&s)
+	return s
+}
+
+func AddAutomationStep(automationID uint, order int, actionType string, templateID uint, delayMin int, tag string) error {
+	return DB.Create(&AutomationStep{
+		AutomationID: automationID, StepOrder: order, ActionType: actionType,
+		TemplateID: templateID, DelayMinutes: delayMin, TagName: tag,
+	}).Error
+}
+
+func DeleteAutomationStep(id uint) error {
+	return DB.Delete(&AutomationStep{}, id).Error
+}
+
+// CountCampaigns returns the number of campaigns for a user.
+func CountCampaigns(username string) int64 {
+	var n int64
+	DB.Model(&Campaign{}).Where("owner_username = ?", username).Count(&n)
+	return n
+}
+
+// CountAutomations returns the number of automations for a user.
+func CountAutomations(username string) int64 {
+	var n int64
+	DB.Model(&Automation{}).Where("owner_username = ?", username).Count(&n)
+	return n
+}
+
+// CountContactLists returns the number of contact lists for a user.
+func CountContactLists(username string) int64 {
+	var n int64
+	DB.Model(&ContactList{}).Where("owner_username = ?", username).Count(&n)
+	return n
+}
+
+// CountTemplates returns the number of templates for a user.
+func CountTemplates(username string) int64 {
+	var n int64
+	DB.Model(&CampaignTemplate{}).Where("owner_username = ?", username).Count(&n)
+	return n
+}
+
+// GetUserLimits returns MaxCampaigns, MaxAutomations, MaxLists, MaxTemplates for a user. 0 = unlimited.
+func GetUserLimits(username string) (maxCamp, maxAuto, maxLists, maxTmpl int) {
+	var u User
+	if DB.Where("username = ?", username).First(&u).Error != nil {
+		return 0, 0, 0, 0
+	}
+	return u.MaxCampaigns, u.MaxAutomations, u.MaxLists, u.MaxTemplates
+}
+
+// Admin: all campaigns across users
+func GetAllCampaigns() []Campaign {
+	var c []Campaign
+	DB.Order("created_at desc").Find(&c)
+	return c
+}
+
+// Admin: all automations across users
+func GetAllAutomations() []Automation {
+	var a []Automation
+	DB.Order("created_at desc").Find(&a)
+	return a
 }

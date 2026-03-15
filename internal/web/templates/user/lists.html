@@ -1,0 +1,69 @@
+{{define "title"}}Contact Lists — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Contact Lists</div>
+    <div class="page-sub">Manage audiences for campaigns</div>
+  </div>
+  <button type="button" class="btn btn-primary" onclick="document.getElementById('add-modal').style.display='flex'">
+    + New List
+  </button>
+</div>
+<div class="page-body">
+
+{{if .Error}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;">{{.Error}}</div>{{end}}
+
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table reports-simple-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Name</th>
+        <th>Description</th>
+        <th>Contacts</th>
+        <th style="padding-right:20px;"></th>
+      </tr></thead>
+      <tbody>
+        {{range .Lists}}
+        <tr>
+          <td style="padding-left:20px;font-weight:600;">{{.Name}}</td>
+          <td style="font-size:12px;color:#71717a;">{{.Description}}</td>
+          <td>
+            <a href="/user/lists/contacts?id={{.ID}}" class="text-brand">{{index $.ContactCounts (printf "%d" .ID)}} contacts</a>
+          </td>
+          <td style="padding-right:20px;">
+            <a href="/user/lists/contacts?id={{.ID}}" class="btn btn-secondary btn-sm">Manage</a>
+            <form method="POST" action="/user/lists/delete" style="display:inline;" onsubmit="return confirm('Delete this list and all contacts?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4" class="empty-state" style="padding:32px;">No lists yet. Create one to get started.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="add-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-title">New Contact List</div>
+    <form method="POST" action="/user/lists/create">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input class="form-input" name="name" required placeholder="Newsletter Subscribers"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <input class="form-input" name="description" placeholder="Optional"/>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button type="submit" class="btn btn-primary">Create</button>
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('add-modal').style.display='none'">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+</div>
+{{end}}

@@ -175,17 +175,25 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	if maxCustomSMTP == 0 {
 		maxCustomSMTP = 5
 	}
+	maxCampaigns, _ := strconv.Atoi(r.FormValue("max_campaigns"))
+	maxAutomations, _ := strconv.Atoi(r.FormValue("max_automations"))
+	maxLists, _ := strconv.Atoi(r.FormValue("max_lists"))
+	maxTemplates, _ := strconv.Atoi(r.FormValue("max_templates"))
 
 	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	h.DB.Create(&appdb.User{
-		Username:      username,
-		Password:      string(hash),
-		Email:         email,
-		Role:          "user",
-		QuotaPerDay:   quota,
-		Active:        true,
-		SMTPMode:      smtpMode,
-		MaxCustomSMTP: maxCustomSMTP,
+		Username:       username,
+		Password:       string(hash),
+		Email:          email,
+		Role:           "user",
+		QuotaPerDay:    quota,
+		Active:         true,
+		SMTPMode:       smtpMode,
+		MaxCustomSMTP:  maxCustomSMTP,
+		MaxCampaigns:   maxCampaigns,
+		MaxAutomations: maxAutomations,
+		MaxLists:       maxLists,
+		MaxTemplates:   maxTemplates,
 	})
 	http.Redirect(w, r, "/admin/users", http.StatusFound)
 }
@@ -206,12 +214,20 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if maxCustomSMTP == 0 {
 		maxCustomSMTP = 5
 	}
+	maxCampaigns, _ := strconv.Atoi(r.FormValue("max_campaigns"))
+	maxAutomations, _ := strconv.Atoi(r.FormValue("max_automations"))
+	maxLists, _ := strconv.Atoi(r.FormValue("max_lists"))
+	maxTemplates, _ := strconv.Atoi(r.FormValue("max_templates"))
 
 	updates := map[string]interface{}{
-		"quota_per_day":   quota,
-		"active":          active,
-		"smtp_mode":       smtpMode,
-		"max_custom_smtp": maxCustomSMTP,
+		"quota_per_day":    quota,
+		"active":           active,
+		"smtp_mode":        smtpMode,
+		"max_custom_smtp":  maxCustomSMTP,
+		"max_campaigns":    maxCampaigns,
+		"max_automations":  maxAutomations,
+		"max_lists":        maxLists,
+		"max_templates":    maxTemplates,
 	}
 	if pw := r.FormValue("password"); pw != "" {
 		hash, _ := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)

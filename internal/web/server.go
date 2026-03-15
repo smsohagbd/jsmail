@@ -2,6 +2,7 @@ package web
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	appdb "smtp-server/internal/db"
+	"smtp-server/internal/web/campaign"
 	delivery "smtp-server/internal/delivery"
 	"smtp-server/internal/queue"
 	"smtp-server/internal/verifier"
@@ -40,10 +42,11 @@ func (r *tmplRenderer) Render(w http.ResponseWriter, name string, data map[strin
 	// Root template is always "base.html" — page-level {{define "body"/"content"}} override its blocks.
 	t, err := template.New("base.html").
 		Funcs(template.FuncMap{
-			"add":   func(a, b int) int { return a + b },
-			"sub":   func(a, b int) int { return a - b },
-			"mul":   func(a, b int) int { return a * b },
-			"int64": func(n int) int64 { return int64(n) },
+			"add":    func(a, b int) int { return a + b },
+			"sub":    func(a, b int) int { return a - b },
+			"mul":    func(a, b int) int { return a * b },
+			"int64":  func(n int) int64 { return int64(n) },
+			"printf": fmt.Sprintf,
 			"min": func(a, b int64) int64 {
 				if a < b {
 					return a
@@ -89,6 +92,10 @@ func NewServer(addr string, db *gorm.DB, q *queue.Queue, eng *delivery.Engine, v
 
 func (s *Server) Start() {
 	mux := http.NewServeMux()
+
+	// Tracking (public, no auth) — must be before other routes
+	mux.HandleFunc("/t/o/", campaign.HandleTrackOpen)
+	mux.HandleFunc("/t/c", campaign.HandleTrackClick)
 
 	// Auth routes
 	mux.HandleFunc("/login", s.handleLogin)
@@ -182,6 +189,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/data", webauth.RequireAdmin(ah.DataManagement))
 	mux.HandleFunc("/admin/data/delete-logs", webauth.RequireAdmin(ah.DataManagementDeleteLogs))
 	mux.HandleFunc("/admin/data/delete-all", webauth.RequireAdmin(ah.DataManagementDeleteAll))
+	mux.HandleFunc("/admin/campaigns", webauth.RequireAdmin(ah.Campaigns))
+	mux.HandleFunc("/admin/automation", webauth.RequireAdmin(ah.Automation))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer, ConfigSnapshot: s.cfg}
@@ -211,6 +220,24 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/suppression", webauth.RequireUser(uh.SuppressionPage))
 	mux.HandleFunc("/user/suppression/add", webauth.RequireUser(uh.AddUserSuppression))
 	mux.HandleFunc("/user/suppression/remove", webauth.RequireUser(uh.RemoveUserSuppression))
+
+	// Campaign & automation
+	mux.HandleFunc("/user/lists", webauth.RequireUser(uh.Lists))
+	mux.HandleFunc("/user/lists/create", webauth.RequireUser(uh.ListCreate))
+	mux.HandleFunc("/user/lists/delete", webauth.RequireUser(uh.ListDelete))
+	mux.HandleFunc("/user/lists/contacts", webauth.RequireUser(uh.ListContacts))
+	mux.HandleFunc("/user/lists/contacts/add", webauth.RequireUser(uh.ContactAdd))
+	mux.HandleFunc("/user/lists/contacts/delete", webauth.RequireUser(uh.ContactDelete))
+	mux.HandleFunc("/user/templates", webauth.RequireUser(uh.Templates))
+	mux.HandleFunc("/user/templates/edit", webauth.RequireUser(uh.TemplateEdit))
+	mux.HandleFunc("/user/templates/delete", webauth.RequireUser(uh.TemplateDelete))
+	mux.HandleFunc("/user/campaigns", webauth.RequireUser(uh.Campaigns))
+	mux.HandleFunc("/user/campaigns/create", webauth.RequireUser(uh.CampaignCreate))
+	mux.HandleFunc("/user/campaigns/send", webauth.RequireUser(uh.CampaignSend))
+	mux.HandleFunc("/user/campaigns/delete", webauth.RequireUser(uh.CampaignDelete))
+	mux.HandleFunc("/user/automation", webauth.RequireUser(uh.Automation))
+	mux.HandleFunc("/user/automation/create", webauth.RequireUser(uh.AutomationCreate))
+	mux.HandleFunc("/user/automation/delete", webauth.RequireUser(uh.AutomationDelete))
 
 	log.Printf("web: UI server listening on %s", s.addr)
 	if err := http.ListenAndServe(s.addr, mux); err != nil {

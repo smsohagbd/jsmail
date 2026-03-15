@@ -1,0 +1,42 @@
+{{define "title"}}Campaigns — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">All Campaigns</div>
+    <div class="page-sub">Campaigns across all users</div>
+  </div>
+</div>
+<div class="page-body">
+
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">User</th>
+        <th>Name</th>
+        <th>Subject</th>
+        <th>Status</th>
+        <th>Sent</th>
+        <th>Opens</th>
+        <th>Clicks</th>
+      </tr></thead>
+      <tbody>
+        {{range .Campaigns}}
+        <tr>
+          <td style="padding-left:20px;font-size:12px;color:#52525b;">{{.OwnerUsername}}</td>
+          <td style="font-weight:600;">{{.Name}}</td>
+          <td style="font-size:12px;color:#71717a;">{{.Subject}}</td>
+          <td><span class="badge {{if eq .Status "sent"}}badge-delivered{{else}}badge-queued{{end}}">{{.Status}}</span></td>
+          <td>{{.TotalSent}}</td>
+          <td>{{.Opens}}</td>
+          <td>{{.Clicks}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="7" class="empty-state" style="padding:32px;">No campaigns yet</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div>
+{{end}}

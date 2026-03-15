@@ -38,6 +38,7 @@ admin:
 web:
   listen_addr: ":5000"
   secret_key: "change-this-32-char-secret-key!!"
+  # base_url: "https://mail.yourdomain.com"  # for tracking pixel/click URLs (default: https://smtp.domain)
 
 # Database: sqlite (default) or mysql
 database:

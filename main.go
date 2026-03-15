@@ -182,9 +182,14 @@ func main() {
 	if cfg.Database.Driver == "mysql" {
 		dbDisplay = fmt.Sprintf("mysql:%s:%d/%s", cfg.Database.Host, cfg.Database.Port, cfg.Database.Database)
 	}
+	webBaseURL := cfg.Web.BaseURL
+	if webBaseURL == "" {
+		webBaseURL = "https://" + cfg.SMTP.Domain
+	}
 	cfgSnapshot := map[string]string{
 		"smtp_listen":     cfg.SMTP.ListenAddr,
 		"smtp_domain":     cfg.SMTP.Domain,
+		"web_base_url":    webBaseURL,
 		"tls_enabled":     boolStr(cfg.SMTP.TLS.Enabled),
 		"tls_cert_file":   cfg.SMTP.TLS.CertFile,
 		"tls_key_file":    cfg.SMTP.TLS.KeyFile,

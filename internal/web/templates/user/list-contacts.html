@@ -1,0 +1,73 @@
+{{define "title"}}{{.List.Name}} — Contacts{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <a href="/user/lists" style="font-size:12px;color:#71717a;text-decoration:none;">← Back to lists</a>
+    <div class="page-title" style="margin-top:4px;">{{.List.Name}}</div>
+    <div class="page-sub">{{.List.Description}}</div>
+  </div>
+  <button type="button" class="btn btn-primary" onclick="document.getElementById('add-modal').style.display='flex'">
+    + Add Contact
+  </button>
+</div>
+<div class="page-body">
+
+<div class="card">
+  <div style="overflow-x:auto;">
+    <table class="data-table reports-simple-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Email</th>
+        <th>First Name</th>
+        <th>Last Name</th>
+        <th>Status</th>
+        <th style="padding-right:20px;"></th>
+      </tr></thead>
+      <tbody>
+        {{range .Contacts}}
+        <tr>
+          <td style="padding-left:20px;">{{.Email}}</td>
+          <td>{{.FirstName}}</td>
+          <td>{{.LastName}}</td>
+          <td><span class="badge badge-{{if eq .Status "subscribed"}}active{{else}}inactive{{end}}">{{.Status}}</span></td>
+          <td style="padding-right:20px;">
+            <form method="POST" action="/user/lists/contacts/delete" style="display:inline;" onsubmit="return confirm('Remove this contact?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <input type="hidden" name="list_id" value="{{$.List.ID}}"/>
+              <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="5" class="empty-state" style="padding:32px;">No contacts. Add some to send campaigns.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="add-modal" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-title">Add Contact</div>
+    <form method="POST" action="/user/lists/contacts/add">
+      <input type="hidden" name="list_id" value="{{.List.ID}}"/>
+      <div class="form-group">
+        <label class="form-label">Email *</label>
+        <input class="form-input" name="email" type="email" required placeholder="user@example.com"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">First Name</label>
+        <input class="form-input" name="first_name" placeholder="John"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Last Name</label>
+        <input class="form-input" name="last_name" placeholder="Doe"/>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button type="submit" class="btn btn-primary">Add</button>
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('add-modal').style.display='none'">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+</div>
+{{end}}

@@ -11,13 +11,18 @@ type User struct {
 	Username      string `gorm:"uniqueIndex;size:191;not null"`
 	Email         string
 	Password      string `gorm:"not null"`      // bcrypt hash
-	Role          string `gorm:"default:user"`  // admin | user
+	Role          string `gorm:"default:user"`   // admin | user
 	QuotaPerDay   int    `gorm:"default:0"`     // 0 = unlimited
 	Active        bool   `gorm:"default:true"`
 	// SMTP delivery mode: system_only | custom_only | system_and_custom
 	SMTPMode      string `gorm:"default:'system_only'"`
 	SMTPRotation  bool   `gorm:"default:false"` // rotate across all custom SMTPs
 	MaxCustomSMTP int    `gorm:"default:5"`     // max custom SMTP servers allowed
+	// Campaign/automation hard limits (0 = unlimited). Admin sets per user.
+	MaxCampaigns   int `gorm:"default:0"` // max campaigns (draft+sent)
+	MaxAutomations int `gorm:"default:0"` // max automations
+	MaxLists       int `gorm:"default:0"` // max contact lists
+	MaxTemplates   int `gorm:"default:0"` // max email templates
 }
 
 // UserSMTP stores a user's custom outbound SMTP relay credentials.
@@ -176,6 +181,101 @@ type Suppression struct {
 	Email    string `gorm:"size:191;not null"`       // suppressed address (stored lowercase)
 	Reason   string                          // "unsubscribed" | "manual" | "bounce"
 	Source   string                          // "link" | "user" | "admin" | "api"
+}
+
+// ─── Campaign & Automation (Mailchimp-style) ───────────────────────────────────
+
+// ContactList holds contacts for a user (audience/segment).
+type ContactList struct {
+	gorm.Model
+	OwnerUsername string `gorm:"index;size:191;not null"`
+	Name          string `gorm:"size:191;not null"`
+	Description   string `gorm:"type:text"`
+}
+
+// Contact is a single email in a list.
+type Contact struct {
+	gorm.Model
+	ListID    uint   `gorm:"index;not null"`
+	Email     string `gorm:"size:191;not null"`
+	FirstName string `gorm:"size:191"`
+	LastName  string `gorm:"size:191"`
+	CustomFields string `gorm:"type:text"` // JSON: {"company":"Acme","phone":"123"}
+	Status    string `gorm:"size:20;default:subscribed"` // subscribed | unsubscribed | bounced
+}
+
+// CampaignTemplate stores reusable HTML email templates with merge tags.
+type CampaignTemplate struct {
+	gorm.Model
+	OwnerUsername string `gorm:"index;size:191;not null"`
+	Name          string `gorm:"size:191;not null"`
+	Subject       string `gorm:"size:500"` // default subject line
+	HTMLBody      string `gorm:"type:text;not null"`
+	TextBody      string `gorm:"type:text"`
+}
+
+// Campaign represents a send to a list.
+type Campaign struct {
+	gorm.Model
+	OwnerUsername string     `gorm:"index;size:191;not null"`
+	Name         string     `gorm:"size:191;not null"`
+	Subject      string     `gorm:"size:500;not null"`
+	FromEmail    string     `gorm:"size:191;not null"`
+	ReplyTo      string     `gorm:"size:191"`
+	TemplateID   uint       `gorm:"index"`
+	ListID       uint       `gorm:"index;not null"`
+	Status       string     `gorm:"size:20;default:draft"` // draft | scheduled | sending | sent
+	ScheduledAt  *time.Time
+	SentAt       *time.Time
+	TotalSent    int        `gorm:"default:0"`
+	Opens        int        `gorm:"default:0"`
+	Clicks       int        `gorm:"default:0"`
+}
+
+// CampaignSend tracks each recipient in a campaign (for open/click tracking).
+type CampaignSend struct {
+	gorm.Model
+	CampaignID uint       `gorm:"index;not null"`
+	ContactID  uint       `gorm:"index;not null"`
+	Email      string     `gorm:"size:191;not null"`
+	Status     string     `gorm:"size:20;default:queued"` // queued | sent | failed
+	SentAt     *time.Time
+	OpenedAt   *time.Time
+	ClickedAt  *time.Time
+	TrackToken string     `gorm:"uniqueIndex;size:64;not null"` // for /t/o/{token} pixel
+}
+
+// TrackEvent logs opens and clicks for analytics.
+type TrackEvent struct {
+	gorm.Model
+	SendID    uint      `gorm:"index;not null"`
+	EventType string    `gorm:"size:20;not null"` // open | click
+	URL       string    `gorm:"size:1024"`      // original URL for clicks
+	IP        string    `gorm:"size:45"`
+	UserAgent string    `gorm:"size:512"`
+	EventAt   time.Time `gorm:"index"`
+}
+
+// Automation is a workflow (e.g. welcome series, abandoned cart).
+type Automation struct {
+	gorm.Model
+	OwnerUsername string `gorm:"index;size:191;not null"`
+	Name          string `gorm:"size:191;not null"`
+	TriggerType   string `gorm:"size:50;not null"` // subscribe | tag_added | email_opened | email_clicked | delay
+	TriggerListID uint  `gorm:"index"`            // for subscribe: which list
+	TriggerSendID  uint  `gorm:"index"`           // for email_opened/clicked: which campaign send
+	Status        string `gorm:"size:20;default:active"` // active | paused
+}
+
+// AutomationStep is one action in an automation (send email, wait, add tag).
+type AutomationStep struct {
+	gorm.Model
+	AutomationID uint   `gorm:"index;not null"`
+	StepOrder    int    `gorm:"not null"`
+	ActionType   string `gorm:"size:30;not null"` // send_email | delay | add_tag
+	TemplateID   uint  `gorm:"index"`
+	DelayMinutes int    `gorm:"default:0"`
+	TagName      string `gorm:"size:191"`
 }
 
 // Domain represents a verified sending domain with its DKIM keys and DNS records.

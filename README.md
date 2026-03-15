@@ -205,6 +205,42 @@ Tables are created automatically on first run. To migrate from SQLite, export th
 
 ---
 
+## Campaigns & Automation (Mailchimp-style)
+
+Create campaigns, contact lists, templates, and automation workflows.
+
+### Delivery: Same System
+Campaign and automation sends use the **same delivery infrastructure** as SMTP/API sends. They go through the same queue, throttling, IP pool, domain rules, suppression list, and DKIM. There is no separate delivery system — everything is configured by admin and applies to all sending (3rd-party SMTP, API, campaigns, automation).
+
+### Per-User Limits (Admin-Configurable)
+Admin sets hard limits per user in Users → Edit:
+- **Max Campaigns** — 0 = unlimited
+- **Max Automations** — 0 = unlimited
+- **Max Lists** — 0 = unlimited
+- **Max Templates** — 0 = unlimited
+
+### Features
+- **Contact Lists** — Create audiences, add contacts (email, first name, last name)
+- **Templates** — HTML email templates with merge tags: `{{.Name}}`, `{{.Email}}`, `{{.FirstName}}`, `{{.LastName}}`
+- **Campaigns** — Create campaigns, select template + list, send to all subscribers
+- **Tracking** — Open tracking (1×1 pixel), click tracking (redirect URLs)
+- **Automation** — Trigger-based workflows: subscribe, email opened, link clicked, time delay
+
+### Tracking URLs
+Set `web.base_url` in config (e.g. `https://mail.yourdomain.com`) so open/click tracking works. Default: `https://` + smtp.domain.
+
+### User Panel
+- **Contact Lists** → Create lists, add contacts
+- **Templates** → Create/edit HTML templates with merge tags
+- **Campaigns** → Create campaign, select template + list, send
+- **Automation** → Create workflows (subscribe → send email, etc.)
+
+### Admin Panel
+- **Campaigns** → View all campaigns across users
+- **Automation** → View all automations across users
+
+---
+
 ## Configuration Reference
 
 ```yaml

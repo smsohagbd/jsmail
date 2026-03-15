@@ -49,7 +49,7 @@
           <td style="padding-right:20px;">
             <div style="display:flex;gap:6px;">
               <button class="btn btn-secondary btn-sm"
-                onclick="editUser({{.ID}},'{{.Username}}','{{.Email}}',{{.QuotaPerDay}},{{.Active}},'{{.SMTPMode}}',{{.MaxCustomSMTP}})">Edit</button>
+                onclick="editUser({{.ID}},'{{.Username}}','{{.Email}}',{{.QuotaPerDay}},{{.Active}},'{{.SMTPMode}}',{{.MaxCustomSMTP}},{{.MaxCampaigns}},{{.MaxAutomations}},{{.MaxLists}},{{.MaxTemplates}})">Edit</button>
               <form method="POST" action="/admin/users/delete" style="display:inline;" onsubmit="return confirm('Delete {{.Username}}?')">
                 <input type="hidden" name="id" value="{{.ID}}"/>
                 <button type="submit" class="btn btn-danger">Delete</button>
@@ -100,6 +100,25 @@
         <input class="form-input" type="number" name="max_custom_smtp" value="5" min="0"/>
         <div style="font-size:11px;color:#52525b;margin-top:4px;">0 = unlimited</div>
       </div>
+      <div style="font-size:12px;font-weight:600;color:#a1a1aa;margin:16px 0 8px;">Campaign Limits (0 = unlimited)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label class="form-label">Max Campaigns</label>
+          <input class="form-input" type="number" name="max_campaigns" value="0" min="0"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Automations</label>
+          <input class="form-input" type="number" name="max_automations" value="0" min="0"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Lists</label>
+          <input class="form-input" type="number" name="max_lists" value="0" min="0"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Templates</label>
+          <input class="form-input" type="number" name="max_templates" value="0" min="0"/>
+        </div>
+      </div>
       <div style="display:flex;gap:10px;margin-top:20px;">
         <button type="submit" class="btn btn-primary" style="flex:1;justify-content:center;">Create</button>
         <button type="button" class="btn btn-secondary" style="flex:1;justify-content:center;" onclick="document.getElementById('create-modal').style.display='none'">Cancel</button>
@@ -138,6 +157,25 @@
         <label class="form-label">Max Custom SMTP Servers</label>
         <input class="form-input" type="number" name="max_custom_smtp" id="edit-max-smtp" min="0"/>
       </div>
+      <div style="font-size:12px;font-weight:600;color:#a1a1aa;margin:16px 0 8px;">Campaign Limits (0 = unlimited)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label class="form-label">Max Campaigns</label>
+          <input class="form-input" type="number" name="max_campaigns" id="edit-max-campaigns" min="0"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Automations</label>
+          <input class="form-input" type="number" name="max_automations" id="edit-max-automations" min="0"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Lists</label>
+          <input class="form-input" type="number" name="max_lists" id="edit-max-lists" min="0"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max Templates</label>
+          <input class="form-input" type="number" name="max_templates" id="edit-max-templates" min="0"/>
+        </div>
+      </div>
       <div class="form-group">
         <label class="form-label">Status</label>
         <select class="form-input" name="active" id="edit-active">
@@ -154,13 +192,17 @@
 </div>
 
 <script>
-function editUser(id, username, email, quota, active, smtpMode, maxSmtp) {
+function editUser(id, username, email, quota, active, smtpMode, maxSmtp, maxCamp, maxAuto, maxLists, maxTmpl) {
   document.getElementById('edit-id').value = id;
   document.getElementById('edit-uname').value = username;
   document.getElementById('edit-quota').value = quota;
   document.getElementById('edit-active').value = active ? '1' : '0';
   document.getElementById('edit-smtp-mode').value = smtpMode || 'system_only';
   document.getElementById('edit-max-smtp').value = maxSmtp || 5;
+  document.getElementById('edit-max-campaigns').value = maxCamp || 0;
+  document.getElementById('edit-max-automations').value = maxAuto || 0;
+  document.getElementById('edit-max-lists').value = maxLists || 0;
+  document.getElementById('edit-max-templates').value = maxTmpl || 0;
   document.getElementById('edit-modal').style.display = 'flex';
 }
 </script>
