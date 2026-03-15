@@ -1,24 +1,11 @@
 {{define "title"}}{{if .Template}}Edit{{else}}New{{end}} Template — {{.ActiveUser}}{{end}}
 {{define "content"}}
-<link href="https://unpkg.com/grapesjs@0.20.4/dist/css/grapes.min.css" rel="stylesheet"/>
-<style>
-  #gjs { border: 1px solid var(--border); border-radius: 8px; min-height: 400px; }
-  .gjs-one-bg { background-color: #09090b !important; }
-  .gjs-two-color { color: #a1a1aa !important; }
-  .gjs-four-color, .gjs-four-color-h:hover { color: #818cf8 !important; }
-  .gjs-pn-panel { background: #111113 !important; border-color: #27272a !important; }
-  .gjs-block { background: #1c1c1f !important; border-color: #27272a !important; color: #e4e4e7 !important; }
-  .gjs-block:hover { background: #27272a !important; }
-  .gjs-block-label { color: #a1a1aa !important; }
-  .gjs-field { background: #09090b !important; border-color: #27272a !important; color: #fafafa !important; }
-  .gjs-label { color: #a1a1aa !important; }
-  .gjs-cv-canvas { background: #fff !important; }
-</style>
+<script src="https://editor.unlayer.com/embed.js"></script>
 <div class="page-header">
   <div>
     <a href="/user/templates" style="font-size:12px;color:#71717a;text-decoration:none;">← Back to templates</a>
     <div class="page-title" style="margin-top:4px;">{{if .Template}}Edit Template{{else}}New Template{{end}}</div>
-    <div class="page-sub">Drag-and-drop editor. Use {{"{{.Name}}"}}, {{"{{.Email}}"}}, {{"{{.FirstName}}"}}, {{"{{.LastName}}"}} for personalization</div>
+    <div class="page-sub">Full-featured visual editor. Use merge tags: {{"{{.Name}}"}}, {{"{{.Email}}"}}, {{"{{.FirstName}}"}}, {{"{{.LastName}}"}}</div>
   </div>
 </div>
 <div class="page-body">
@@ -28,7 +15,9 @@
 <div class="card">
   <form method="POST" action="/user/templates/edit" id="template-form">
     {{if .Template}}<input type="hidden" name="id" value="{{.Template.ID}}"/>{{end}}
+    <input type="hidden" name="editor_mode" id="editor_mode" value="visual"/>
     <input type="hidden" name="html_body" id="html_body"/>
+    <input type="hidden" name="design_json" id="design_json"/>
     <div class="card-body">
       <div class="form-group">
         <label class="form-label">Template Name</label>
@@ -50,12 +39,24 @@
         <label class="form-label">Default Reply-To (optional)</label>
         <input class="form-input" name="reply_to" type="email" value="{{if .Template}}{{.Template.ReplyTo}}{{end}}" placeholder="support@yourdomain.com"/>
       </div>
+
+      <!-- Tabs: Visual | HTML -->
       <div class="form-group">
-        <label class="form-label">Email Body — Drag blocks from the left</label>
-        <div id="gjs"></div>
+        <div style="display:flex;gap:4px;margin-bottom:12px;">
+          <button type="button" id="tab-visual" class="btn btn-primary btn-sm">Visual Editor</button>
+          <button type="button" id="tab-html" class="btn btn-secondary btn-sm">HTML Code</button>
+        </div>
+        <div id="panel-visual" style="min-height:600px;">
+          <div id="unlayer-container" style="height:600px;border:1px solid var(--border);border-radius:8px;overflow:hidden;"></div>
+        </div>
+        <div id="panel-html" style="display:none;">
+          <textarea class="form-input" name="html_body_fallback" id="html_body_fallback" rows="20" style="font-family:monospace;font-size:13px;">{{if .Template}}{{.Template.HTMLBody}}{{end}}</textarea>
+          <small style="color:#71717a;">Edit raw HTML. Use {{"{{.Name}}"}}, {{"{{.Email}}"}}, {{"{{.FirstName}}"}}, {{"{{.LastName}}"}} for personalization.</small>
+        </div>
       </div>
+
       <div class="form-group">
-        <label class="form-label">Plain Text Body (optional, fallback for non-HTML clients)</label>
+        <label class="form-label">Plain Text Body (optional)</label>
         <textarea class="form-input" name="text_body" rows="4" style="font-family:monospace;font-size:13px;">{{if .Template}}{{.Template.TextBody}}{{end}}</textarea>
       </div>
       <div style="display:flex;gap:8px;">
@@ -66,33 +67,67 @@
   </form>
 </div>
 </div>
-<script src="https://unpkg.com/grapesjs@0.20.4/dist/js/grapes.min.js"></script>
-<script src="https://unpkg.com/grapesjs-preset-newsletter@1.0.2/dist/grapesjs-preset-newsletter.min.js"></script>
 <script>
 (function(){
-  var initialHtml = {{.InitialHTML}};
-  var editor = grapesjs.init({
-    container: '#gjs',
-    height: '450px',
-    storageManager: false,
-    plugins: ['grapesjs-preset-newsletter'],
-    pluginsOpts: {
-      'grapesjs-preset-newsletter': { inlineCss: true }
-    },
-    canvas: { styles: ['https://unpkg.com/grapesjs@0.20.4/dist/css/grapes.min.css'] },
-  });
-  if (initialHtml && initialHtml !== '') {
-    editor.setComponents(initialHtml);
-  }
-  document.getElementById('template-form').addEventListener('submit', function(){
-    var html;
-    try {
-      if (editor.Commands && editor.Commands.get('gjs-get-inlined-html')) {
-        html = editor.runCommand('gjs-get-inlined-html');
+  var unlayerProjectID = {{.UnlayerProjectID}};
+  var designJson = {{.DesignJSON}};
+  var currentMode = 'visual';
+
+  var initOpts = {
+    id: 'unlayer-container',
+    displayMode: 'email',
+    mergeTags: {
+      contact: {
+        name: 'Contact',
+        mergeTags: {
+          name: { name: 'Name', value: '{{"{{.Name}}"}}', sample: 'John Doe' },
+          email: { name: 'Email', value: '{{"{{.Email}}"}}', sample: 'john@example.com' },
+          first_name: { name: 'First Name', value: '{{"{{.FirstName}}"}}', sample: 'John' },
+          last_name: { name: 'Last Name', value: '{{"{{.LastName}}"}}', sample: 'Doe' }
+        }
       }
-    } catch(e) {}
-    if (!html) html = editor.getHtml() + (editor.getCss() ? '<style>' + editor.getCss() + '</style>' : '');
-    document.getElementById('html_body').value = html || '';
+    },
+    appearance: {
+      theme: 'dark',
+      panels: { tools: { dock: 'left' } }
+    },
+    features: {
+      textEditor: { spellChecker: true }
+    }
+  };
+  if (unlayerProjectID > 0) initOpts.projectId = unlayerProjectID;
+  unlayer.init(initOpts);
+
+  unlayer.addEventListener('editor:ready', function() {
+    if (designJson && designJson.body) {
+      unlayer.loadDesign(designJson);
+    }
+  });
+
+  function switchTab(mode) {
+    currentMode = mode;
+    document.getElementById('editor_mode').value = mode;
+    document.getElementById('tab-visual').className = mode === 'visual' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+    document.getElementById('tab-html').className = mode === 'html' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+    document.getElementById('panel-visual').style.display = mode === 'visual' ? 'block' : 'none';
+    document.getElementById('panel-html').style.display = mode === 'html' ? 'block' : 'none';
+  }
+
+  document.getElementById('tab-visual').onclick = function() { switchTab('visual'); };
+  document.getElementById('tab-html').onclick = function() { switchTab('html'); };
+
+  document.getElementById('template-form').addEventListener('submit', function(e) {
+    if (currentMode === 'visual') {
+      e.preventDefault();
+      unlayer.exportHtml(function(data) {
+        document.getElementById('html_body').value = data.html || '';
+        document.getElementById('design_json').value = JSON.stringify(data.design || {});
+        document.getElementById('template-form').submit();
+      });
+    } else {
+      document.getElementById('html_body').value = document.getElementById('html_body_fallback').value;
+      document.getElementById('design_json').value = '';
+    }
   });
 })();
 </script>

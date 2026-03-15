@@ -215,6 +215,7 @@ type CampaignTemplate struct {
 	ReplyTo       string `gorm:"size:191"`   // default Reply-To
 	HTMLBody      string `gorm:"type:text;not null"`
 	TextBody      string `gorm:"type:text"`
+	DesignJSON    string `gorm:"type:text"`   // Unlayer design JSON for visual editor
 }
 
 // Campaign represents a send to a list.

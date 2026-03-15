@@ -187,9 +187,10 @@ func main() {
 		webBaseURL = "https://" + cfg.SMTP.Domain
 	}
 	cfgSnapshot := map[string]string{
-		"smtp_listen":     cfg.SMTP.ListenAddr,
-		"smtp_domain":     cfg.SMTP.Domain,
-		"web_base_url":    webBaseURL,
+		"smtp_listen":         cfg.SMTP.ListenAddr,
+		"smtp_domain":         cfg.SMTP.Domain,
+		"web_base_url":        webBaseURL,
+		"unlayer_project_id":  strconv.Itoa(cfg.Web.UnlayerProjectID),
 		"tls_enabled":     boolStr(cfg.SMTP.TLS.Enabled),
 		"tls_cert_file":   cfg.SMTP.TLS.CertFile,
 		"tls_key_file":    cfg.SMTP.TLS.KeyFile,

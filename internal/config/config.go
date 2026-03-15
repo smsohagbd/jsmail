@@ -35,10 +35,11 @@ type AdminConfig struct {
 }
 
 type WebConfig struct {
-	ListenAddr string `yaml:"listen_addr"`
-	SecretKey  string `yaml:"secret_key"`
-	DBPath     string `yaml:"db_path"`
-	BaseURL    string `yaml:"base_url"` // e.g. https://mail.example.com — for tracking pixel/click URLs
+	ListenAddr       string `yaml:"listen_addr"`
+	SecretKey        string `yaml:"secret_key"`
+	DBPath           string `yaml:"db_path"`
+	BaseURL          string `yaml:"base_url"`           // e.g. https://mail.example.com — for tracking pixel/click URLs
+	UnlayerProjectID int    `yaml:"unlayer_project_id"` // optional; get from console.unlayer.com for production
 }
 
 type SMTPConfig struct {

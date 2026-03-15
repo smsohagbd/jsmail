@@ -239,16 +239,24 @@ func (h *Handler) TemplateEdit(w http.ResponseWriter, r *http.Request) {
 		replyTo := strings.TrimSpace(r.FormValue("reply_to"))
 		htmlBody := r.FormValue("html_body")
 		textBody := r.FormValue("text_body")
-		if name == "" || htmlBody == "" {
+		designJSON := r.FormValue("design_json")
+		editorMode := r.FormValue("editor_mode") // "visual" or "html"
+		if name == "" {
 			h.Tmpl.Render(w, "user/template-edit", merge(h.base(claims.Username), map[string]interface{}{
-				"Page": "templates", "Template": t, "Error": "Name and HTML body required",
+				"Page": "templates", "Template": t, "Error": "Name required",
 			}))
 			return
 		}
+		if editorMode == "html" {
+			designJSON = ""
+		}
+		if htmlBody == "" {
+			htmlBody = "<p></p>"
+		}
 		if t != nil {
-			appdb.UpdateTemplate(t.ID, claims.Username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody)
+			appdb.UpdateTemplate(t.ID, claims.Username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody, designJSON)
 		} else {
-			if _, err := appdb.CreateTemplate(claims.Username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody); err != nil {
+			if _, err := appdb.CreateTemplate(claims.Username, name, subject, fromName, fromEmail, replyTo, htmlBody, textBody, designJSON); err != nil {
 				h.Tmpl.Render(w, "user/template-edit", merge(h.base(claims.Username), map[string]interface{}{
 					"Page": "templates", "Template": t, "Error": err.Error(),
 				}))
@@ -258,13 +266,19 @@ func (h *Handler) TemplateEdit(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/user/templates", http.StatusFound)
 		return
 	}
-	initialHTML := template.HTML("null")
-	if t != nil && t.HTMLBody != "" {
-		b, _ := json.Marshal(t.HTMLBody)
-		initialHTML = template.HTML(string(b))
+	designJSON := template.HTML("null")
+	if t != nil && t.DesignJSON != "" {
+		// Escape </script> to avoid breaking inline script
+		safe := strings.ReplaceAll(t.DesignJSON, "</script>", "<\\/script>")
+		designJSON = template.HTML(safe)
+	}
+	unlayerProjectID := 0
+	if pid := h.ConfigSnapshot["unlayer_project_id"]; pid != "" {
+		unlayerProjectID, _ = strconv.Atoi(pid)
 	}
 	h.Tmpl.Render(w, "user/template-edit", merge(h.base(claims.Username), map[string]interface{}{
-		"Page": "templates", "Template": t, "InitialHTML": initialHTML,
+		"Page": "templates", "Template": t, "DesignJSON": designJSON,
+		"UnlayerProjectID": unlayerProjectID,
 	}))
 }
 
