@@ -34,40 +34,35 @@
 </div>
 
 <!-- Template list -->
-<div class="card" style="padding:0;">
-  <div class="card-header" style="padding:16px 20px;border-bottom:1px solid #27272a;">
-    <span class="card-title">All Templates</span>
-    <span style="font-size:12px;color:#52525b;font-weight:400;">{{len .Templates}} template(s)</span>
+<div class="card" style="padding:20px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+    <h3 style="font-size:15px;font-weight:600;color:#e4e4e7;margin:0;">All Templates</h3>
+    <span style="font-size:12px;color:#71717a;background:#18181b;padding:4px 10px;border-radius:6px;">{{len .Templates}} template(s)</span>
   </div>
   {{if .Templates}}
-  <table class="table" style="margin:0;">
-    <thead>
-      <tr>
-        <th style="width:40px;">#</th>
-        <th>Subject</th>
-        <th>Body</th>
-        <th style="width:100px;">Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{range $i, $t := .Templates}}
-      <tr>
-        <td style="color:#71717a;font-size:13px;">{{add $i 1}}</td>
-        <td style="font-size:13px;">{{if $t.Subject}}{{$t.Subject}}{{else}}<span style="color:#52525b;">(keep original)</span>{{end}}</td>
-        <td style="font-size:12px;color:#71717a;max-width:300px;">{{if $t.Body}}{{truncate $t.Body 80}}{{else}}<span style="color:#52525b;">(keep original)</span>{{end}}</td>
-        <td>
-          <form method="POST" action="/admin/forcetemplate/delete" style="display:inline;" onsubmit="return confirm('Remove this template?');">
-            <input type="hidden" name="index" value="{{$i}}"/>
-            <button type="submit" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;">Remove</button>
-          </form>
-        </td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    {{range $i, $t := .Templates}}
+    <div style="background:#18181b;border:1px solid #27272a;border-radius:10px;padding:16px 20px;display:flex;gap:16px;align-items:flex-start;">
+      <div style="width:32px;height:32px;background:#1e1e47;color:#818cf8;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;">{{add $i 1}}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;font-weight:600;color:#e4e4e7;margin-bottom:6px;">
+          {{if $t.Subject}}{{$t.Subject}}{{else}}<span style="color:#52525b;font-weight:400;">Subject: (keep original)</span>{{end}}
+        </div>
+        <div style="font-size:13px;color:#71717a;line-height:1.5;white-space:pre-wrap;word-break:break-word;">
+          {{if $t.Body}}{{truncate $t.Body 120}}{{else}}<span style="color:#52525b;">Body: (keep original)</span>{{end}}
+        </div>
+      </div>
+      <form method="POST" action="/admin/forcetemplate/delete" style="flex-shrink:0;" onsubmit="return confirm('Remove this template?');">
+        <input type="hidden" name="index" value="{{$i}}"/>
+        <button type="submit" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:6px 12px;">Remove</button>
+      </form>
+    </div>
+    {{end}}
+  </div>
   {{else}}
-  <div style="padding:32px 20px;text-align:center;color:#71717a;font-size:14px;">
-    No templates yet. Add one above.
+  <div style="padding:40px 20px;text-align:center;background:#18181b;border-radius:10px;border:1px dashed #27272a;">
+    <div style="font-size:14px;color:#71717a;">No templates yet</div>
+    <div style="font-size:12px;color:#52525b;margin-top:4px;">Add a template above to get started</div>
   </div>
   {{end}}
 </div>
