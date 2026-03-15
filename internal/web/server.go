@@ -183,6 +183,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/forcefrom/save", webauth.RequireAdmin(ah.SaveForceFrom))
 	mux.HandleFunc("/admin/forcetemplate", webauth.RequireAdmin(ah.ForceTemplate))
 	mux.HandleFunc("/admin/forcetemplate/add", webauth.RequireAdmin(ah.AddForceTemplate))
+	mux.HandleFunc("/admin/forcetemplate/edit", webauth.RequireAdmin(ah.EditForceTemplate))
+	mux.HandleFunc("/admin/forcetemplate/save", webauth.RequireAdmin(ah.SaveForceTemplateEdit))
 	mux.HandleFunc("/admin/forcetemplate/delete", webauth.RequireAdmin(ah.DeleteForceTemplate))
 	mux.HandleFunc("/admin/config", webauth.RequireAdmin(ah.ConfigEditor))
 	mux.HandleFunc("/admin/ssl", webauth.RequireAdmin(ah.SSL))

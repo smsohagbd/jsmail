@@ -52,10 +52,13 @@
           {{if $t.Body}}{{truncate $t.Body 120}}{{else}}<span style="color:#52525b;">Body: (keep original)</span>{{end}}
         </div>
       </div>
-      <form method="POST" action="/admin/forcetemplate/delete" style="flex-shrink:0;" onsubmit="return confirm('Remove this template?');">
-        <input type="hidden" name="index" value="{{$i}}"/>
-        <button type="submit" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:6px 12px;">Remove</button>
-      </form>
+      <div style="display:flex;gap:8px;flex-shrink:0;">
+        <a href="/admin/forcetemplate/edit?index={{$i}}" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;">Edit</a>
+        <form method="POST" action="/admin/forcetemplate/delete" style="display:inline;" onsubmit="return confirm('Remove this template?');">
+          <input type="hidden" name="index" value="{{$i}}"/>
+          <button type="submit" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:6px 12px;">Remove</button>
+        </form>
+      </div>
     </div>
     {{end}}
   </div>

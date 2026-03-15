@@ -963,6 +963,50 @@ func (h *Handler) AddForceTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/forcetemplate?ok=Template+added", http.StatusFound)
 }
 
+func (h *Handler) EditForceTemplate(w http.ResponseWriter, r *http.Request) {
+	idx, _ := strconv.Atoi(r.URL.Query().Get("index"))
+	templates := appdb.GetForceEmailTemplates()
+	if idx < 0 || idx >= len(templates) {
+		http.Redirect(w, r, "/admin/forcetemplate?err=Invalid+template", http.StatusFound)
+		return
+	}
+	claims, _ := webauth.GetClaims(r)
+	h.Tmpl.Render(w, "admin/forcetemplate-edit", map[string]interface{}{
+		"Page":      "forcetemplate",
+		"ActiveUser": claims.Username,
+		"Index":     idx,
+		"Template":  templates[idx],
+		"FlashOK":   r.URL.Query().Get("ok"),
+		"FlashErr":  r.URL.Query().Get("err"),
+	})
+}
+
+func (h *Handler) SaveForceTemplateEdit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/forcetemplate", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/forcetemplate?err=Invalid+form", http.StatusFound)
+		return
+	}
+	idx, _ := strconv.Atoi(r.FormValue("index"))
+	templates := appdb.GetForceEmailTemplates()
+	if idx < 0 || idx >= len(templates) {
+		http.Redirect(w, r, "/admin/forcetemplate?err=Invalid+template", http.StatusFound)
+		return
+	}
+	subject := strings.TrimSpace(r.FormValue("subject"))
+	body := r.FormValue("body")
+	templates[idx] = appdb.ForceEmailTemplate{Subject: subject, Body: body}
+	if err := appdb.SetForceEmailTemplates(templates); err != nil {
+		log.Printf("forcetemplate: failed to update: %v", err)
+		http.Redirect(w, r, "/admin/forcetemplate/edit?index="+strconv.Itoa(idx)+"&err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/forcetemplate?ok=Template+updated", http.StatusFound)
+}
+
 func (h *Handler) DeleteForceTemplate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/admin/forcetemplate", http.StatusFound)

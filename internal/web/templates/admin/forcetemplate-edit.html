@@ -1,0 +1,35 @@
+{{define "title"}}Edit Template — Force Template{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Edit Template #{{add .Index 1}}</div>
+    <div class="page-sub">Update Subject and Body for this template.</div>
+  </div>
+  <a href="/admin/forcetemplate" class="btn btn-ghost" style="font-size:13px;">← Back to Templates</a>
+</div>
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<div class="card" style="padding:20px;max-width:700px;">
+  <form method="POST" action="/admin/forcetemplate/save">
+    <input type="hidden" name="index" value="{{.Index}}"/>
+    <div class="form-group" style="margin-bottom:16px;">
+      <label class="form-label">Subject (optional)</label>
+      <input class="form-input" name="subject" value="{{.Template.Subject}}" placeholder="Leave empty to keep original"/>
+    </div>
+    <div class="form-group" style="margin-bottom:20px;">
+      <label class="form-label">Body (optional — plain text or HTML)</label>
+      <textarea class="form-input" name="body" rows="10" style="font-family:monospace;font-size:13px;resize:vertical;"
+        placeholder="Leave empty to keep original. Mautic tracking pixel is auto-injected for plain text.">{{.Template.Body}}</textarea>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+      <a href="/admin/forcetemplate" class="btn btn-ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+
+</div>
+{{end}}
