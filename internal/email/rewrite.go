@@ -2,8 +2,43 @@ package email
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 )
+
+// trackingPixelPattern matches img tags that look like tracking pixels (Mautic, etc.).
+// Matches: /email/, /mtc/, tracking, beacon, pixel, /index.php/.../tracking
+var trackingPixelPattern = regexp.MustCompile(`(?i)<img[^>]+src\s*=\s*["']([^"']*(?:/email/|/mtc/|tracking|beacon|/pixel|/open)[^"']*)["'][^>]*>`)
+
+// extractTrackingPixels returns img tags from body that look like tracking pixels.
+func extractTrackingPixels(body []byte) string {
+	matches := trackingPixelPattern.FindAll(body, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		s := string(m)
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, "")
+}
+
+// injectTrackingPixels appends tracking pixels into body before </body> or at end.
+func injectTrackingPixels(body, pixels string) string {
+	if pixels == "" {
+		return body
+	}
+	// Prefer before </body>
+	if idx := strings.LastIndex(strings.ToLower(body), "</body>"); idx >= 0 {
+		return body[:idx] + pixels + body[idx:]
+	}
+	return body + pixels
+}
 
 // looksLikeHTML returns true if s appears to be HTML content.
 func looksLikeHTML(s string) bool {
@@ -99,7 +134,9 @@ func RewriteSubjectAndBody(data []byte, subject, body string) []byte {
 	}
 	newBody := origBody
 	if body != "" {
-		newBody = []byte(body)
+		// Extract tracking pixels from original (Mautic, etc.) before replacing
+		pixels := extractTrackingPixels(origBody)
+		newBody = []byte(injectTrackingPixels(body, pixels))
 	}
 	return []byte(strings.ReplaceAll(strings.Join(out, "\n"), "\n", "\r\n") + sep + string(newBody))
 }
