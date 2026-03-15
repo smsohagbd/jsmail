@@ -893,8 +893,8 @@ func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
 		"Enabled":               appdb.GetForceFromEnabled(),
 		"Domains":               appdb.GetForceFromDomainsRaw(),
 		"ForceEmailEnabled":     appdb.GetForceEmailEnabled(),
-		"ForceEmailFromEnabled": appdb.GetForceEmailFromEnabled(),
-		"ForceEmailAddresses":   appdb.GetForceEmailAddresses(),
+		"ForceEmailFromEnabled":   appdb.GetForceEmailFromEnabled(),
+		"ForceEmailAddressesRaw":  appdb.GetForceEmailAddressesRaw(),
 		"ForceEmailTemplates":   appdb.GetForceEmailTemplates(),
 		"FlashOK":               r.URL.Query().Get("ok"),
 		"FlashErr":              r.URL.Query().Get("err"),
@@ -919,13 +919,7 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 	}
 	forceEmailEnabled := r.FormValue("force_email_enabled") == "on"
 	forceEmailFromEnabled := r.FormValue("force_email_from_enabled") == "on"
-	var addresses []string
-	for _, a := range r.PostForm["force_email_addresses"] {
-		s := strings.TrimSpace(a)
-		if s != "" {
-			addresses = append(addresses, s)
-		}
-	}
+	addressesRaw := r.FormValue("force_email_addresses")
 	var templates []appdb.ForceEmailTemplate
 	if jsonStr := strings.TrimSpace(r.FormValue("force_email_templates_json")); jsonStr != "" {
 		if err := json.Unmarshal([]byte(jsonStr), &templates); err != nil {
@@ -934,7 +928,7 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := appdb.SetForceEmailConfig(forceEmailEnabled, forceEmailFromEnabled, addresses, templates); err != nil {
+	if err := appdb.SetForceEmailConfig(forceEmailEnabled, forceEmailFromEnabled, addressesRaw, templates); err != nil {
 		log.Printf("forceemail: failed to save: %v", err)
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save+Force+Email", http.StatusFound)
 		return

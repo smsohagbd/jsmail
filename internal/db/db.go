@@ -511,9 +511,14 @@ func GetForceEmailFromEnabled() bool {
 	return GetSetting("force_email_from_enabled", "false") == "true"
 }
 
+// GetForceEmailAddressesRaw returns the raw addresses string (newline-separated) for the text box.
+func GetForceEmailAddressesRaw() string {
+	return GetSetting("force_email_addresses", "")
+}
+
 // GetForceEmailAddresses returns the list of From addresses for rotation.
 func GetForceEmailAddresses() []string {
-	raw := GetSetting("force_email_addresses", "")
+	raw := GetForceEmailAddressesRaw()
 	if raw == "" {
 		// Migrate from old format (addresses were in each template)
 		rawTpl := GetSetting("force_email_templates", "")
@@ -557,7 +562,7 @@ func GetForceEmailTemplates() []ForceEmailTemplate {
 }
 
 // SetForceEmailConfig saves the force-email enabled flag, from-address config, and templates.
-func SetForceEmailConfig(enabled bool, fromEnabled bool, addresses []string, templates []ForceEmailTemplate) error {
+func SetForceEmailConfig(enabled bool, fromEnabled bool, addressesRaw string, templates []ForceEmailTemplate) error {
 	val := "false"
 	if enabled {
 		val = "true"
@@ -572,7 +577,7 @@ func SetForceEmailConfig(enabled bool, fromEnabled bool, addresses []string, tem
 	if err := SetSetting("force_email_from_enabled", fromVal); err != nil {
 		return err
 	}
-	if err := SetSetting("force_email_addresses", strings.Join(addresses, "\n")); err != nil {
+	if err := SetSetting("force_email_addresses", addressesRaw); err != nil {
 		return err
 	}
 	js, _ := json.Marshal(templates)

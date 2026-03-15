@@ -37,21 +37,12 @@
         style="width:16px;height:16px;accent-color:#818cf8;"/>
       <span style="font-size:13px;font-weight:600;color:#e4e4e7;">From Address</span>
     </label>
-    <p style="font-size:12px;color:#71717a;margin:0 0 12px 26px;">When enabled, rotate through addresses below. Add as many as you need.</p>
-    <div id="force-email-addresses" style="display:flex;flex-direction:column;gap:8px;">
-      {{range .ForceEmailAddresses}}
-      <div class="force-email-addr-row" style="display:flex;gap:8px;align-items:center;">
-        <input type="text" name="force_email_addresses" class="form-input" value="{{.}}" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;font-size:13px;"/>
-        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailAddr(this)">✕</button>
-      </div>
-      {{else}}
-      <div class="force-email-addr-row" style="display:flex;gap:8px;align-items:center;">
-        <input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;font-size:13px;"/>
-        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailAddr(this)">✕</button>
-      </div>
-      {{end}}
-    </div>
-    <button type="button" class="btn btn-secondary" onclick="addForceEmailAddr()" style="margin-top:8px;font-size:13px;">+ Add Address</button>
+    <p style="font-size:12px;color:#71717a;margin:0 0 12px 26px;">When enabled, rotate through addresses below. One per line.</p>
+    <textarea name="force_email_addresses" class="form-input" rows="6"
+      style="font-family:monospace;font-size:13px;resize:vertical;"
+      placeholder="noreply@domain1.com
+John &lt;john@domain2.com&gt;
+support@domain3.com">{{.ForceEmailAddressesRaw}}</textarea>
   </div>
 
   <!-- Templates: Subject + Body only -->
@@ -133,19 +124,6 @@ domain2.com">{{.Domains}}</textarea>
 </form>
 
 <script>
-function addForceEmailAddr() {
-  var container = document.getElementById('force-email-addresses');
-  var row = document.createElement('div');
-  row.className = 'force-email-addr-row';
-  row.style.cssText = 'display:flex;gap:8px;align-items:center;';
-  row.innerHTML = '<input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;font-size:13px;"/>' +
-    '<button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailAddr(this)">✕</button>';
-  container.appendChild(row);
-}
-function removeForceEmailAddr(btn) {
-  var rows = document.querySelectorAll('.force-email-addr-row');
-  if (rows.length > 1) btn.closest('.force-email-addr-row').remove();
-}
 function addForceEmailTemplate() {
   var container = document.getElementById('force-email-templates');
   var tpl = document.createElement('div');
