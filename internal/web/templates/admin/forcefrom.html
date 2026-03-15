@@ -30,14 +30,25 @@
     </p>
   </div>
   <div class="form-group" style="margin-bottom:16px;">
-    <label class="form-label">Addresses (one per line)</label>
-    <textarea class="form-input" name="force_email_addresses" rows="6"
-      style="font-family:monospace;font-size:13px;resize:vertical;"
-      placeholder="noreply@domain1.com
-John Doe &lt;john@domain2.com&gt;
-support@domain3.com">{{.ForceEmailAddrs}}</textarea>
+    <label class="form-label">Addresses</label>
+    <div id="force-email-addresses" style="display:flex;flex-direction:column;gap:8px;">
+      {{range .ForceEmailAddrs}}
+      <div class="force-email-row" style="display:flex;gap:8px;align-items:center;">
+        <input type="text" name="force_email_addresses" class="form-input" value="{{.}}" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;"/>
+        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailRow(this)" title="Remove">✕</button>
+      </div>
+      {{else}}
+      <div class="force-email-row" style="display:flex;gap:8px;align-items:center;">
+        <input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;"/>
+        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailRow(this)" title="Remove">✕</button>
+      </div>
+      {{end}}
+    </div>
+    <div style="margin-top:8px;">
+      <button type="button" class="btn btn-secondary" onclick="addForceEmailRow()" style="font-size:13px;">+ Add Address</button>
+    </div>
     <p style="font-size:12px;color:#52525b;margin:8px 0 0;">
-      Each incoming email (SMTP, API, Mautic) rotates to the next address.
+      Each incoming email rotates to the next address. Add as many as you need.
     </p>
   </div>
   <div class="form-group" style="margin-bottom:16px;">
@@ -85,6 +96,22 @@ domain2.com">{{.Domains}}</textarea>
 
 <button type="submit" class="btn btn-primary">Save</button>
 </form>
+
+<script>
+function addForceEmailRow() {
+  var container = document.getElementById('force-email-addresses');
+  var row = document.createElement('div');
+  row.className = 'force-email-row';
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;';
+  row.innerHTML = '<input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;"/>' +
+    '<button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailRow(this)" title="Remove">✕</button>';
+  container.appendChild(row);
+}
+function removeForceEmailRow(btn) {
+  var rows = document.querySelectorAll('.force-email-row');
+  if (rows.length > 1) btn.closest('.force-email-row').remove();
+}
+</script>
 
 </div>
 {{end}}

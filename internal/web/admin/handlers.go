@@ -893,7 +893,7 @@ func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
 		"Enabled":           appdb.GetForceFromEnabled(),
 		"Domains":           appdb.GetForceFromDomainsRaw(),
 		"ForceEmailEnabled": appdb.GetForceEmailEnabled(),
-		"ForceEmailAddrs":   appdb.GetForceEmailAddressesRaw(),
+		"ForceEmailAddrs":   appdb.GetForceEmailAddresses(),
 		"ForceEmailSubject": appdb.GetForceEmailSubject(),
 		"ForceEmailBody":   appdb.GetForceEmailBody(),
 		"FlashOK":           r.URL.Query().Get("ok"),
@@ -906,6 +906,10 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/forcefrom", http.StatusFound)
 		return
 	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/forcefrom?err=Invalid+form", http.StatusFound)
+		return
+	}
 	enabled := r.FormValue("enabled") == "on"
 	domains := strings.TrimSpace(r.FormValue("domains"))
 	if err := appdb.SetForceFromConfig(enabled, domains); err != nil {
@@ -914,7 +918,19 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	forceEmailEnabled := r.FormValue("force_email_enabled") == "on"
-	forceEmailAddrs := strings.TrimSpace(r.FormValue("force_email_addresses"))
+	var forceEmailAddrs string
+	if addrs := r.PostForm["force_email_addresses"]; len(addrs) > 0 {
+		var trimmed []string
+		for _, a := range addrs {
+			s := strings.TrimSpace(a)
+			if s != "" {
+				trimmed = append(trimmed, s)
+			}
+		}
+		forceEmailAddrs = strings.Join(trimmed, "\n")
+	} else {
+		forceEmailAddrs = strings.TrimSpace(r.FormValue("force_email_addresses"))
+	}
 	forceEmailSubject := strings.TrimSpace(r.FormValue("force_email_subject"))
 	forceEmailBody := r.FormValue("force_email_body")
 	if err := appdb.SetForceEmailConfig(forceEmailEnabled, forceEmailAddrs, forceEmailSubject, forceEmailBody); err != nil {
