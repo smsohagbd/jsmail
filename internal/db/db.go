@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -492,34 +493,55 @@ func SetForceFromConfig(enabled bool, domains string) error {
 	return SetSetting("force_from_domains", domains)
 }
 
-// ──────────────────────────── Force Email Address ──────────────────────────────
+// ──────────────────────────── Force Email Templates ────────────────────────────
+
+// ForceEmailTemplate is one template in the rotation (Address + Subject + Body).
+type ForceEmailTemplate struct {
+	Address string `json:"address"`
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+}
 
 // GetForceEmailEnabled returns true if force-email is enabled.
 func GetForceEmailEnabled() bool {
 	return GetSetting("force_email_enabled", "false") == "true"
 }
 
-// GetForceEmailAddressesRaw returns the raw addresses string (newline-separated) for editing.
-func GetForceEmailAddressesRaw() string {
-	return GetSetting("force_email_addresses", "")
-}
-
-// GetForceEmailAddresses returns the list of full addresses for rotation (one per line).
-// Each line can be "email@domain.com" or "Name <email@domain.com>".
-func GetForceEmailAddresses() []string {
-	raw := GetSetting("force_email_addresses", "")
-	var out []string
-	for _, line := range strings.Split(raw, "\n") {
-		s := strings.TrimSpace(line)
-		if s != "" && !strings.HasPrefix(s, "#") && strings.Contains(s, "@") {
-			out = append(out, s)
+// GetForceEmailTemplates returns the list of templates for rotation.
+func GetForceEmailTemplates() []ForceEmailTemplate {
+	raw := GetSetting("force_email_templates", "")
+	if raw == "" {
+		// Migrate from old format (addresses + subject + body)
+		addrs := GetSetting("force_email_addresses", "")
+		subj := GetSetting("force_email_subject", "")
+		body := GetSetting("force_email_body", "")
+		if addrs != "" {
+			var out []ForceEmailTemplate
+			for _, line := range strings.Split(addrs, "\n") {
+				s := strings.TrimSpace(line)
+				if s != "" && strings.Contains(s, "@") {
+					out = append(out, ForceEmailTemplate{Address: s, Subject: subj, Body: body})
+				}
+			}
+			return out
+		}
+		return nil
+	}
+	var out []ForceEmailTemplate
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	var valid []ForceEmailTemplate
+	for _, t := range out {
+		if strings.TrimSpace(t.Address) != "" && strings.Contains(t.Address, "@") {
+			valid = append(valid, t)
 		}
 	}
-	return out
+	return valid
 }
 
-// SetForceEmailConfig saves the force-email enabled flag, addresses, subject, and body.
-func SetForceEmailConfig(enabled bool, addresses, subject, body string) error {
+// SetForceEmailConfig saves the force-email enabled flag and templates (JSON).
+func SetForceEmailConfig(enabled bool, templates []ForceEmailTemplate) error {
 	val := "false"
 	if enabled {
 		val = "true"
@@ -527,44 +549,24 @@ func SetForceEmailConfig(enabled bool, addresses, subject, body string) error {
 	if err := SetSetting("force_email_enabled", val); err != nil {
 		return err
 	}
-	if err := SetSetting("force_email_addresses", addresses); err != nil {
-		return err
-	}
-	if err := SetSetting("force_email_subject", subject); err != nil {
-		return err
-	}
-	return SetSetting("force_email_body", body)
+	js, _ := json.Marshal(templates)
+	return SetSetting("force_email_templates", string(js))
 }
 
-// GetForceEmailSubject returns the forced subject (empty = do not override).
-func GetForceEmailSubject() string {
-	return GetSetting("force_email_subject", "")
-}
-
-// GetForceEmailBody returns the forced body (empty = do not override). Accepts plain text or HTML.
-func GetForceEmailBody() string {
-	return GetSetting("force_email_body", "")
-}
-
-// GetNextForceEmailAddress returns the next address from the rotation pool, or "" if disabled/empty.
-func GetNextForceEmailAddress() string {
-	addrs := GetForceEmailAddresses()
-	if len(addrs) == 0 {
-		return ""
+// GetNextForceEmailTemplate returns the next template from the rotation pool.
+func GetNextForceEmailTemplate() *ForceEmailTemplate {
+	templates := GetForceEmailTemplates()
+	if len(templates) == 0 {
+		return nil
 	}
 	idx := forceEmailRotate.Add(1) - 1
-	return addrs[int(idx)%len(addrs)]
+	t := &templates[int(idx)%len(templates)]
+	return t
 }
 
 // ApplyForceAddress returns the From address to use and whether any rewrite was applied.
-// Caller should use email.RewriteFromHeader(data, newFrom) when applied is true.
+// For Force From only. When Force Email is enabled, use GetNextForceEmailTemplate() instead.
 func ApplyForceAddress(originalFrom string) (newFrom string, applied bool) {
-	if GetForceEmailEnabled() {
-		next := GetNextForceEmailAddress()
-		if next != "" {
-			return next, true
-		}
-	}
 	if GetForceFromEnabled() {
 		domains := GetForceFromDomains()
 		if len(domains) > 0 {

@@ -13,11 +13,11 @@
 
 <form method="POST" action="/admin/forcefrom/save">
 
-<!-- Force Email: full address rotation (takes precedence when both enabled) -->
+<!-- Force Email: rotate through email templates (Address + Subject + Body) -->
 <div class="card" style="margin-bottom:16px;padding:20px;">
   <div class="card-header" style="margin-bottom:16px;">
-    <span class="card-title">Force Email — Rotate Full Addresses</span>
-    <span style="font-size:12px;color:#52525b;font-weight:400;">Rotate through a list of full email addresses (Name &lt;email&gt; or email)</span>
+    <span class="card-title">Force Email — Rotate Templates</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">Each template has Address, Subject, Body. Add as many as you need — all rotate per email.</span>
   </div>
   <div style="margin-bottom:16px;">
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
@@ -26,44 +26,57 @@
       <span style="font-size:14px;font-weight:600;color:#e4e4e7;">Enable Force Email</span>
     </label>
     <p style="font-size:12px;color:#71717a;margin:0 0 16px 26px;">
-      {{if .ForceEmailEnabled}}<span style="color:#4ade80;">● Active</span> — Rotates From; optionally override Subject and Body below.{{else}}<span style="color:#71717a;">● Inactive</span>{{end}}
+      {{if .ForceEmailEnabled}}<span style="color:#4ade80;">● Active</span> — Each incoming email uses the next template in rotation.{{else}}<span style="color:#71717a;">● Inactive</span>{{end}}
     </p>
   </div>
-  <div class="form-group" style="margin-bottom:16px;">
-    <label class="form-label">Addresses</label>
-    <div id="force-email-addresses" style="display:flex;flex-direction:column;gap:8px;">
-      {{range .ForceEmailAddrs}}
-      <div class="force-email-row" style="display:flex;gap:8px;align-items:center;">
-        <input type="text" name="force_email_addresses" class="form-input" value="{{.}}" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;"/>
-        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailRow(this)" title="Remove">✕</button>
+  <input type="hidden" name="force_email_templates_json" id="force_email_templates_json"/>
+  <div id="force-email-templates" style="display:flex;flex-direction:column;gap:16px;">
+    {{range .ForceEmailTemplates}}
+    <div class="force-email-template card" style="padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>
+        <button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>
       </div>
-      {{else}}
-      <div class="force-email-row" style="display:flex;gap:8px;align-items:center;">
-        <input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;"/>
-        <button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailRow(this)" title="Remove">✕</button>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label" style="font-size:12px;">From Address</label>
+        <input type="text" class="form-input force-tpl-address" value="{{.Address}}" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="font-size:13px;"/>
       </div>
-      {{end}}
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label" style="font-size:12px;">Subject (optional)</label>
+        <input type="text" class="form-input force-tpl-subject" value="{{.Subject}}" placeholder="Leave empty to keep original" style="font-size:13px;"/>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" style="font-size:12px;">Body (optional — plain text or HTML)</label>
+        <textarea class="form-input force-tpl-body" rows="6" style="font-size:13px;font-family:monospace;resize:vertical;">{{.Body}}</textarea>
+      </div>
     </div>
-    <div style="margin-top:8px;">
-      <button type="button" class="btn btn-secondary" onclick="addForceEmailRow()" style="font-size:13px;">+ Add Address</button>
+    {{else}}
+    <div class="force-email-template card" style="padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>
+        <button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label" style="font-size:12px;">From Address</label>
+        <input type="text" class="form-input force-tpl-address" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="font-size:13px;"/>
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label class="form-label" style="font-size:12px;">Subject (optional)</label>
+        <input type="text" class="form-input force-tpl-subject" placeholder="Leave empty to keep original" style="font-size:13px;"/>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" style="font-size:12px;">Body (optional — plain text or HTML)</label>
+        <textarea class="form-input force-tpl-body" rows="6" style="font-size:13px;font-family:monospace;resize:vertical;"></textarea>
+      </div>
     </div>
-    <p style="font-size:12px;color:#52525b;margin:8px 0 0;">
-      Each incoming email rotates to the next address. Add as many as you need.
-    </p>
+    {{end}}
   </div>
-  <div class="form-group" style="margin-bottom:16px;">
-    <label class="form-label">Subject (optional — leave empty to keep original)</label>
-    <input class="form-input" name="force_email_subject" value="{{.ForceEmailSubject}}" placeholder="Your subject line"/>
+  <div style="margin-top:12px;">
+    <button type="button" class="btn btn-primary" onclick="addForceEmailTemplate()">+ Add Template</button>
   </div>
-  <div class="form-group" style="margin-bottom:16px;">
-    <label class="form-label">Body (optional — plain text or HTML in same box)</label>
-    <textarea class="form-input" name="force_email_body" rows="12"
-      style="font-family:monospace;font-size:13px;resize:vertical;"
-      placeholder="Paste plain text or HTML here. Leave empty to keep original body.">{{.ForceEmailBody}}</textarea>
-    <p style="font-size:12px;color:#52525b;margin:8px 0 0;">
-      One text box for both — paste plain text or HTML. Leave empty to preserve original body and Mautic tracking links.
-    </p>
-  </div>
+  <p style="font-size:12px;color:#52525b;margin:12px 0 0;">
+    Each incoming email rotates to the next template. Leave Subject/Body empty in a template to keep the original. Mautic tracking links preserved when body is not overridden.
+  </p>
 </div>
 
 <!-- Force From: domain rotation -->
@@ -98,19 +111,44 @@ domain2.com">{{.Domains}}</textarea>
 </form>
 
 <script>
-function addForceEmailRow() {
-  var container = document.getElementById('force-email-addresses');
-  var row = document.createElement('div');
-  row.className = 'force-email-row';
-  row.style.cssText = 'display:flex;gap:8px;align-items:center;';
-  row.innerHTML = '<input type="text" name="force_email_addresses" class="form-input" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="flex:1;"/>' +
-    '<button type="button" class="btn btn-ghost" style="color:#f87171;padding:6px 12px;flex-shrink:0;" onclick="removeForceEmailRow(this)" title="Remove">✕</button>';
-  container.appendChild(row);
+function addForceEmailTemplate() {
+  var container = document.getElementById('force-email-templates');
+  var tpl = document.createElement('div');
+  tpl.className = 'force-email-template card';
+  tpl.style.cssText = 'padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;';
+  tpl.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+    '<span style="font-size:13px;font-weight:600;color:#a78bfa;">Template</span>' +
+    '<button type="button" class="btn btn-ghost" style="color:#f87171;font-size:12px;padding:4px 10px;" onclick="removeForceEmailTemplate(this)">✕ Remove</button>' +
+    '</div>' +
+    '<div class="form-group" style="margin-bottom:10px;"><label class="form-label" style="font-size:12px;">From Address</label>' +
+    '<input type="text" class="form-input force-tpl-address" placeholder="noreply@domain.com or Name &lt;email@domain.com&gt;" style="font-size:13px;"/></div>' +
+    '<div class="form-group" style="margin-bottom:10px;"><label class="form-label" style="font-size:12px;">Subject (optional)</label>' +
+    '<input type="text" class="form-input force-tpl-subject" placeholder="Leave empty to keep original" style="font-size:13px;"/></div>' +
+    '<div class="form-group" style="margin-bottom:0;"><label class="form-label" style="font-size:12px;">Body (optional — plain text or HTML)</label>' +
+    '<textarea class="form-input force-tpl-body" rows="6" style="font-size:13px;font-family:monospace;resize:vertical;"></textarea></div>';
+  container.appendChild(tpl);
 }
-function removeForceEmailRow(btn) {
-  var rows = document.querySelectorAll('.force-email-row');
-  if (rows.length > 1) btn.closest('.force-email-row').remove();
+function removeForceEmailTemplate(btn) {
+  var tpls = document.querySelectorAll('.force-email-template');
+  if (tpls.length > 1) btn.closest('.force-email-template').remove();
 }
+function collectForceEmailTemplates() {
+  var arr = [];
+  document.querySelectorAll('.force-email-template').forEach(function(el) {
+    var addr = (el.querySelector('.force-tpl-address') || {}).value || '';
+    if (addr.trim()) {
+      arr.push({
+        address: addr.trim(),
+        subject: ((el.querySelector('.force-tpl-subject') || {}).value || '').trim(),
+        body: (el.querySelector('.force-tpl-body') || {}).value || ''
+      });
+    }
+  });
+  document.getElementById('force_email_templates_json').value = JSON.stringify(arr);
+}
+document.querySelector('form[action="/admin/forcefrom/save"]').addEventListener('submit', function() {
+  collectForceEmailTemplates();
+});
 </script>
 
 </div>

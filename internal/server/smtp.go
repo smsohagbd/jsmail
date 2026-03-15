@@ -137,20 +137,18 @@ func (s *session) Data(r io.Reader) error {
 	}
 
 	from := s.from
-	// Force Email: when enabled, replace From (and optionally Subject/Body) with rotated address and configured overrides.
+	// Force Email: when enabled, use next template (Address + Subject + Body) from rotation.
 	if appdb.GetForceEmailEnabled() {
-		nextAddr := appdb.GetNextForceEmailAddress()
-		if nextAddr != "" {
-			from = nextAddr
+		tpl := appdb.GetNextForceEmailTemplate()
+		if tpl != nil && tpl.Address != "" {
+			from = tpl.Address
 			data = email.RewriteFromHeader(data, from)
+			if tpl.Subject != "" || tpl.Body != "" {
+				data = email.RewriteSubjectAndBody(data, tpl.Subject, tpl.Body)
+			}
 			if s.backend.cfg.VerboseLog {
 				log.Printf("[SMTP]   force-email applied  ip=%s new_from=%s", s.remoteIP, from)
 			}
-		}
-		forceSubj := appdb.GetForceEmailSubject()
-		forceBody := appdb.GetForceEmailBody()
-		if forceSubj != "" || forceBody != "" {
-			data = email.RewriteSubjectAndBody(data, forceSubj, forceBody)
 		}
 	} else if appdb.GetForceFromEnabled() {
 		// Force From: when enabled, replace From with rotated domain (local@domain from list).
