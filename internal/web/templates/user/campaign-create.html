@@ -15,34 +15,14 @@
   <form method="POST" action="/user/campaigns/create">
     <div class="card-body">
       <div class="form-group">
-        <label class="form-label">Campaign Name</label>
-        <input class="form-input" name="name" required placeholder="Welcome Series - Day 1"/>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Subject Line</label>
-        <input class="form-input" name="subject" required placeholder="Hi {{"{{.FirstName}}"}}, welcome!"/>
-      </div>
-      <div class="form-group">
-        <label class="form-label">From Name</label>
-        <input class="form-input" name="from_name" placeholder="John Doe"/>
-      </div>
-      <div class="form-group">
-        <label class="form-label">From Email</label>
-        <input class="form-input" name="from_email" type="email" required placeholder="noreply@yourdomain.com"/>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Reply-To (optional)</label>
-        <input class="form-input" name="reply_to" type="email" placeholder="support@yourdomain.com"/>
-      </div>
-      <div class="form-group">
         <label class="form-label">Template</label>
         <select class="form-input" name="template_id" id="template_id" required>
-          <option value="">— Select —</option>
+          <option value="">— Select template first —</option>
           {{range .Templates}}
           <option value="{{.ID}}">{{.Name}}</option>
           {{end}}
         </select>
-        <small class="form-hint">Selecting a template fills Subject, From Name, From Email, and Reply-To below</small>
+        <small class="form-hint">Template provides Subject, From Name, From Email, Reply-To — no need to fill if already set in template</small>
       </div>
       <div class="form-group">
         <label class="form-label">Contact List</label>
@@ -52,6 +32,26 @@
           <option value="{{.ID}}">{{.Name}}</option>
           {{end}}
         </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Campaign Name</label>
+        <input class="form-input" name="name" required placeholder="Welcome Series - Day 1"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Subject Line <span style="color:#71717a;font-weight:400;">(from template if empty)</span></label>
+        <input class="form-input" name="subject" placeholder="Hi {{"{{.FirstName}}"}}, welcome!"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">From Name <span style="color:#71717a;font-weight:400;">(from template if empty)</span></label>
+        <input class="form-input" name="from_name" placeholder="John Doe"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">From Email <span style="color:#71717a;font-weight:400;">(from template if empty)</span></label>
+        <input class="form-input" name="from_email" type="email" placeholder="noreply@yourdomain.com"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Reply-To <span style="color:#71717a;font-weight:400;">(optional, from template if empty)</span></label>
+        <input class="form-input" name="reply_to" type="email" placeholder="support@yourdomain.com"/>
       </div>
       <div style="display:flex;gap:8px;">
         <button type="submit" class="btn btn-primary">Create Campaign</button>
@@ -66,19 +66,20 @@
   var templatesData = {{.TemplatesJSON}};
   var sel = document.getElementById('template_id');
   if (!sel) return;
-  sel.addEventListener('change', function(){
-    var id = this.value;
+  function fillFromTemplate() {
+    var id = sel.value;
     var d = templatesData[id];
     if (!d) return;
     var fn = document.querySelector('input[name="from_name"]');
     var fe = document.querySelector('input[name="from_email"]');
     var rt = document.querySelector('input[name="reply_to"]');
     var subj = document.querySelector('input[name="subject"]');
-    if (fn && d.from_name) fn.value = d.from_name;
-    if (fe && d.from_email) fe.value = d.from_email;
-    if (rt && d.reply_to) rt.value = d.reply_to;
-    if (subj && d.subject) subj.value = d.subject;
-  });
+    if (fn) fn.value = d.from_name || '';
+    if (fe) fe.value = d.from_email || '';
+    if (rt) rt.value = d.reply_to || '';
+    if (subj) subj.value = d.subject || '';
+  }
+  sel.addEventListener('change', fillFromTemplate);
 })();
 </script>
 {{end}}

@@ -330,9 +330,34 @@ func (h *Handler) CampaignCreate(w http.ResponseWriter, r *http.Request) {
 		templateID, _ := strconv.ParseUint(r.FormValue("template_id"), 10, 64)
 		listID, _ := strconv.ParseUint(r.FormValue("list_id"), 10, 64)
 		tmplData := buildTemplatesJSON(tmpls)
-		if name == "" || subject == "" || fromEmail == "" || templateID == 0 || listID == 0 {
+		if name == "" || templateID == 0 || listID == 0 {
 			h.Tmpl.Render(w, "user/campaign-create", merge(h.base(claims.Username), map[string]interface{}{
-				"Page": "campaigns", "Lists": lists, "Templates": tmpls, "TemplatesJSON": tmplData, "Error": "All fields required",
+				"Page": "campaigns", "Lists": lists, "Templates": tmpls, "TemplatesJSON": tmplData, "Error": "Campaign name, template, and list are required",
+			}))
+			return
+		}
+		// When template is selected, use template values for empty fields
+		tmpl := appdb.GetTemplateByID(uint(templateID), claims.Username)
+		if tmpl != nil {
+			if subject == "" {
+				subject = tmpl.Subject
+			}
+			if fromName == "" {
+				fromName = tmpl.FromName
+			}
+			if fromEmail == "" {
+				fromEmail = tmpl.FromEmail
+			}
+			if replyTo == "" {
+				replyTo = tmpl.ReplyTo
+			}
+		}
+		if subject == "" {
+			subject = "Newsletter"
+		}
+		if fromEmail == "" {
+			h.Tmpl.Render(w, "user/campaign-create", merge(h.base(claims.Username), map[string]interface{}{
+				"Page": "campaigns", "Lists": lists, "Templates": tmpls, "TemplatesJSON": tmplData, "Error": "From Email is required (add it in the template or fill below)",
 			}))
 			return
 		}
