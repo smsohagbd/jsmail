@@ -616,7 +616,15 @@ func GetNextForceEmail(originalFrom string) (from string, subject, body string, 
 	if forceEmailOn && forceEmailFromOn {
 		addrs := GetForceEmailAddresses()
 		if len(addrs) > 0 {
-			from = addrs[int(idx)%len(addrs)]
+			addr := addrs[int(idx)%len(addrs)]
+			// If configured address has no display name, use original's display name
+			if !strings.Contains(addr, "<") {
+				displayName := extractDisplayNameFromAddr(originalFrom)
+				if displayName != "" {
+					addr = displayName + " <" + strings.TrimSpace(addr) + ">"
+				}
+			}
+			from = addr
 			applied = true
 		}
 	} else if forceFromOn {
@@ -628,7 +636,12 @@ func GetNextForceEmail(originalFrom string) (from string, subject, body string, 
 			}
 			domainIdx := forceFromRotate.Add(1) - 1
 			domain := domains[int(domainIdx)%len(domains)]
-			from = local + "@" + domain
+			displayName := extractDisplayNameFromAddr(originalFrom)
+			if displayName != "" {
+				from = displayName + " <" + local + "@" + domain + ">"
+			} else {
+				from = local + "@" + domain
+			}
 			applied = true
 		}
 	}
@@ -654,6 +667,10 @@ func ApplyForceAddress(originalFrom string) (newFrom string, applied bool) {
 			}
 			idx := forceFromRotate.Add(1) - 1
 			domain := domains[int(idx)%len(domains)]
+			displayName := extractDisplayNameFromAddr(originalFrom)
+			if displayName != "" {
+				return displayName + " <" + local + "@" + domain + ">", true
+			}
 			return local + "@" + domain, true
 		}
 	}
@@ -673,6 +690,24 @@ func extractLocalPartFromAddr(addr string) string {
 		return strings.TrimSpace(addr[:at])
 	}
 	return ""
+}
+
+// extractDisplayNameFromAddr returns the display name from "Name <email@domain.com>" or "" if none.
+func extractDisplayNameFromAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	start := strings.LastIndex(addr, "<")
+	if start <= 0 {
+		return ""
+	}
+	name := strings.TrimSpace(addr[:start])
+	if name == "" {
+		return ""
+	}
+	// Remove surrounding quotes if present
+	if len(name) >= 2 && name[0] == '"' && name[len(name)-1] == '"' {
+		name = strings.TrimSpace(name[1 : len(name)-1])
+	}
+	return name
 }
 
 // ──────────────────────────── Settings ───────────────────────────────────────
