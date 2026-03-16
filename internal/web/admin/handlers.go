@@ -52,6 +52,16 @@ func flatQuery(v url.Values) map[string]string {
 	return m
 }
 
+// formChecked returns true if any form value for key equals "on" (handles checkbox + hidden pattern).
+func formChecked(form url.Values, key string) bool {
+	for _, v := range form[key] {
+		if v == "on" {
+			return true
+		}
+	}
+	return false
+}
+
 
 type Handler struct {
 	DB             *gorm.DB
@@ -911,15 +921,15 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/forcefrom?err=Invalid+form", http.StatusFound)
 		return
 	}
-	enabled := r.FormValue("enabled") == "on"
+	enabled := formChecked(r.Form, "force_from_enabled")
 	domains := strings.TrimSpace(r.FormValue("domains"))
 	if err := appdb.SetForceFromConfig(enabled, domains); err != nil {
 		log.Printf("forcefrom: failed to save: %v", err)
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save", http.StatusFound)
 		return
 	}
-	forceEmailEnabled := r.FormValue("force_email_enabled") == "on"
-	forceEmailFromEnabled := r.FormValue("force_email_from_enabled") == "on"
+	forceEmailEnabled := formChecked(r.Form, "force_email_enabled")
+	forceEmailFromEnabled := formChecked(r.Form, "force_email_from_enabled")
 	addressesRaw := r.FormValue("force_email_addresses")
 	if err := appdb.SetForceEmailBasicConfig(forceEmailEnabled, forceEmailFromEnabled, addressesRaw); err != nil {
 		log.Printf("forceemail: failed to save: %v", err)
