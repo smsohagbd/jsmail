@@ -638,6 +638,17 @@ func GetLinkTrackingMappingsRaw() string {
 	return b.String()
 }
 
+// GetLinkTrackingRedirectBase returns the Mautic redirect base URL (e.g. https://email.inboxdailyapp.com).
+// When the original email has no tracking links, we use {base}/r/{tracking_id} as fallback.
+func GetLinkTrackingRedirectBase() string {
+	return GetSetting("link_tracking_redirect_base", "")
+}
+
+// SetLinkTrackingRedirectBase saves the redirect base URL.
+func SetLinkTrackingRedirectBase(base string) error {
+	return SetSetting("link_tracking_redirect_base", strings.TrimSpace(base))
+}
+
 // SetLinkTrackingMappingsFromRaw parses "URL|TrackingID" per line and saves.
 func SetLinkTrackingMappingsFromRaw(raw string) error {
 	var mappings []LinkTrackingMapping

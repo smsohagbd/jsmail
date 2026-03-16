@@ -906,7 +906,8 @@ func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
 		"ForceEmailEnabled":       appdb.GetForceEmailEnabled(),
 		"ForceEmailFromEnabled":   appdb.GetForceEmailFromEnabled(),
 		"ForceEmailAddressesRaw":   appdb.GetForceEmailAddressesRaw(),
-		"LinkTrackingMappingsRaw": appdb.GetLinkTrackingMappingsRaw(),
+		"LinkTrackingMappingsRaw":    appdb.GetLinkTrackingMappingsRaw(),
+		"LinkTrackingRedirectBase":   appdb.GetLinkTrackingRedirectBase(),
 		"ForceTemplateCount":      len(templates),
 		"FlashOK":                 r.URL.Query().Get("ok"),
 		"FlashErr":                r.URL.Query().Get("err"),
@@ -941,6 +942,11 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 	if err := appdb.SetLinkTrackingMappingsFromRaw(linkTrackingRaw); err != nil {
 		log.Printf("forcefrom: failed to save link tracking: %v", err)
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save+link+tracking", http.StatusFound)
+		return
+	}
+	if err := appdb.SetLinkTrackingRedirectBase(r.FormValue("link_tracking_redirect_base")); err != nil {
+		log.Printf("forcefrom: failed to save redirect base: %v", err)
+		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save", http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, "/admin/forcefrom?ok=Config+updated", http.StatusFound)

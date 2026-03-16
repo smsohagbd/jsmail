@@ -49,7 +49,13 @@ support@domain3.com">{{.ForceEmailAddressesRaw}}</textarea>
   <div style="margin-top:20px;padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
     <div style="margin-bottom:12px;">
       <span style="font-size:13px;font-weight:600;color:#e4e4e7;">Link Tracking (Mautic)</span>
-      <p style="font-size:12px;color:#71717a;margin:4px 0 0;">Map destination URLs to Mautic tracking IDs. When Force Template overrides body, template URLs are replaced with full tracking links from the incoming email. One per line: <code style="color:#a78bfa;">URL|TrackingID</code></p>
+      <p style="font-size:12px;color:#71717a;margin:4px 0 0;">Map destination URLs to Mautic tracking IDs. When Force Template overrides body, template URLs are replaced with tracking links. If the incoming email has full tracking URLs, those are used; else use Redirect Base below. One per line: <code style="color:#a78bfa;">URL|TrackingID</code></p>
+    </div>
+    <div class="form-group" style="margin-bottom:12px;">
+      <label class="form-label">Redirect Base URL</label>
+      <input type="text" name="link_tracking_redirect_base" class="form-input" value="{{.LinkTrackingRedirectBase}}"
+        placeholder="https://email.inboxdailyapp.com"/>
+      <p style="font-size:11px;color:#52525b;margin:4px 0 0;">Required when incoming email has no tracking links. Used as fallback: {base}/r/{tracking_id}</p>
     </div>
     <textarea name="link_tracking_mappings" class="form-input" rows="6"
       style="font-family:monospace;font-size:12px;resize:vertical;"

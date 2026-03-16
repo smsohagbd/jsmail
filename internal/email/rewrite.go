@@ -115,15 +115,17 @@ func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
 	return tidToFull
 }
 
-// applyLinkTrackingToBody replaces URLs in templateBody with full Mautic tracking URLs from original.
-// mappings: URL -> TrackingID from admin config.
-// tidToFull: TrackingID -> full tracking URL extracted from original email.
-func applyLinkTrackingToBody(templateBody string, origBody []byte, mappings []LinkMapping) string {
+// applyLinkTrackingToBody replaces URLs in templateBody with Mautic tracking URLs.
+// 1) If original has full tracking links (/r/ID?ct=...), extract and use those.
+// 2) Else if redirectBase is set, use {redirectBase}/r/{tracking_id} as fallback.
+func applyLinkTrackingToBody(templateBody string, origBody []byte, mappings []LinkMapping, redirectBase string) string {
 	if len(mappings) == 0 {
 		return templateBody
 	}
 	tidToFull := extractTrackingLinksFromOriginal(origBody)
-	if len(tidToFull) == 0 {
+	useFallback := len(tidToFull) == 0 && redirectBase != ""
+	redirectBase = strings.TrimSuffix(strings.TrimSpace(redirectBase), "/")
+	if len(tidToFull) == 0 && !useFallback {
 		return templateBody
 	}
 	// Build url -> full tracking URL. Sort by URL length desc so we match longer URLs first.
@@ -139,7 +141,10 @@ func applyLinkTrackingToBody(templateBody string, origBody []byte, mappings []Li
 		}
 		tid := strings.ToLower(strings.TrimSpace(m.TrackingID))
 		full, ok := tidToFull[tid]
-		if !ok {
+		if !ok && useFallback && redirectBase != "" {
+			full = redirectBase + "/r/" + m.TrackingID
+		}
+		if full == "" {
 			continue
 		}
 		replacements = append(replacements, pair{u, full})
@@ -180,8 +185,8 @@ func looksLikeHTML(s string) bool {
 // If subject is non-empty, the Subject header is replaced.
 // If body is non-empty, the body is replaced. Content-Type is set to text/html or text/plain based on content.
 // When body is replaced and linkMappings is non-empty, URLs in the template body are replaced with
-// full Mautic tracking URLs extracted from the original email (preserves link click tracking).
-func RewriteSubjectAndBody(data []byte, subject, body string, linkMappings []LinkMapping) []byte {
+// Mautic tracking URLs: from original if present, else {redirectBase}/r/{tracking_id}.
+func RewriteSubjectAndBody(data []byte, subject, body string, linkMappings []LinkMapping, redirectBase string) []byte {
 	if subject == "" && body == "" {
 		return data
 	}
@@ -260,9 +265,9 @@ func RewriteSubjectAndBody(data []byte, subject, body string, linkMappings []Lin
 	}
 	newBody := origBody
 	if body != "" {
-		// Apply link tracking: replace template URLs with full Mautic tracking URLs from original
+		// Apply link tracking: replace template URLs with Mautic tracking URLs
 		if len(linkMappings) > 0 {
-			body = applyLinkTrackingToBody(body, origBody, linkMappings)
+			body = applyLinkTrackingToBody(body, origBody, linkMappings, redirectBase)
 		}
 		finalBody := injectTrackingPixels(body, pixels)
 		newBody = []byte(finalBody)

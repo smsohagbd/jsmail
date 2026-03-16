@@ -131,7 +131,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 				for i, m := range mappings {
 					linkMappings[i] = email.LinkMapping{URL: m.URL, TrackingID: m.TrackingID}
 				}
-				data = email.RewriteSubjectAndBody(data, subj, body, linkMappings)
+				redirectBase := appdb.GetLinkTrackingRedirectBase()
+				data = email.RewriteSubjectAndBody(data, subj, body, linkMappings, redirectBase)
 			}
 			log.Printf("[API]   force applied  from=%s subj=%q", from, subj)
 		}
