@@ -2,6 +2,7 @@ package email
 
 import (
 	"bytes"
+	"encoding/base64"
 	"regexp"
 	"strings"
 )
@@ -88,10 +89,83 @@ func injectTrackingPixels(body, pixels string) string {
 // - Other paths: /email/ (pixel, unsubscribe) — we do NOT match those
 var mauticTrackingLinkPattern = regexp.MustCompile(`(?i)/r/([a-f0-9]{24})\?ct=([^"'\s&#]+)`)
 
-// extractTrackingLinksFromOriginal finds all Mautic tracking links in origBody.
-// Returns map: tracking_id -> full_tracking_url (so we can replace template URLs with these).
-func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
-	body := removeQPSoftBreaks(origBody)
+// decodeBodyForSearch returns body content suitable for regex search.
+// Handles: raw, quoted-printable (soft breaks removed), base64-encoded parts in multipart.
+func decodeBodyForSearch(body []byte) []byte {
+	body = removeQPSoftBreaks(body)
+	decoded := decodeMultipartParts(body)
+	if len(decoded) > 0 {
+		return decoded
+	}
+	return body
+}
+
+// decodeMultipartParts parses multipart body and returns concatenated decoded text/html parts.
+// Body may start with --boundary; we extract boundary from first line.
+func decodeMultipartParts(body []byte) []byte {
+	body = bytes.TrimLeft(body, "\r\n")
+	if len(body) < 3 || !bytes.HasPrefix(body, []byte("--")) {
+		return nil
+	}
+	// First line is --boundary, extract it
+	lineEnd := bytes.Index(body, []byte("\r\n"))
+	if lineEnd < 0 {
+		lineEnd = bytes.Index(body, []byte("\n"))
+	}
+	if lineEnd < 0 {
+		return nil
+	}
+	boundary := strings.TrimSpace(string(body[2:lineEnd]))
+	boundary = strings.Trim(boundary, `"`)
+	if boundary == "" {
+		return nil
+	}
+	rest := body[lineEnd+2:]
+	if bytes.HasPrefix(rest, []byte("\r\n")) {
+		rest = rest[2:]
+	} else if bytes.HasPrefix(rest, []byte("\n")) {
+		rest = rest[1:]
+	}
+	sep := []byte("\r\n--" + boundary)
+	if !bytes.Contains(rest, sep) {
+		sep = []byte("\n--" + boundary)
+	}
+	parts := bytes.Split(rest, sep)
+	var out []byte
+	for _, part := range parts {
+		if len(part) == 0 || bytes.HasPrefix(part, []byte("--")) {
+			continue
+		}
+		pidx := bytes.Index(part, []byte("\r\n\r\n"))
+		if pidx < 0 {
+			pidx = bytes.Index(part, []byte("\n\n"))
+		}
+		if pidx < 0 {
+			continue
+		}
+		pheader := bytes.ToLower(part[:pidx])
+		pbody := bytes.TrimSpace(part[pidx+4:])
+		pbody = bytes.TrimRight(pbody, "\r\n")
+		if bytes.Contains(pheader, []byte("text/html")) || bytes.Contains(pheader, []byte("text/plain")) {
+			if bytes.Contains(pheader, []byte("base64")) {
+				decoded, err := base64.StdEncoding.DecodeString(string(pbody))
+				if err == nil && len(decoded) > 0 {
+					out = append(out, decoded...)
+					out = append(out, '\n')
+				}
+			} else {
+				out = append(out, pbody...)
+				out = append(out, '\n')
+			}
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	return nil
+}
+
+func extractFromBytes(body []byte) map[string]string {
 	tidToFull := make(map[string]string)
 	// Find href="...full tracking url..." - most reliable
 	hrefPattern := regexp.MustCompile(`(?i)href\s*(?:=\s*|=3[Dd]\s*)["']([^"']*?/r/[a-f0-9]{24}\?ct=[^"'\s&#]+)["']`)
@@ -106,7 +180,7 @@ func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
 			tidToFull[tid] = href
 		}
 	}
-	// Fallback: find /r/ID?ct= in body and capture full URL (from scheme to end of ct value)
+	// Fallback: find /r/ID?ct= in body and capture full URL
 	if len(tidToFull) == 0 {
 		fullPattern := regexp.MustCompile(`(https?://[^"'\s<>]*?/r/[a-f0-9]{24}\?ct=[^"'\s&#]+)`)
 		matches := fullPattern.FindAll(body, -1)
@@ -119,6 +193,13 @@ func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
 		}
 	}
 	return tidToFull
+}
+
+// extractTrackingLinksFromOriginal finds all Mautic tracking links in origBody.
+// Handles QP-encoded and base64-encoded multipart bodies.
+func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
+	body := decodeBodyForSearch(origBody)
+	return extractFromBytes(body)
 }
 
 // applyLinkTrackingToBody replaces URLs in templateBody with Mautic tracking URLs.
