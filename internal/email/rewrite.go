@@ -79,8 +79,14 @@ func injectTrackingPixels(body, pixels string) string {
 	return "<html><body><div style=\"font-family:sans-serif;white-space:pre-wrap;\">" + escaped + "</div>" + pixels + "</body></html>"
 }
 
-// mauticTrackingLinkPattern matches Mautic redirect URLs: /r/{24hex}?ct=...
-var mauticTrackingLinkPattern = regexp.MustCompile(`(?i)/r/([a-f0-9]{24})\?ct=([^"'\s&]+)`)
+// Mautic link tracking format (from Mautic docs and source):
+//   https://{mautic-domain}/r/{redirect_id}?ct={base64_encoded_data}
+// - redirect_id: 24 hex chars (Mautic page_redirects / MongoDB ObjectId)
+// - ct: base64-encoded PHP serialized data (source, email_id, stat, lead_id, channel)
+// - ct is per-contact per-send — never reuse across emails
+// - /r/ is the only path Mautic uses for trackable email links
+// - Other paths: /email/ (pixel, unsubscribe) — we do NOT match those
+var mauticTrackingLinkPattern = regexp.MustCompile(`(?i)/r/([a-f0-9]{24})\?ct=([^"'\s&#]+)`)
 
 // extractTrackingLinksFromOriginal finds all Mautic tracking links in origBody.
 // Returns map: tracking_id -> full_tracking_url (so we can replace template URLs with these).
@@ -88,7 +94,7 @@ func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
 	body := removeQPSoftBreaks(origBody)
 	tidToFull := make(map[string]string)
 	// Find href="...full tracking url..." - most reliable
-	hrefPattern := regexp.MustCompile(`(?i)href\s*(?:=\s*|=3[Dd]\s*)["']([^"']*?/r/[a-f0-9]{24}\?ct=[^"']+)["']`)
+	hrefPattern := regexp.MustCompile(`(?i)href\s*(?:=\s*|=3[Dd]\s*)["']([^"']*?/r/[a-f0-9]{24}\?ct=[^"'\s&#]+)["']`)
 	hrefMatches := hrefPattern.FindAllSubmatch(body, -1)
 	for _, m := range hrefMatches {
 		if len(m) < 2 {
@@ -102,7 +108,7 @@ func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
 	}
 	// Fallback: find /r/ID?ct= in body and capture full URL (from scheme to end of ct value)
 	if len(tidToFull) == 0 {
-		fullPattern := regexp.MustCompile(`(https?://[^"'\s<>]*?/r/[a-f0-9]{24}\?ct=[^"'\s&]+)`)
+		fullPattern := regexp.MustCompile(`(https?://[^"'\s<>]*?/r/[a-f0-9]{24}\?ct=[^"'\s&#]+)`)
 		matches := fullPattern.FindAll(body, -1)
 		for _, m := range matches {
 			s := decodeQuotedPrintable(string(m))
@@ -116,19 +122,18 @@ func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
 }
 
 // applyLinkTrackingToBody replaces URLs in templateBody with Mautic tracking URLs.
-// 1) If original has full tracking links (/r/ID?ct=...), extract and use those.
-// 2) Else if redirectBase is set, use {redirectBase}/r/{tracking_id} as fallback.
+// 1) Extract from current original only (full link with ct) — ct is per-contact, so we never use cache.
+// 2) If original has no tracking links, use redirectBase fallback ({base}/r/{id} without ct).
 func applyLinkTrackingToBody(templateBody string, origBody []byte, mappings []LinkMapping, redirectBase string) string {
 	if len(mappings) == 0 {
 		return templateBody
 	}
 	tidToFull := extractTrackingLinksFromOriginal(origBody)
-	useFallback := len(tidToFull) == 0 && redirectBase != ""
 	redirectBase = strings.TrimSuffix(strings.TrimSpace(redirectBase), "/")
-	if len(tidToFull) == 0 && !useFallback {
+	useRedirectFallback := redirectBase != ""
+	if len(tidToFull) == 0 && !useRedirectFallback {
 		return templateBody
 	}
-	// Build url -> full tracking URL. Sort by URL length desc so we match longer URLs first.
 	type pair struct {
 		from string
 		to   string
@@ -141,7 +146,7 @@ func applyLinkTrackingToBody(templateBody string, origBody []byte, mappings []Li
 		}
 		tid := strings.ToLower(strings.TrimSpace(m.TrackingID))
 		full, ok := tidToFull[tid]
-		if !ok && useFallback && redirectBase != "" {
+		if !ok && useRedirectFallback {
 			full = redirectBase + "/r/" + m.TrackingID
 		}
 		if full == "" {
@@ -184,8 +189,8 @@ func looksLikeHTML(s string) bool {
 // RewriteSubjectAndBody replaces Subject header and/or body in raw RFC 5322 data.
 // If subject is non-empty, the Subject header is replaced.
 // If body is non-empty, the body is replaced. Content-Type is set to text/html or text/plain based on content.
-// When body is replaced and linkMappings is non-empty, URLs in the template body are replaced with
-// Mautic tracking URLs: from original if present, else {redirectBase}/r/{tracking_id}.
+// When body is replaced and linkMappings is non-empty, URLs are replaced with Mautic tracking URLs.
+// Only from current original (ct is per-contact) or redirectBase fallback — no cache.
 func RewriteSubjectAndBody(data []byte, subject, body string, linkMappings []LinkMapping, redirectBase string) []byte {
 	if subject == "" && body == "" {
 		return data
