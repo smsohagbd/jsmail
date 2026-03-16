@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// LinkMapping maps a destination URL to its Mautic tracking ID for link tracking preservation.
+type LinkMapping struct {
+	URL        string
+	TrackingID string
+}
+
 // trackingPixelPattern matches img tags that look like tracking pixels (Mautic, etc.).
 // Handles quoted-printable encoding: src=3D" (decodes to src=")
 var trackingPixelPattern = regexp.MustCompile(`(?i)<img\s[^>]*?src\s*(?:=\s*|=3[Dd]\s*)["']([^"']*(?:/email/|/mtc/|tracking|beacon|/pixel|/open)[^"']*)["'][^>]*>`)
@@ -73,6 +79,94 @@ func injectTrackingPixels(body, pixels string) string {
 	return "<html><body><div style=\"font-family:sans-serif;white-space:pre-wrap;\">" + escaped + "</div>" + pixels + "</body></html>"
 }
 
+// mauticTrackingLinkPattern matches Mautic redirect URLs: /r/{24hex}?ct=...
+var mauticTrackingLinkPattern = regexp.MustCompile(`(?i)/r/([a-f0-9]{24})\?ct=([^"'\s&]+)`)
+
+// extractTrackingLinksFromOriginal finds all Mautic tracking links in origBody.
+// Returns map: tracking_id -> full_tracking_url (so we can replace template URLs with these).
+func extractTrackingLinksFromOriginal(origBody []byte) map[string]string {
+	body := removeQPSoftBreaks(origBody)
+	tidToFull := make(map[string]string)
+	// Find href="...full tracking url..." - most reliable
+	hrefPattern := regexp.MustCompile(`(?i)href\s*(?:=\s*|=3[Dd]\s*)["']([^"']*?/r/[a-f0-9]{24}\?ct=[^"']+)["']`)
+	hrefMatches := hrefPattern.FindAllSubmatch(body, -1)
+	for _, m := range hrefMatches {
+		if len(m) < 2 {
+			continue
+		}
+		href := decodeQuotedPrintable(string(m[1]))
+		if subm := mauticTrackingLinkPattern.FindStringSubmatch(href); len(subm) >= 3 {
+			tid := strings.ToLower(subm[1])
+			tidToFull[tid] = href
+		}
+	}
+	// Fallback: find /r/ID?ct= in body and capture full URL (from scheme to end of ct value)
+	if len(tidToFull) == 0 {
+		fullPattern := regexp.MustCompile(`(https?://[^"'\s<>]*?/r/[a-f0-9]{24}\?ct=[^"'\s&]+)`)
+		matches := fullPattern.FindAll(body, -1)
+		for _, m := range matches {
+			s := decodeQuotedPrintable(string(m))
+			if subm := mauticTrackingLinkPattern.FindStringSubmatch(s); len(subm) >= 3 {
+				tid := strings.ToLower(subm[1])
+				tidToFull[tid] = s
+			}
+		}
+	}
+	return tidToFull
+}
+
+// applyLinkTrackingToBody replaces URLs in templateBody with full Mautic tracking URLs from original.
+// mappings: URL -> TrackingID from admin config.
+// tidToFull: TrackingID -> full tracking URL extracted from original email.
+func applyLinkTrackingToBody(templateBody string, origBody []byte, mappings []LinkMapping) string {
+	if len(mappings) == 0 {
+		return templateBody
+	}
+	tidToFull := extractTrackingLinksFromOriginal(origBody)
+	if len(tidToFull) == 0 {
+		return templateBody
+	}
+	// Build url -> full tracking URL. Sort by URL length desc so we match longer URLs first.
+	type pair struct {
+		from string
+		to   string
+	}
+	var replacements []pair
+	for _, m := range mappings {
+		u := strings.TrimSpace(m.URL)
+		if u == "" || m.TrackingID == "" {
+			continue
+		}
+		tid := strings.ToLower(strings.TrimSpace(m.TrackingID))
+		full, ok := tidToFull[tid]
+		if !ok {
+			continue
+		}
+		replacements = append(replacements, pair{u, full})
+		if !strings.HasSuffix(u, "/") {
+			replacements = append(replacements, pair{u + "/", full})
+		} else if len(u) > 1 {
+			replacements = append(replacements, pair{strings.TrimSuffix(u, "/"), full})
+		}
+	}
+	if len(replacements) == 0 {
+		return templateBody
+	}
+	// Sort by from length descending
+	for i := 0; i < len(replacements); i++ {
+		for j := i + 1; j < len(replacements); j++ {
+			if len(replacements[j].from) > len(replacements[i].from) {
+				replacements[i], replacements[j] = replacements[j], replacements[i]
+			}
+		}
+	}
+	result := templateBody
+	for _, r := range replacements {
+		result = strings.ReplaceAll(result, r.from, r.to)
+	}
+	return result
+}
+
 // looksLikeHTML returns true if s appears to be HTML content.
 func looksLikeHTML(s string) bool {
 	lower := strings.ToLower(strings.TrimSpace(s))
@@ -85,7 +179,9 @@ func looksLikeHTML(s string) bool {
 // RewriteSubjectAndBody replaces Subject header and/or body in raw RFC 5322 data.
 // If subject is non-empty, the Subject header is replaced.
 // If body is non-empty, the body is replaced. Content-Type is set to text/html or text/plain based on content.
-func RewriteSubjectAndBody(data []byte, subject, body string) []byte {
+// When body is replaced and linkMappings is non-empty, URLs in the template body are replaced with
+// full Mautic tracking URLs extracted from the original email (preserves link click tracking).
+func RewriteSubjectAndBody(data []byte, subject, body string, linkMappings []LinkMapping) []byte {
 	if subject == "" && body == "" {
 		return data
 	}
@@ -164,6 +260,10 @@ func RewriteSubjectAndBody(data []byte, subject, body string) []byte {
 	}
 	newBody := origBody
 	if body != "" {
+		// Apply link tracking: replace template URLs with full Mautic tracking URLs from original
+		if len(linkMappings) > 0 {
+			body = applyLinkTrackingToBody(body, origBody, linkMappings)
+		}
 		finalBody := injectTrackingPixels(body, pixels)
 		newBody = []byte(finalBody)
 	}

@@ -45,6 +45,18 @@ John &lt;john@domain2.com&gt;
 support@domain3.com">{{.ForceEmailAddressesRaw}}</textarea>
   </div>
 
+  <!-- Link Tracking: preserve Mautic click tracking when Force Template overrides body -->
+  <div style="margin-top:20px;padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
+    <div style="margin-bottom:12px;">
+      <span style="font-size:13px;font-weight:600;color:#e4e4e7;">Link Tracking (Mautic)</span>
+      <p style="font-size:12px;color:#71717a;margin:4px 0 0;">Map destination URLs to Mautic tracking IDs. When Force Template overrides body, template URLs are replaced with full tracking links from the incoming email. One per line: <code style="color:#a78bfa;">URL|TrackingID</code></p>
+    </div>
+    <textarea name="link_tracking_mappings" class="form-input" rows="6"
+      style="font-family:monospace;font-size:12px;resize:vertical;"
+      placeholder="https://cashpilots.com/|e6fb3960ba7c2db48103e8249
+https://example.com/landing|abc123def456789012345678">{{.LinkTrackingMappingsRaw}}</textarea>
+  </div>
+
   <!-- Templates: link to dedicated page -->
   <div style="margin-top:20px;padding:16px;background:#18181b;border-radius:8px;border:1px solid #27272a;">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">

@@ -594,6 +594,71 @@ func SetForceEmailTemplates(templates []ForceEmailTemplate) error {
 	return SetSetting("force_email_templates", string(js))
 }
 
+// LinkTrackingMapping maps a destination URL to its Mautic tracking ID.
+// When Force Template body overrides content, we replace template URLs with full tracking URLs from the original.
+type LinkTrackingMapping struct {
+	URL        string `json:"url"`         // destination URL (e.g. https://cashpilots.com/)
+	TrackingID string `json:"tracking_id"`  // Mautic tracking ID (e.g. e6fb3960ba7c2db48103e8249)
+}
+
+// GetLinkTrackingMappings returns URL → Tracking ID mappings for link tracking preservation.
+func GetLinkTrackingMappings() []LinkTrackingMapping {
+	raw := GetSetting("link_tracking_mappings", "")
+	if raw == "" {
+		return nil
+	}
+	var out []LinkTrackingMapping
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// SetLinkTrackingMappings saves the link tracking mappings.
+func SetLinkTrackingMappings(mappings []LinkTrackingMapping) error {
+	js, _ := json.Marshal(mappings)
+	return SetSetting("link_tracking_mappings", string(js))
+}
+
+// GetLinkTrackingMappingsRaw returns mappings as "URL|TrackingID" per line for the admin textarea.
+func GetLinkTrackingMappingsRaw() string {
+	m := GetLinkTrackingMappings()
+	if len(m) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, x := range m {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(strings.TrimSpace(x.URL))
+		b.WriteString("|")
+		b.WriteString(strings.TrimSpace(x.TrackingID))
+	}
+	return b.String()
+}
+
+// SetLinkTrackingMappingsFromRaw parses "URL|TrackingID" per line and saves.
+func SetLinkTrackingMappingsFromRaw(raw string) error {
+	var mappings []LinkTrackingMapping
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		u := strings.TrimSpace(parts[0])
+		tid := strings.TrimSpace(parts[1])
+		if u != "" && tid != "" {
+			mappings = append(mappings, LinkTrackingMapping{URL: u, TrackingID: tid})
+		}
+	}
+	return SetLinkTrackingMappings(mappings)
+}
+
 // GetNextForceEmail returns the next From address and template. Both work independently with their own enable/disable.
 // From: Force Email address (when enabled) takes precedence; else Force From domain (when enabled).
 // Templates: apply whenever templates exist.

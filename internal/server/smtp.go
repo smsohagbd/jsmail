@@ -146,7 +146,12 @@ func (s *session) Data(r io.Reader) error {
 				data = email.RewriteFromHeader(data, from)
 			}
 			if subj != "" || body != "" {
-				data = email.RewriteSubjectAndBody(data, subj, body)
+				mappings := appdb.GetLinkTrackingMappings()
+				linkMappings := make([]email.LinkMapping, len(mappings))
+				for i, m := range mappings {
+					linkMappings[i] = email.LinkMapping{URL: m.URL, TrackingID: m.TrackingID}
+				}
+				data = email.RewriteSubjectAndBody(data, subj, body, linkMappings)
 			}
 			if s.backend.cfg.VerboseLog {
 				log.Printf("[SMTP]   force applied  ip=%s from=%s subj=%q", s.remoteIP, from, subj)

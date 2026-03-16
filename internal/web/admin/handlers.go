@@ -899,16 +899,17 @@ func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	templates := appdb.GetForceEmailTemplates()
 	h.Tmpl.Render(w, "admin/forcefrom", map[string]interface{}{
-		"Page":                   "forcefrom",
-		"ActiveUser":             claims.Username,
-		"Enabled":                appdb.GetForceFromEnabled(),
-		"Domains":                appdb.GetForceFromDomainsRaw(),
-		"ForceEmailEnabled":      appdb.GetForceEmailEnabled(),
-		"ForceEmailFromEnabled":  appdb.GetForceEmailFromEnabled(),
-		"ForceEmailAddressesRaw": appdb.GetForceEmailAddressesRaw(),
-		"ForceTemplateCount":     len(templates),
-		"FlashOK":                r.URL.Query().Get("ok"),
-		"FlashErr":               r.URL.Query().Get("err"),
+		"Page":                     "forcefrom",
+		"ActiveUser":               claims.Username,
+		"Enabled":                  appdb.GetForceFromEnabled(),
+		"Domains":                  appdb.GetForceFromDomainsRaw(),
+		"ForceEmailEnabled":       appdb.GetForceEmailEnabled(),
+		"ForceEmailFromEnabled":   appdb.GetForceEmailFromEnabled(),
+		"ForceEmailAddressesRaw":   appdb.GetForceEmailAddressesRaw(),
+		"LinkTrackingMappingsRaw": appdb.GetLinkTrackingMappingsRaw(),
+		"ForceTemplateCount":      len(templates),
+		"FlashOK":                 r.URL.Query().Get("ok"),
+		"FlashErr":                r.URL.Query().Get("err"),
 	})
 }
 
@@ -934,6 +935,12 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 	if err := appdb.SetForceEmailBasicConfig(forceEmailEnabled, forceEmailFromEnabled, addressesRaw); err != nil {
 		log.Printf("forceemail: failed to save: %v", err)
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save+Force+Email", http.StatusFound)
+		return
+	}
+	linkTrackingRaw := r.FormValue("link_tracking_mappings")
+	if err := appdb.SetLinkTrackingMappingsFromRaw(linkTrackingRaw); err != nil {
+		log.Printf("forcefrom: failed to save link tracking: %v", err)
+		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save+link+tracking", http.StatusFound)
 		return
 	}
 	http.Redirect(w, r, "/admin/forcefrom?ok=Config+updated", http.StatusFound)

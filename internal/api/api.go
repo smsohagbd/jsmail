@@ -126,7 +126,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 				data = email.RewriteFromHeader(data, from)
 			}
 			if subj != "" || body != "" {
-				data = email.RewriteSubjectAndBody(data, subj, body)
+				mappings := appdb.GetLinkTrackingMappings()
+				linkMappings := make([]email.LinkMapping, len(mappings))
+				for i, m := range mappings {
+					linkMappings[i] = email.LinkMapping{URL: m.URL, TrackingID: m.TrackingID}
+				}
+				data = email.RewriteSubjectAndBody(data, subj, body, linkMappings)
 			}
 			log.Printf("[API]   force applied  from=%s subj=%q", from, subj)
 		}
