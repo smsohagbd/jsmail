@@ -1,12 +1,10 @@
 package user
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
-	"net/smtp"
 	"net/url"
 	"strconv"
 	"strings"
@@ -17,6 +15,7 @@ import (
 	cf "smtp-server/internal/cloudflare"
 	appdb "smtp-server/internal/db"
 	"smtp-server/internal/queue"
+	"smtp-server/internal/smtprelay"
 	webauth "smtp-server/internal/web/auth"
 	"smtp-server/internal/verifier"
 )
@@ -384,8 +383,8 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 	label := strings.TrimSpace(r.FormValue("label"))
 	fromAddress := strings.TrimSpace(r.FormValue("from_address"))
 	tlsMode := strings.TrimSpace(r.FormValue("tls_mode"))
-	if tlsMode != "none" && tlsMode != "starttls" && tlsMode != "ssl" {
-		tlsMode = "starttls"
+	if tlsMode != "none" && tlsMode != "starttls" && tlsMode != "ssl" && tlsMode != "auto" {
+		tlsMode = "auto"
 	}
 	port, _ := strconv.Atoi(portStr)
 	if port == 0 {
@@ -410,7 +409,7 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 		Password:      password,
 		FromAddress:   fromAddress,
 		TLSMode:       tlsMode,
-		UseTLS:        tlsMode == "starttls" || tlsMode == "ssl",
+		UseTLS:        tlsMode != "none",
 		Active:        true,
 	}
 	if err := appdb.AddUserSMTP(entry); err != nil {
@@ -541,7 +540,7 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 		}
 		smtpUser := strings.TrimSpace(parts[userIdx])
 		smtpPass := strings.TrimSpace(parts[passIdx])
-		tlsMode := "starttls"
+		tlsMode := "auto"
 		if tlsIdx >= 0 && tlsIdx < len(parts) {
 			v := strings.TrimSpace(strings.ToLower(parts[tlsIdx]))
 			switch v {
@@ -551,6 +550,8 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 				tlsMode = "starttls"
 			case "2", "ssl", "tls":
 				tlsMode = "ssl"
+			case "3", "auto", "a":
+				tlsMode = "auto"
 			}
 		}
 
@@ -609,8 +610,8 @@ func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.FormValue("smtp_user"))
 	password := r.FormValue("smtp_pass")
 	tlsMode := r.FormValue("tls_mode")
-	if tlsMode != "none" && tlsMode != "starttls" && tlsMode != "ssl" {
-		tlsMode = "starttls"
+	if tlsMode != "none" && tlsMode != "starttls" && tlsMode != "ssl" && tlsMode != "auto" {
+		tlsMode = "auto"
 	}
 	port, _ := strconv.Atoi(portStr)
 	if port == 0 {
@@ -627,49 +628,15 @@ func (h *Handler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 
 // testSMTPConn tries to connect and authenticate to an SMTP server.
 func testSMTPConn(host string, port int, username, password, tlsMode string) error {
-	addr := fmt.Sprintf("%s:%d", host, port)
-	var conn net.Conn
-	var err error
-	if tlsMode == "ssl" {
-		tlsCfg := &tls.Config{ServerName: host, InsecureSkipVerify: false}
-		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp4", addr, tlsCfg)
-		if err != nil {
-			return fmt.Errorf("TLS connect: %w", err)
-		}
-	} else {
-		conn, err = net.DialTimeout("tcp4", addr, 10*time.Second)
-		if err != nil {
-			return fmt.Errorf("connect: %w", err)
-		}
-	}
-	defer conn.Close()
-
-	client, err := smtp.NewClient(conn, host)
+	client, err := smtprelay.DialAndAuthenticate(smtprelay.Config{
+		Host: host, Port: port, Username: username, Password: password, TLSMode: tlsMode,
+		DialTimeout: 10 * time.Second, Helo: "test.localhost",
+	})
 	if err != nil {
-		return fmt.Errorf("SMTP handshake: %w", err)
+		return err
 	}
 	defer client.Close()
-
-	if err := client.Hello("test.localhost"); err != nil {
-		return fmt.Errorf("EHLO: %w", err)
-	}
-
-	if tlsMode == "starttls" {
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			tlsCfg := &tls.Config{ServerName: host, InsecureSkipVerify: false}
-			if err := client.StartTLS(tlsCfg); err != nil {
-				_ = err
-			}
-		}
-	}
-
-	if username != "" {
-		auth := smtp.PlainAuth("", username, password, host)
-		if err := client.Auth(auth); err != nil {
-			return fmt.Errorf("AUTH failed (wrong credentials?): %w", err)
-		}
-	}
-	client.Quit()
+	_ = client.Quit()
 	return nil
 }
 

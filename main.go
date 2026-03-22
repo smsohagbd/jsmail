@@ -111,7 +111,7 @@ func main() {
 				if r.UseTLS {
 					tlsMode = "starttls"
 				} else {
-					tlsMode = "none"
+					tlsMode = "auto"
 				}
 			}
 			out = append(out, delivery.SMTPRelay{

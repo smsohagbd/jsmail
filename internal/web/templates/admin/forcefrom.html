@@ -17,16 +17,16 @@
 <div class="card" style="margin-bottom:16px;padding:20px;">
   <div class="card-header" style="margin-bottom:16px;">
     <span class="card-title">Force Email</span>
-    <span style="font-size:12px;color:#52525b;font-weight:400;">Override From address and/or Subject/Body. Both rotate per email.</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">Each option below is independent: template rotation, From address list, and link tracking settings.</span>
   </div>
   <div style="margin-bottom:20px;">
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
-      <input type="checkbox" name="force_email_enabled" value="on" {{if .ForceEmailEnabled}}checked{{end}}
+      <input type="checkbox" name="force_template_enabled" value="on" {{if .ForceTemplateEnabled}}checked{{end}}
         style="width:16px;height:16px;accent-color:#818cf8;"/>
-      <span style="font-size:14px;font-weight:600;color:#e4e4e7;">Enable Force Email</span>
+      <span style="font-size:14px;font-weight:600;color:#e4e4e7;">Enable Force Template</span>
     </label>
     <p style="font-size:12px;color:#71717a;margin:0 0 0 26px;">
-      {{if .ForceEmailEnabled}}<span style="color:#4ade80;">● Active</span>{{else}}<span style="color:#71717a;">● Inactive</span>{{end}}
+      When on, Subject/Body rotate from templates on the Force Template page. {{if .ForceTemplateEnabled}}<span style="color:#4ade80;">● Active</span>{{else}}<span style="color:#71717a;">● Inactive</span>{{end}}
     </p>
   </div>
 
@@ -68,7 +68,7 @@ https://example.com/landing|abc123def456789012345678">{{.LinkTrackingMappingsRaw
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
       <div>
         <span style="font-size:13px;font-weight:600;color:#e4e4e7;">Templates (Subject + Body)</span>
-        <p style="font-size:12px;color:#71717a;margin:4px 0 0;">Manage templates used when Force Email is enabled. All rotate per email.</p>
+        <p style="font-size:12px;color:#71717a;margin:4px 0 0;">Manage templates; they apply only when <strong>Enable Force Template</strong> is checked above.</p>
       </div>
       <a href="/admin/forcetemplate" class="btn btn-primary">Force Template</a>
     </div>
@@ -78,11 +78,11 @@ https://example.com/landing|abc123def456789012345678">{{.LinkTrackingMappingsRaw
   </div>
 </div>
 
-<!-- Force From: domain rotation (independent of Force Email) -->
+<!-- Force From: domain rotation -->
 <div class="card" style="margin-bottom:16px;padding:20px;">
   <div class="card-header" style="margin-bottom:16px;">
     <span class="card-title">Force From — Rotate Domains</span>
-    <span style="font-size:12px;color:#52525b;font-weight:400;">Rotate the domain part of the From address. Works independently — enable/disable anytime. Force Email address takes precedence when both are enabled.</span>
+    <span style="font-size:12px;color:#52525b;font-weight:400;">Rotate the domain part of the From address. Independent of templates. If <strong>From Address</strong> (list above) is enabled, that list wins over domain rotation.</span>
   </div>
   <div style="margin-bottom:16px;">
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">

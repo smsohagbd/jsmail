@@ -118,7 +118,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	from := req.From
-	if appdb.GetForceEmailEnabled() || appdb.GetForceFromEnabled() || len(appdb.GetForceEmailTemplates()) > 0 {
+	if appdb.GetForceRewriteShouldRun() {
 		newFrom, subj, body, applied := appdb.GetNextForceEmail(req.From)
 		if applied {
 			if newFrom != from {

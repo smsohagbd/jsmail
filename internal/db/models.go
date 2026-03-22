@@ -34,7 +34,7 @@ type UserSMTP struct {
 	Port          int    `gorm:"default:587"`
 	Username      string `gorm:"not null"`
 	Password      string `gorm:"type:text;not null"`
-	TLSMode       string `gorm:"size:20;default:starttls"` // "none" | "starttls" | "ssl"
+	TLSMode       string `gorm:"size:20;default:starttls"` // "auto" | "none" | "starttls" | "ssl"
 	UseTLS        bool   `gorm:"default:true"`              // deprecated; TLSMode preferred
 	IsDefault     bool   `gorm:"default:false"`             // preferred relay when rotation is off
 	Active        bool   `gorm:"default:true"`

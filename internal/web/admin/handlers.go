@@ -903,7 +903,7 @@ func (h *Handler) ForceFrom(w http.ResponseWriter, r *http.Request) {
 		"ActiveUser":               claims.Username,
 		"Enabled":                  appdb.GetForceFromEnabled(),
 		"Domains":                  appdb.GetForceFromDomainsRaw(),
-		"ForceEmailEnabled":       appdb.GetForceEmailEnabled(),
+		"ForceTemplateEnabled":    appdb.GetForceTemplateEnabled(),
 		"ForceEmailFromEnabled":   appdb.GetForceEmailFromEnabled(),
 		"ForceEmailAddressesRaw":   appdb.GetForceEmailAddressesRaw(),
 		"LinkTrackingMappingsRaw":    appdb.GetLinkTrackingMappingsRaw(),
@@ -930,10 +930,10 @@ func (h *Handler) SaveForceFrom(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save", http.StatusFound)
 		return
 	}
-	forceEmailEnabled := formChecked(r.Form, "force_email_enabled")
+	forceTemplateEnabled := formChecked(r.Form, "force_template_enabled")
 	forceEmailFromEnabled := formChecked(r.Form, "force_email_from_enabled")
 	addressesRaw := r.FormValue("force_email_addresses")
-	if err := appdb.SetForceEmailBasicConfig(forceEmailEnabled, forceEmailFromEnabled, addressesRaw); err != nil {
+	if err := appdb.SetForceEmailBasicConfig(forceTemplateEnabled, forceEmailFromEnabled, addressesRaw); err != nil {
 		log.Printf("forceemail: failed to save: %v", err)
 		http.Redirect(w, r, "/admin/forcefrom?err=Failed+to+save+Force+Email", http.StatusFound)
 		return

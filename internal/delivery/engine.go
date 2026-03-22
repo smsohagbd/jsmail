@@ -24,6 +24,7 @@ import (
 	"smtp-server/internal/config"
 	"smtp-server/internal/email"
 	"smtp-server/internal/queue"
+	"smtp-server/internal/smtprelay"
 )
 
 // DeliveryEvent carries the result of a delivery attempt for a single recipient.
@@ -1098,63 +1099,26 @@ func (e *Engine) pickRelay(username, mode string, relays []SMTPRelay) *SMTPRelay
 // deliverViaRelay sends all recipients of a message through an authenticated SMTP relay.
 func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, data []byte) error {
 	addr := fmt.Sprintf("%s:%d", relay.Host, relay.Port)
-	tlsMode := relay.TLSMode
+	tlsMode := strings.TrimSpace(relay.TLSMode)
 	if tlsMode == "" {
-		tlsMode = "starttls"
+		tlsMode = "auto"
 	}
 	e.logV("[DELIVERY]   relay connecting to %s (TLS: %s) …", addr, tlsMode)
-
-	var conn net.Conn
-	var err error
-	if tlsMode == "ssl" {
-		tlsCfg := &tls.Config{ServerName: relay.Host, MinVersion: tls.VersionTLS12}
-		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: e.connectTO}, "tcp4", addr, tlsCfg)
-		if err != nil {
-			return fmt.Errorf("relay TLS dial %s: %w", addr, err)
-		}
-		e.logV("[DELIVERY]   relay TLS connected to %s", addr)
-	} else {
-		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
-		if err != nil {
-			return fmt.Errorf("relay dial %s: %w", addr, err)
-		}
-		e.logV("[DELIVERY]   relay TCP connected to %s", addr)
-	}
-	defer conn.Close()
 
 	heloName := e.cfg.HeloName
 	if heloName == "" {
 		heloName = "localhost"
 	}
 
-	client, err := smtp.NewClient(conn, relay.Host)
+	client, err := smtprelay.DialAndAuthenticate(smtprelay.Config{
+		Host: relay.Host, Port: relay.Port,
+		Username: relay.Username, Password: relay.Password, TLSMode: tlsMode,
+		DialTimeout: e.connectTO, Helo: heloName, Logf: e.logV, MinTLSVersion: tls.VersionTLS12,
+	})
 	if err != nil {
-		return fmt.Errorf("relay new client: %w", err)
+		return fmt.Errorf("relay %s: %w", addr, err)
 	}
 	defer client.Close()
-
-	if err := client.Hello(heloName); err != nil {
-		return fmt.Errorf("relay EHLO: %w", err)
-	}
-
-	if tlsMode == "starttls" {
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			tlsCfg := &tls.Config{ServerName: relay.Host, MinVersion: tls.VersionTLS12}
-			if err := client.StartTLS(tlsCfg); err != nil {
-				e.logV("[DELIVERY]   relay STARTTLS failed (%v), continuing plain", err)
-			} else {
-				e.logV("[DELIVERY]   relay STARTTLS ok")
-			}
-		}
-	}
-
-	if relay.Username != "" {
-		auth := smtp.PlainAuth("", relay.Username, relay.Password, relay.Host)
-		if err := client.Auth(auth); err != nil {
-			return fmt.Errorf("relay AUTH: %w", err)
-		}
-		e.logV("[DELIVERY]   relay AUTH ok (user=%s)", relay.Username)
-	}
 
 	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("relay MAIL FROM <%s>: %w", from, err)

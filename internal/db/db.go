@@ -501,9 +501,46 @@ type ForceEmailTemplate struct {
 	Body    string `json:"body"`
 }
 
-// GetForceEmailEnabled returns true if force-email is enabled.
+// GetForceEmailEnabled returns the legacy master switch (force_email_enabled).
+// Prefer GetForceRewriteShouldRun for the pipeline and GetForceTemplateEnabled / GetForceEmailFromEnabled for UI.
 func GetForceEmailEnabled() bool {
 	return GetSetting("force_email_enabled", "false") == "true"
+}
+
+// GetForceTemplateEnabled returns true when subject/body template rotation is enabled.
+// If force_template_enabled was never set, falls back to legacy force_email_enabled so existing installs keep behavior.
+func GetForceTemplateEnabled() bool {
+	switch GetSetting("force_template_enabled", "") {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return GetForceEmailEnabled()
+	}
+}
+
+// SetForceTemplateEnabled persists the Force Template toggle.
+func SetForceTemplateEnabled(enabled bool) error {
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+	return SetSetting("force_template_enabled", val)
+}
+
+// GetForceRewriteShouldRun is true when at least one force feature can apply (has data and is enabled).
+func GetForceRewriteShouldRun() bool {
+	if GetForceFromEnabled() && len(GetForceFromDomains()) > 0 {
+		return true
+	}
+	if GetForceEmailFromEnabled() && len(GetForceEmailAddresses()) > 0 {
+		return true
+	}
+	if GetForceTemplateEnabled() && len(GetForceEmailTemplates()) > 0 {
+		return true
+	}
+	return false
 }
 
 // GetForceEmailFromEnabled returns true if force-email From address override is enabled.
@@ -561,23 +598,19 @@ func GetForceEmailTemplates() []ForceEmailTemplate {
 	return out
 }
 
-// SetForceEmailConfig saves the force-email enabled flag, from-address config, and templates.
-func SetForceEmailConfig(enabled bool, fromEnabled bool, addressesRaw string, templates []ForceEmailTemplate) error {
-	if err := SetForceEmailBasicConfig(enabled, fromEnabled, addressesRaw); err != nil {
+// SetForceEmailConfig saves template toggle, from-address config, and templates.
+func SetForceEmailConfig(templateEnabled bool, fromEnabled bool, addressesRaw string, templates []ForceEmailTemplate) error {
+	if err := SetForceTemplateEnabled(templateEnabled); err != nil {
+		return err
+	}
+	if err := SetForceEmailFromConfig(fromEnabled, addressesRaw); err != nil {
 		return err
 	}
 	return SetForceEmailTemplates(templates)
 }
 
-// SetForceEmailBasicConfig saves only enabled, from-enabled, and addresses (not templates).
-func SetForceEmailBasicConfig(enabled bool, fromEnabled bool, addressesRaw string) error {
-	val := "false"
-	if enabled {
-		val = "true"
-	}
-	if err := SetSetting("force_email_enabled", val); err != nil {
-		return err
-	}
+// SetForceEmailFromConfig saves from-address enable flag and address list (not templates).
+func SetForceEmailFromConfig(fromEnabled bool, addressesRaw string) error {
 	fromVal := "false"
 	if fromEnabled {
 		fromVal = "true"
@@ -586,6 +619,14 @@ func SetForceEmailBasicConfig(enabled bool, fromEnabled bool, addressesRaw strin
 		return err
 	}
 	return SetSetting("force_email_addresses", addressesRaw)
+}
+
+// SetForceEmailBasicConfig saves template toggle, from-enabled, and addresses (legacy name kept for callers that used "master" + from).
+func SetForceEmailBasicConfig(templateEnabled bool, fromEnabled bool, addressesRaw string) error {
+	if err := SetForceTemplateEnabled(templateEnabled); err != nil {
+		return err
+	}
+	return SetForceEmailFromConfig(fromEnabled, addressesRaw)
 }
 
 // SetForceEmailTemplates saves only the templates list.
@@ -670,30 +711,28 @@ func SetLinkTrackingMappingsFromRaw(raw string) error {
 	return SetLinkTrackingMappings(mappings)
 }
 
-// GetNextForceEmail returns the next From address and template. Both work independently with their own enable/disable.
-// From: Force Email address (when enabled) takes precedence; else Force From domain (when enabled).
-// Templates: apply whenever templates exist.
+// GetNextForceEmail returns the next From address and template.
+// Force Template, Force Email From, and Force From each have their own enable flag.
+// Force Email From address takes precedence over Force From domain when both apply.
 func GetNextForceEmail(originalFrom string) (from string, subject, body string, applied bool) {
 	templates := GetForceEmailTemplates()
 	hasTemplates := len(templates) > 0
-	forceEmailOn := GetForceEmailEnabled()
+	forceTemplateOn := GetForceTemplateEnabled()
 	forceEmailFromOn := GetForceEmailFromEnabled()
 	forceFromOn := GetForceFromEnabled()
 
-	// Nothing to apply
-	if !forceEmailOn && !hasTemplates && !forceFromOn {
+	if !GetForceRewriteShouldRun() {
 		return originalFrom, "", "", false
 	}
 
 	idx := forceEmailRotate.Add(1) - 1
 	from = originalFrom
 
-	// From address: Force Email address takes precedence over Force From
-	if forceEmailOn && forceEmailFromOn {
+	// From address: configured list takes precedence; else Force From domain rotation
+	if forceEmailFromOn {
 		addrs := GetForceEmailAddresses()
 		if len(addrs) > 0 {
 			addr := addrs[int(idx)%len(addrs)]
-			// If configured address has no display name, use original's display name
 			if !strings.Contains(addr, "<") {
 				displayName := extractDisplayNameFromAddr(originalFrom)
 				if displayName != "" {
@@ -722,8 +761,8 @@ func GetNextForceEmail(originalFrom string) (from string, subject, body string, 
 		}
 	}
 
-	// Templates: apply whenever we have templates (rotates through all)
-	if hasTemplates {
+	// Templates: only when Force Template is ON
+	if forceTemplateOn && hasTemplates {
 		t := templates[int(idx)%len(templates)]
 		subject = t.Subject
 		body = t.Body

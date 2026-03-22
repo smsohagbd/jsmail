@@ -137,8 +137,8 @@ func (s *session) Data(r io.Reader) error {
 	}
 
 	from := s.from
-	// Force Email From / Force From / Templates: each has its own enable. Force Email address takes precedence over Force From.
-	if appdb.GetForceEmailEnabled() || appdb.GetForceFromEnabled() || len(appdb.GetForceEmailTemplates()) > 0 {
+	// Force Template / Force Email From / Force From: independent toggles; pipeline runs if any can apply.
+	if appdb.GetForceRewriteShouldRun() {
 		newFrom, subj, body, applied := appdb.GetNextForceEmail(from)
 		if applied {
 			if newFrom != from {
