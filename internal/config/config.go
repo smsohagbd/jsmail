@@ -79,6 +79,9 @@ type DeliveryConfig struct {
 	HeloName       string     `yaml:"helo_name"`
 	DKIM           DKIMConfig `yaml:"dkim"`
 	VerboseLog     bool       `yaml:"verbose_log"` // when true, log every delivery step; when false, only errors
+	// QueueChannelSize is the buffered work channel between dispatcher and workers.
+	// 0 = auto: max(64, workers×4), capped at 16000. In-flight ≈ workers + messages in this buffer.
+	QueueChannelSize int `yaml:"queue_channel_size"`
 }
 
 type DKIMConfig struct {
@@ -135,6 +138,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.Delivery.Workers == 0 {
 		cfg.Delivery.Workers = 5
 	}
+	// QueueChannelSize 0 = auto (applied in delivery engine)
 	if cfg.Delivery.MaxRetries == 0 {
 		cfg.Delivery.MaxRetries = 5
 	}

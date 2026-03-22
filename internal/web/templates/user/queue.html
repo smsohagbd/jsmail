@@ -19,6 +19,9 @@
   {{else}}
   <div class="card-header"><span class="card-title">Active Queue</span></div>
   {{end}}
+  {{if gt .QueueListTotal 0}}
+  <div style="font-size:12px;color:#52525b;padding:0 20px 10px;">Page {{.QueueListPage}} of {{.QueueListPages}} · {{.QueueListTotal}} message(s) in log</div>
+  {{end}}
   <div style="overflow-x:auto;">
     <table class="data-table">
       <thead><tr>
@@ -40,11 +43,22 @@
           </td>
         </tr>
         {{else}}
-        <tr><td colspan="6" class="empty-state" style="padding-left:20px;">Queue is empty</td></tr>
+        <tr><td colspan="6" class="empty-state" style="padding-left:20px;">No messages on this page.</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
+  {{if gt .QueueListPages 1}}
+  <div style="display:flex;gap:10px;justify-content:center;padding:14px 20px;border-top:1px solid #27272a;">
+    {{if gt .QueueListPage 1}}
+    <a class="btn btn-ghost" style="font-size:12px;" href="/user/queue?page={{sub .QueueListPage 1}}">← Newer</a>
+    {{end}}
+    <span style="font-size:12px;color:#52525b;">{{.QueueListPage}} / {{.QueueListPages}}</span>
+    {{if lt .QueueListPage .QueueListPages}}
+    <a class="btn btn-ghost" style="font-size:12px;" href="/user/queue?page={{add .QueueListPage 1}}">Older →</a>
+    {{end}}
+  </div>
+  {{end}}
 </div>
 </div>
 {{end}}

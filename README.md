@@ -11,7 +11,7 @@ Send email from your own server with a persistent queue, retry logic, DKIM signi
 |---|---|
 | SMTP submission | Port 587 with STARTTLS + AUTH PLAIN |
 | Outbound delivery | MX lookup → direct SMTP to recipient servers (port 25) |
-| Persistent queue | File-based; survives restarts; deferred messages auto-retry |
+| Persistent queue | File-based per user under `queue/<user>/`; survives restarts; fair round-robin so one user’s backlog does not block others |
 | Retry with backoff | Exponential backoff, configurable max retries |
 | DKIM signing | RSA key, configurable selector & domain |
 | HTTP API | `POST /send` to inject messages programmatically |
@@ -259,6 +259,7 @@ smtp:
 
 delivery:
   workers: 5               # parallel delivery workers
+  # queue_channel_size: 0  # optional; 0 = auto max(64, workers×4), cap 16000 — in-flight ≈ workers + buffer
   max_retries: 5           # permanent fail after this many attempts
   retry_interval: "5m"     # base retry interval (doubles each attempt)
   connect_timeout: "30s"

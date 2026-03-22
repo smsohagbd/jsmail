@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,14 +39,43 @@ type Message struct {
 	LastError  string    `json:"last_error,omitempty"`
 }
 
+// queueUserKey maps a username to a filesystem-safe subdirectory (per-user queue bucket).
+func queueUserKey(username string) string {
+	s := strings.TrimSpace(username)
+	if s == "" {
+		return "_system"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|', 0:
+			b.WriteByte('_')
+		default:
+			if r < 32 {
+				b.WriteByte('_')
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	s = strings.ToLower(b.String())
+	s = strings.Trim(s, ".")
+	if s == "" || s == "." || s == ".." || strings.EqualFold(s, "failed") {
+		return "_user"
+	}
+	if len(s) > 120 {
+		s = s[:120]
+	}
+	return s
+}
+
 // Queue is a file-based persistent message queue.
 type Queue struct {
 	dir          string
 	mu           sync.Mutex
-	inflight     map[string]bool
-	ready        chan struct{}
-	rrUsers      []string // round-robin user order
-	rrIdx        int      // next user index to serve
+	inflight map[string]bool
+	ready    chan struct{}
+	rrIdx    int // round-robin cursor across user queue buckets
 }
 
 // New creates a Queue backed by the given directory.
@@ -88,51 +118,164 @@ func (q *Queue) Enqueue(msg *Message) error {
 }
 
 // Pop returns the next message ready for delivery, or nil if none available.
-// The returned message is marked in-flight so other workers skip it.
+// Same fairness as PopFair (round-robin across users). Prefer PopFairBatch via the delivery dispatcher.
 func (q *Queue) Pop() *Message {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	entries, err := os.ReadDir(q.dir)
-	if err != nil {
-		return nil
-	}
-
-	now := time.Now()
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := entry.Name()[:len(entry.Name())-5]
-		if q.inflight[id] {
-			continue
-		}
-
-		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		var msg Message
-		if err := json.Unmarshal(data, &msg); err != nil {
-			continue
-		}
-
-		if msg.Status == StatusPending ||
-			(msg.Status == StatusDeferred && now.After(msg.NextRetry)) {
-			msg.Status = StatusInflight
-			if err := q.save(&msg); err != nil {
-				continue
-			}
-			q.inflight[msg.ID] = true
-			return &msg
-		}
-	}
-	return nil
+	return q.PopFair()
 }
 
 // Ready returns a channel that receives a signal when messages may be ready.
 func (q *Queue) Ready() <-chan struct{} {
 	return q.ready
+}
+
+type fairCandidate struct {
+	msg      Message
+	fullPath string // absolute path to the JSON file on disk
+}
+
+func sortUserKeys(m map[string][]fairCandidate) []string {
+	users := make([]string, 0, len(m))
+	for u := range m {
+		users = append(users, u)
+	}
+	for i := 1; i < len(users); i++ {
+		for j := i; j > 0 && users[j] < users[j-1]; j-- {
+			users[j], users[j-1] = users[j-1], users[j]
+		}
+	}
+	return users
+}
+
+// collectReadyCandidatesLocked scans per-user subdirs plus legacy root files.
+// Caller must hold q.mu.
+func (q *Queue) collectReadyCandidatesLocked(now time.Time) map[string][]fairCandidate {
+	byUser := make(map[string][]fairCandidate)
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return byUser
+	}
+
+	tryAppend := func(fullPath, fname string) {
+		if filepath.Ext(fname) != ".json" {
+			return
+		}
+		id := strings.TrimSuffix(fname, ".json")
+		if q.inflight[id] {
+			return
+		}
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return
+		}
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return
+		}
+		if msg.Status != StatusPending &&
+			!(msg.Status == StatusDeferred && now.After(msg.NextRetry)) {
+			return
+		}
+		key := queueUserKey(msg.Username)
+		byUser[key] = append(byUser[key], fairCandidate{msg: msg, fullPath: fullPath})
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == "failed" {
+			continue
+		}
+		subDir := filepath.Join(q.dir, name)
+		subFiles, err := os.ReadDir(subDir)
+		if err != nil {
+			continue
+		}
+		for _, f := range subFiles {
+			if f.IsDir() {
+				continue
+			}
+			tryAppend(filepath.Join(subDir, f.Name()), f.Name())
+		}
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		tryAppend(filepath.Join(q.dir, entry.Name()), entry.Name())
+	}
+
+	return byUser
+}
+
+// popFairBatchLocked claims up to maxN messages with strong fairness:
+// each sweep takes at most one ready message per user, then rotates start user.
+// Queue files live under queue/<userKey>/id.json (legacy root id.json still read).
+func (q *Queue) popFairBatchLocked(maxN int) []*Message {
+	if maxN <= 0 {
+		maxN = 1
+	}
+
+	now := time.Now()
+	byUser := q.collectReadyCandidatesLocked(now)
+
+	var out []*Message
+	for len(out) < maxN && len(byUser) > 0 {
+		users := sortUserKeys(byUser)
+		nU := len(users)
+		if nU == 0 {
+			break
+		}
+		if q.rrIdx >= nU {
+			q.rrIdx = 0
+		}
+
+		madeProgress := false
+		for step := 0; step < nU && len(out) < maxN; step++ {
+			ui := (q.rrIdx + step) % nU
+			picked := users[ui]
+			cands := byUser[picked]
+			if len(cands) == 0 {
+				delete(byUser, picked)
+				continue
+			}
+
+			bestIdx := 0
+			for i := 1; i < len(cands); i++ {
+				if cands[i].msg.CreatedAt.Before(cands[bestIdx].msg.CreatedAt) {
+					bestIdx = i
+				}
+			}
+			best := cands[bestIdx]
+			cands[bestIdx] = cands[len(cands)-1]
+			cands = cands[:len(cands)-1]
+			if len(cands) == 0 {
+				delete(byUser, picked)
+			} else {
+				byUser[picked] = cands
+			}
+
+			msg := best.msg
+			msg.Status = StatusInflight
+			if err := q.saveRelocating(&msg, best.fullPath); err != nil {
+				log.Printf("queue: failed to claim message %s: %v", msg.ID, err)
+				continue
+			}
+			q.inflight[msg.ID] = true
+			ptr := new(Message)
+			*ptr = msg
+			out = append(out, ptr)
+			madeProgress = true
+		}
+
+		q.rrIdx = (q.rrIdx + 1) % nU
+		if !madeProgress {
+			break
+		}
+	}
+	return out
 }
 
 // PopFair returns the next message using round-robin user scheduling so that
@@ -141,85 +284,19 @@ func (q *Queue) Ready() <-chan struct{} {
 func (q *Queue) PopFair() *Message {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
-	entries, err := os.ReadDir(q.dir)
-	if err != nil {
+	batch := q.popFairBatchLocked(1)
+	if len(batch) == 0 {
 		return nil
 	}
+	return batch[0]
+}
 
-	now := time.Now()
-
-	// Collect all ready messages grouped by username.
-	type candidate struct {
-		msg      Message
-		filename string
-	}
-	byUser := make(map[string][]candidate)
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := entry.Name()[:len(entry.Name())-5]
-		if q.inflight[id] {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		var msg Message
-		if err := json.Unmarshal(data, &msg); err != nil {
-			continue
-		}
-		if msg.Status == StatusPending ||
-			(msg.Status == StatusDeferred && now.After(msg.NextRetry)) {
-			user := msg.Username
-			if user == "" {
-				user = "__system__"
-			}
-			byUser[user] = append(byUser[user], candidate{msg: msg, filename: entry.Name()})
-		}
-	}
-
-	if len(byUser) == 0 {
-		return nil
-	}
-
-	// Build a deterministic sorted list of users present in the queue.
-	users := make([]string, 0, len(byUser))
-	for u := range byUser {
-		users = append(users, u)
-	}
-	// Sort for determinism.
-	for i := 1; i < len(users); i++ {
-		for j := i; j > 0 && users[j] < users[j-1]; j-- {
-			users[j], users[j-1] = users[j-1], users[j]
-		}
-	}
-
-	// Pick next user in round-robin order.
-	if q.rrIdx >= len(users) {
-		q.rrIdx = 0
-	}
-	picked := users[q.rrIdx]
-	q.rrIdx = (q.rrIdx + 1) % len(users)
-
-	// From that user's candidates pick the oldest (smallest CreatedAt).
-	cands := byUser[picked]
-	best := cands[0]
-	for _, c := range cands[1:] {
-		if c.msg.CreatedAt.Before(best.msg.CreatedAt) {
-			best = c
-		}
-	}
-
-	msg := best.msg
-	msg.Status = StatusInflight
-	if err := q.save(&msg); err != nil {
-		return nil
-	}
-	q.inflight[msg.ID] = true
-	return &msg
+// PopFairBatch claims up to maxN ready messages in a single directory scan.
+// Used by the delivery dispatcher to avoid N×disk scans when many workers drain the queue.
+func (q *Queue) PopFairBatch(maxN int) []*Message {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.popFairBatchLocked(maxN)
 }
 
 // Complete removes a successfully delivered message from the queue.
@@ -227,7 +304,7 @@ func (q *Queue) Complete(id string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	delete(q.inflight, id)
-	os.Remove(q.msgPath(id))
+	_ = os.Remove(q.findMessageFileLocked(id))
 }
 
 // Defer reschedules a message for later retry and increments the retry counter.
@@ -239,7 +316,7 @@ func (q *Queue) Defer(msg *Message, retryAfter time.Duration, lastError string) 
 	msg.RetryCount++
 	msg.NextRetry = time.Now().Add(retryAfter)
 	msg.LastError = lastError
-	if err := q.save(msg); err != nil {
+	if err := q.saveRelocating(msg, q.findMessageFileLocked(msg.ID)); err != nil {
 		log.Printf("queue: failed to defer message %s: %v", msg.ID, err)
 	}
 }
@@ -255,7 +332,7 @@ func (q *Queue) DeferNoIncrement(msg *Message, retryAfter time.Duration, lastErr
 	// RetryCount intentionally not incremented.
 	msg.NextRetry = time.Now().Add(retryAfter)
 	msg.LastError = lastError
-	if err := q.save(msg); err != nil {
+	if err := q.saveRelocating(msg, q.findMessageFileLocked(msg.ID)); err != nil {
 		log.Printf("queue: failed to defer (no-inc) message %s: %v", msg.ID, err)
 	}
 }
@@ -269,8 +346,8 @@ func (q *Queue) Fail(msg *Message, reason string) {
 	msg.LastError = reason
 
 	data, _ := json.MarshalIndent(msg, "", "  ")
-	os.WriteFile(filepath.Join(q.dir, "failed", msg.ID+".json"), data, 0644)
-	os.Remove(q.msgPath(msg.ID))
+	_ = os.WriteFile(filepath.Join(q.dir, "failed", msg.ID+".json"), data, 0644)
+	_ = os.Remove(q.findMessageFileLocked(msg.ID))
 }
 
 // CancelByMessageID removes a message from the queue by its ID.
@@ -278,7 +355,7 @@ func (q *Queue) CancelByMessageID(msgID string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	delete(q.inflight, msgID)
-	os.Remove(q.msgPath(msgID))
+	_ = os.Remove(q.findMessageFileLocked(msgID))
 }
 
 // ClearAll removes all messages from the queue (pending, deferred, failed).
@@ -293,11 +370,31 @@ func (q *Queue) ClearAll() int {
 		return 0
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		name := entry.Name()
+		if name == "failed" {
 			continue
 		}
-		if err := os.Remove(filepath.Join(q.dir, entry.Name())); err == nil {
-			count++
+		if entry.IsDir() {
+			sub := filepath.Join(q.dir, name)
+			files, err := os.ReadDir(sub)
+			if err != nil {
+				continue
+			}
+			for _, f := range files {
+				if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+					continue
+				}
+				if err := os.Remove(filepath.Join(sub, f.Name())); err == nil {
+					count++
+				}
+			}
+			_ = os.Remove(sub)
+			continue
+		}
+		if filepath.Ext(name) == ".json" {
+			if err := os.Remove(filepath.Join(q.dir, name)); err == nil {
+				count++
+			}
 		}
 	}
 	failedDir := filepath.Join(q.dir, "failed")
@@ -319,15 +416,30 @@ func (q *Queue) ClearByUser(username string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	count := 0
+	key := queueUserKey(username)
+	sub := filepath.Join(q.dir, key)
+	if files, err := os.ReadDir(sub); err == nil {
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+				continue
+			}
+			id := strings.TrimSuffix(f.Name(), ".json")
+			delete(q.inflight, id)
+			if err := os.Remove(filepath.Join(sub, f.Name())); err == nil {
+				count++
+			}
+		}
+		_ = os.Remove(sub)
+	}
 	entries, err := os.ReadDir(q.dir)
 	if err != nil {
-		return 0
+		return count
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		id := entry.Name()[:len(entry.Name())-5]
+		id := strings.TrimSuffix(entry.Name(), ".json")
 		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
 		if err != nil {
 			continue
@@ -338,7 +450,7 @@ func (q *Queue) ClearByUser(username string) int {
 		}
 		if msg.Username == username {
 			delete(q.inflight, id)
-			if err := os.Remove(q.msgPath(id)); err == nil {
+			if err := os.Remove(filepath.Join(q.dir, entry.Name())); err == nil {
 				count++
 			}
 		}
@@ -369,25 +481,50 @@ func (q *Queue) ClearByUser(username string) int {
 
 // resetInflight resets any in-flight messages from a previous run to pending.
 func (q *Queue) resetInflight() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.resetInflightLocked()
+}
+
+func (q *Queue) resetInflightLocked() {
 	entries, err := os.ReadDir(q.dir)
 	if err != nil {
 		return
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
+	resetFile := func(fullPath string) {
+		data, err := os.ReadFile(fullPath)
 		if err != nil {
-			continue
+			return
 		}
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
-			continue
+			return
 		}
 		if msg.Status == StatusInflight {
 			msg.Status = StatusPending
-			q.save(&msg)
+			_ = q.saveRelocating(&msg, fullPath)
+		}
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			if filepath.Ext(entry.Name()) == ".json" {
+				resetFile(filepath.Join(q.dir, entry.Name()))
+			}
+			continue
+		}
+		if entry.Name() == "failed" {
+			continue
+		}
+		sub := filepath.Join(q.dir, entry.Name())
+		files, err := os.ReadDir(sub)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+				continue
+			}
+			resetFile(filepath.Join(sub, f.Name()))
 		}
 	}
 }
@@ -408,16 +545,58 @@ func (q *Queue) signal() {
 	}
 }
 
+func (q *Queue) messageFilePath(msg *Message) string {
+	key := queueUserKey(msg.Username)
+	return filepath.Join(q.dir, key, msg.ID+".json")
+}
+
+// findMessageFileLocked returns the path to id.json (legacy root or per-user subdir).
+// Caller must hold q.mu (or run at init before other goroutines).
+func (q *Queue) findMessageFileLocked(id string) string {
+	legacy := filepath.Join(q.dir, id+".json")
+	if st, err := os.Stat(legacy); err == nil && !st.IsDir() {
+		return legacy
+	}
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return legacy
+	}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "failed" {
+			continue
+		}
+		p := filepath.Join(q.dir, e.Name(), id+".json")
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return legacy
+}
+
 func (q *Queue) save(msg *Message) error {
+	return q.saveRelocating(msg, "")
+}
+
+func (q *Queue) saveRelocating(msg *Message, previousPath string) error {
+	newPath := q.messageFilePath(msg)
 	data, err := json.MarshalIndent(msg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(q.msgPath(msg.ID), data, 0644)
-}
-
-func (q *Queue) msgPath(id string) string {
-	return filepath.Join(q.dir, id+".json")
+	if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(newPath, data, 0644); err != nil {
+		return err
+	}
+	legacyPath := filepath.Join(q.dir, msg.ID+".json")
+	if legacyPath != newPath {
+		_ = os.Remove(legacyPath)
+	}
+	if previousPath != "" && previousPath != newPath {
+		_ = os.Remove(previousPath)
+	}
+	return nil
 }
 
 // Stats holds queue counts per status.
@@ -439,17 +618,14 @@ func (q *Queue) Stats() Stats {
 	if err != nil {
 		return s
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(q.dir, entry.Name()))
+	countFile := func(fullPath string) {
+		data, err := os.ReadFile(fullPath)
 		if err != nil {
-			continue
+			return
 		}
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
-			continue
+			return
 		}
 		switch msg.Status {
 		case StatusPending:
@@ -461,8 +637,29 @@ func (q *Queue) Stats() Stats {
 		}
 		s.Total++
 	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			if filepath.Ext(entry.Name()) == ".json" {
+				countFile(filepath.Join(q.dir, entry.Name()))
+			}
+			continue
+		}
+		if entry.Name() == "failed" {
+			continue
+		}
+		sub := filepath.Join(q.dir, entry.Name())
+		files, err := os.ReadDir(sub)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+				continue
+			}
+			countFile(filepath.Join(sub, f.Name()))
+		}
+	}
 
-	// Count failed messages in the failed/ subdirectory.
 	failedEntries, err := os.ReadDir(filepath.Join(q.dir, "failed"))
 	if err == nil {
 		for _, e := range failedEntries {

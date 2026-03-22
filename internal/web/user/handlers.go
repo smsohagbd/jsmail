@@ -126,14 +126,37 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 
 // ──────────────────────────── Queue ──────────────────────────────────────────
 
+const userQueueLogsPerPage = 100
+
 func (h *Handler) QueuePage(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	var total int64
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status IN ?",
+		claims.Username, []string{"queued", "deferred"}).Count(&total)
+
 	var logs []appdb.EmailLog
+	offset := (page - 1) * userQueueLogsPerPage
 	h.DB.Where("username = ? AND status IN ?",
 		claims.Username, []string{"queued", "deferred"}).
-		Order("created_at desc").Limit(100).Find(&logs)
+		Order("created_at desc").Limit(userQueueLogsPerPage).Offset(offset).Find(&logs)
 
-	data := map[string]interface{}{"Page": "queue", "Logs": logs}
+	totalPages := int((total + int64(userQueueLogsPerPage) - 1) / int64(userQueueLogsPerPage))
+	if total > 0 && totalPages == 0 {
+		totalPages = 1
+	}
+
+	data := map[string]interface{}{
+		"Page":             "queue",
+		"Logs":             logs,
+		"QueueListPage":    page,
+		"QueueListTotal":   total,
+		"QueueListPages":   totalPages,
+		"QueueListPerPage": userQueueLogsPerPage,
+	}
 	if ok := r.URL.Query().Get("ok"); ok != "" {
 		data["FlashOK"] = ok
 	}

@@ -174,6 +174,10 @@ type Engine struct {
 	ipMu       sync.Mutex
 	ipIdx      int
 	ipCounters map[string]*ipCounter
+
+	// workCh feeds workers; a single dispatcher calls PopFairBatch to avoid
+	// N workers hammering the queue mutex and re-reading every file per pop.
+	workCh chan *queue.Message
 }
 
 // New creates a delivery Engine.
@@ -218,14 +222,57 @@ func (e *Engine) logV(format string, args ...interface{}) {
 	}
 }
 
-// Start launches worker goroutines and returns immediately.
+// Start launches a single queue dispatcher plus worker goroutines and returns immediately.
 func (e *Engine) Start() {
-	log.Printf("delivery: starting %d workers", e.cfg.Workers)
-	for i := 0; i < e.cfg.Workers; i++ {
+	n := e.cfg.Workers
+	if n < 1 {
+		n = 1
+	}
+	buf := e.cfg.QueueChannelSize
+	if buf <= 0 {
+		buf = n * 4
+		if buf < 64 {
+			buf = 64
+		}
+	}
+	const maxQueueBuf = 16000
+	if buf > maxQueueBuf {
+		buf = maxQueueBuf
+	}
+	e.workCh = make(chan *queue.Message, buf)
+	go e.dispatch()
+	log.Printf("delivery: starting %d workers (per-user queue dirs, buffer=%d — typical in-flight ≤ workers+buffer, not a fixed 500 cap)", n, buf)
+	for i := 0; i < n; i++ {
 		go e.worker(i)
 	}
-	// Log IP pool status so it is immediately visible in the console.
 	go e.logIPPoolStatus()
+}
+
+// dispatch pulls batches from the file queue and fills workCh so workers never
+// contend on the queue mutex (previously each worker called PopFair and scanned all files).
+func (e *Engine) dispatch() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	capacity := cap(e.workCh)
+	for {
+		select {
+		case <-e.queue.Ready():
+		case <-ticker.C:
+		}
+		for {
+			free := capacity - len(e.workCh)
+			if free <= 0 {
+				break
+			}
+			batch := e.queue.PopFairBatch(free)
+			if len(batch) == 0 {
+				break
+			}
+			for _, msg := range batch {
+				e.workCh <- msg
+			}
+		}
+	}
 }
 
 // logIPPoolStatus prints a one-time diagnostic of the configured IP pool.
@@ -264,6 +311,7 @@ func (e *Engine) logIPPoolStatus() {
 			log.Printf("[IPPOOL]   ✓ bind test OK for %s", ip.IP)
 		}
 	}
+	log.Printf("[IPPOOL] Domain rules with “Min. interval (sec)” cap throughput per IP×domain (e.g. 30s ≈ 2 msgs/min to that domain from each IP).")
 }
 
 func zeroOrInt(n int) string {
@@ -274,20 +322,8 @@ func zeroOrInt(n int) string {
 }
 
 func (e *Engine) worker(id int) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-e.queue.Ready():
-		case <-ticker.C:
-		}
-		for {
-			msg := e.queue.PopFair() // round-robin across users, not pure FIFO
-			if msg == nil {
-				break
-			}
-			e.deliver(msg)
-		}
+	for msg := range e.workCh {
+		e.deliver(msg)
 	}
 }
 

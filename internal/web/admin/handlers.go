@@ -369,18 +369,38 @@ func applyLogFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 
 // ──────────────────────────── Queue ──────────────────────────────────────────
 
+const queueLogsPerPage = 100
+
 func (h *Handler) QueuePage(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	qStats := h.Queue.Stats()
 
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	var total int64
+	h.DB.Model(&appdb.EmailLog{}).Where("status IN ?", []string{"queued", "deferred"}).Count(&total)
+
 	var logs []appdb.EmailLog
-	h.DB.Where("status IN ?", []string{"queued", "deferred"}).Order("created_at desc").Limit(100).Find(&logs)
+	offset := (page - 1) * queueLogsPerPage
+	h.DB.Where("status IN ?", []string{"queued", "deferred"}).
+		Order("created_at desc").Limit(queueLogsPerPage).Offset(offset).Find(&logs)
+
+	totalPages := int((total + int64(queueLogsPerPage) - 1) / int64(queueLogsPerPage))
+	if total > 0 && totalPages == 0 {
+		totalPages = 1
+	}
 
 	data := map[string]interface{}{
-		"Page":       "queue",
-		"ActiveUser": claims.Username,
-		"QueueStats": qStats,
-		"Logs":       logs,
+		"Page":            "queue",
+		"ActiveUser":      claims.Username,
+		"QueueStats":      qStats,
+		"Logs":            logs,
+		"QueueListPage":   page,
+		"QueueListTotal":  total,
+		"QueueListPages":  totalPages,
+		"QueueListPerPage": queueLogsPerPage,
 	}
 	if ok := r.URL.Query().Get("ok"); ok != "" {
 		data["FlashOK"] = ok

@@ -13,6 +13,7 @@ smtp:
 
 delivery:
   workers: 50
+  # queue_channel_size: 512   # optional; 0=auto max(64, workers×4), hard max 16000. In-flight ≈ workers + this buffer (not a fixed 500).
   max_retries: 1
   retry_interval: "5m"
   connect_timeout: "30s"
