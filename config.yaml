@@ -14,6 +14,7 @@ smtp:
 delivery:
   workers: 50
   # queue_channel_size: 512   # optional; 0=auto max(64, workers×4), hard max 16000. In-flight ≈ workers + this buffer (not a fixed 500).
+  # ip_pool_min_defer: "2s"   # optional; only if pool busy AND slot time can’t be computed (rare). Omit or 0 = no extra seconds — pacing follows domain Min. interval only.
   max_retries: 1
   retry_interval: "5m"
   connect_timeout: "30s"

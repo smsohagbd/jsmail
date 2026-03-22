@@ -82,6 +82,9 @@ type DeliveryConfig struct {
 	// QueueChannelSize is the buffered work channel between dispatcher and workers.
 	// 0 = auto: max(64, workers×4), capped at 16000. In-flight ≈ workers + messages in this buffer.
 	QueueChannelSize int `yaml:"queue_channel_size"`
+	// IPPoolMinDefer optional: only if every pool IP is busy AND no slot time could be computed (rare).
+	// Leave empty or "0" for no extra delay — defer uses domain interval timing only (+ tiny jitter).
+	IPPoolMinDefer string `yaml:"ip_pool_min_defer"`
 }
 
 type DKIMConfig struct {

@@ -260,6 +260,7 @@ smtp:
 delivery:
   workers: 5               # parallel delivery workers
   # queue_channel_size: 0  # optional; 0 = auto max(64, workers×4), cap 16000 — in-flight ≈ workers + buffer
+  # ip_pool_min_defer: "0"   # optional; omit or 0 = defer waits match domain/IP interval only (+ ≤250ms jitter). Set only for rare unknown-wait fallback.
   max_retries: 5           # permanent fail after this many attempts
   retry_interval: "5m"     # base retry interval (doubles each attempt)
   connect_timeout: "30s"

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	mathrand "math/rand"
 	"net"
 	"net/smtp"
 	"os"
@@ -121,6 +122,8 @@ type Engine struct {
 	queue      *queue.Queue
 	retryBase  time.Duration
 	connectTO  time.Duration
+	// ipPoolMinDefer optional override when all IPs busy but no wait could be computed (0 = use tiny builtin fallback only).
+	ipPoolMinDefer time.Duration
 	dkimSigner *dkim.SignOptions
 	OnEvent    func(DeliveryEvent) // optional hook for DB logging
 
@@ -203,6 +206,16 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 		e.connectTO = 30 * time.Second
 	}
 
+	e.ipPoolMinDefer = 0
+	s := strings.TrimSpace(cfg.IPPoolMinDefer)
+	if s != "" && s != "0" {
+		if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			e.ipPoolMinDefer = d
+		} else if err != nil {
+			log.Printf("delivery: invalid ip_pool_min_defer %q — ignoring (no extra defer delay)", s)
+		}
+	}
+
 	if cfg.DKIM.Enabled {
 		if opts, err := loadDKIMSigner(cfg.DKIM); err != nil {
 			log.Printf("delivery: DKIM disabled — failed to load key: %v", err)
@@ -220,6 +233,19 @@ func (e *Engine) logV(format string, args ...interface{}) {
 	if e.cfg.VerboseLog {
 		log.Printf(format, args...)
 	}
+}
+
+// finalizeIPPoolDeferWait preserves computed slot times from domain/IP intervals (no added seconds).
+// Light jitter spreads worker wakeups; sub-50ms waits get a minimal floor against busy-spin.
+func (e *Engine) finalizeIPPoolDeferWait(w time.Duration) time.Duration {
+	if w < 0 {
+		w = 0
+	}
+	if w > 0 && w < 50*time.Millisecond {
+		w = 50 * time.Millisecond
+	}
+	w += time.Duration(mathrand.Intn(251)) * time.Millisecond // 0–250ms, not extra seconds
+	return w
 }
 
 // Start launches a single queue dispatcher plus worker goroutines and returns immediately.
@@ -312,6 +338,11 @@ func (e *Engine) logIPPoolStatus() {
 		}
 	}
 	log.Printf("[IPPOOL] Domain rules with “Min. interval (sec)” cap throughput per IP×domain (e.g. 30s ≈ 2 msgs/min to that domain from each IP).")
+	if e.ipPoolMinDefer > 0 {
+		log.Printf("[IPPOOL] Defer uses computed domain/IP slot times only (+ ≤250ms jitter). Rare unknown-wait fallback: %v (delivery.ip_pool_min_defer).", e.ipPoolMinDefer)
+	} else {
+		log.Printf("[IPPOOL] Defer uses computed domain/IP slot times only (+ ≤250ms jitter); no extra delay. IPs rotate; each IP×domain honors Min. interval (sec).")
+	}
 }
 
 func zeroOrInt(n int) string {
@@ -842,8 +873,9 @@ func (e *ipPoolLimitedError) Error() string {
 	return fmt.Sprintf("ip pool: all IPs rate-limited — retry in %v", e.waitFor)
 }
 
-// ipEffectiveLimits returns per-min/hour/day and interval for an IP+domain.
-// Priority: 1) IP's domain rule for this domain, 2) master rule for this domain (if exists), 3) IP base limits.
+// ipEffectiveLimits returns per-min/hour/day and interval for one outbound IP sending to recipient domain `domain`.
+// Priority: 1) Per-IP domain rule (exact match on domain), 2) Global master domain rule, 3) IP pool entry defaults.
+// IntervalSec is the minimum seconds between successive sends from this IP to this recipient domain (queue pacing).
 func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHour, perDay, intervalSec int) {
 	domain = strings.ToLower(domain)
 	for _, r := range entry.DomainRules {
@@ -958,44 +990,63 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 	}
 
 	minWait := 24 * time.Hour
+	foundWait := false
 	for i := range entries {
 		entry := &entries[i]
 		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(entry, domain)
 		counterKey := entry.IP + "|" + domain
 		c, ok := e.ipCounters[counterKey]
 		if !ok {
-			minWait = time.Minute
-			break
+			// First loop always creates counters; keep scanning other IPs.
+			continue
 		}
 		if intervalSec > 0 && !c.lastSendAt.IsZero() {
 			elapsed := time.Since(c.lastSendAt).Seconds()
 			if elapsed < float64(intervalSec) {
 				w := time.Duration(intervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
-				if w > 0 && w < minWait {
-					minWait = w
+				if w > 0 {
+					foundWait = true
+					if w < minWait {
+						minWait = w
+					}
 				}
 			}
 		}
 		if perMin > 0 && c.minCount >= perMin {
-			if w := time.Until(c.minReset); w > 0 && w < minWait {
-				minWait = w
+			if w := time.Until(c.minReset); w > 0 {
+				foundWait = true
+				if w < minWait {
+					minWait = w
+				}
 			}
 		}
 		if perHour > 0 && c.hourCount >= perHour {
-			if w := time.Until(c.hourReset); w > 0 && w < minWait {
-				minWait = w
+			if w := time.Until(c.hourReset); w > 0 {
+				foundWait = true
+				if w < minWait {
+					minWait = w
+				}
 			}
 		}
 		if perDay > 0 && c.dayCount >= perDay {
-			if w := time.Until(c.dayReset); w > 0 && w < minWait {
-				minWait = w
+			if w := time.Until(c.dayReset); w > 0 {
+				foundWait = true
+				if w < minWait {
+					minWait = w
+				}
 			}
 		}
 	}
-	if minWait <= 0 {
-		minWait = time.Minute
+	if !foundWait || minWait <= 0 {
+		if e.ipPoolMinDefer > 0 {
+			minWait = e.ipPoolMinDefer
+		} else {
+			minWait = 250 * time.Millisecond // rare path only; avoids hot loop without adding seconds
+		}
 	}
-	e.logV("[IPPOOL] ⏳ all pool IPs rate-limited — deferring message, retry in %v", minWait)
+	minWait = e.finalizeIPPoolDeferWait(minWait)
+	e.logV("[IPPOOL] ⏳ all pool IPs rate-limited — defer ~%v (slot from domain/IP limits + small jitter)",
+		minWait.Round(time.Millisecond))
 	return "", "", &ipPoolLimitedError{waitFor: minWait}
 }
 
