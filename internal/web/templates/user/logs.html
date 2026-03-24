@@ -7,13 +7,17 @@
 <div class="page-body">
 
 <div class="card" style="margin-bottom:16px;background:#0c0c0f;border-color:#27272a;">
-  <div style="padding:14px 20px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:13px;color:#d4d4d8;line-height:1.5;">
-    <div><strong style="color:#fafafa;">Your recent delivery</strong></div>
-    {{if .RecentDelivery.HasLast}}
-    <div>Last: <code style="color:#4ade80;">{{.RecentDelivery.LastSentAt.Format "Jan 2 15:04:05"}}</code> <span style="color:#71717a;">({{secondsSince .RecentDelivery.LastSentAt}}s ago)</span></div>
-    {{else}}
-    <div style="color:#71717a;">No <code>delivered</code> sends recorded yet.</div>
-    {{end}}
+  <div style="padding:14px 20px;font-size:13px;color:#d4d4d8;line-height:1.55;">
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+      <strong style="color:#fafafa;">Your latest outcome</strong>
+      {{if .RecentDelivery.HasLast}}
+      <span class="badge badge-{{.RecentDelivery.Status}}" style="font-size:11px;">{{.RecentDelivery.Status}}</span>
+      <span><code style="color:#e4e4e7;">{{.RecentDelivery.LastSentAt.Format "Jan 2 15:04:05"}}</code> <span style="color:#71717a;">({{secondsSince .RecentDelivery.LastSentAt}}s ago)</span></span>
+      {{else}}
+      <span style="color:#71717a;">No finished sends logged yet.</span>
+      {{end}}
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:#52525b;">Newest <code>sent_at</code> first. Bounces and failures set <code>sent_at</code> when they happen.</div>
   </div>
 </div>
 

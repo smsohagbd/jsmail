@@ -107,7 +107,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	// Recent logs (exclude queue — same as Send Logs)
 	var recentLogs []appdb.EmailLog
 	h.DB.Where("status NOT IN ?", []string{"queued", "deferred"}).
-		Order("created_at desc").Limit(10).Find(&recentLogs)
+		Order("sent_at desc, id desc").Limit(10).Find(&recentLogs)
 
 	qStats := h.Queue.Stats()
 
@@ -282,7 +282,7 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	q.Count(&total)
 
 	var logs []appdb.EmailLog
-	q.Order("created_at desc").Offset((page - 1) * perPage).Limit(perPage).Find(&logs)
+	q.Order("sent_at desc, id desc").Offset((page - 1) * perPage).Limit(perPage).Find(&logs)
 
 	// ── Hard Bounce tab ──────────────────────────────────────────────────────
 	bounceSearch := r.URL.Query().Get("bsearch")

@@ -26,13 +26,17 @@
 <!-- ══════════════════════════ SEND LOGS TAB ══════════════════════════════════ -->
 
 <div class="card" style="margin-bottom:16px;background:#0c0c0f;border-color:#27272a;">
-  <div style="padding:14px 20px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:13px;color:#d4d4d8;line-height:1.5;">
-    <div><strong style="color:#fafafa;">Recent delivery</strong></div>
-    {{if .RecentDelivery.HasLast}}
-    <div>Last: <code style="color:#4ade80;">{{.RecentDelivery.LastSentAt.Format "Jan 2 15:04:05"}}</code> <span style="color:#71717a;">({{secondsSince .RecentDelivery.LastSentAt}}s ago)</span></div>
-    {{else}}
-    <div style="color:#71717a;">No <code>delivered</code> rows with <code>sent_at</code> yet.</div>
-    {{end}}
+  <div style="padding:14px 20px;font-size:13px;color:#d4d4d8;line-height:1.55;">
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+      <strong style="color:#fafafa;">Latest outcome</strong>
+      {{if .RecentDelivery.HasLast}}
+      <span class="badge badge-{{.RecentDelivery.Status}}" style="font-size:11px;">{{.RecentDelivery.Status}}</span>
+      <span><code style="color:#e4e4e7;">{{.RecentDelivery.LastSentAt.Format "Jan 2 15:04:05"}}</code> <span style="color:#71717a;">({{secondsSince .RecentDelivery.LastSentAt}}s ago)</span></span>
+      {{else}}
+      <span style="color:#71717a;">No terminal rows yet (delivered / failed / hard_bounce / suppressed).</span>
+      {{end}}
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:#52525b;">Sorted by <code>sent_at</code> (newest first). Bounces/failures set <code>sent_at</code> at outcome time; older DB rows may still show queue time.</div>
   </div>
 </div>
 

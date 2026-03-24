@@ -199,12 +199,14 @@ func LogDelivered(username, msgID, recipient, mxHost string) {
 
 // LogFailed updates a log entry to failed.
 func LogFailed(username, msgID, recipient, errMsg string) {
-	statDate := time.Now().Format("2006-01-02")
+	now := time.Now()
+	statDate := now.Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
-			"status": "failed",
-			"error":  errMsg,
+			"status":  "failed",
+			"error":   errMsg,
+			"sent_at": now, // outcome time (was missing — table/banner used queue time)
 		})
 	incrementDailyStat(statDate, username, "failed", 1)
 	incrementDailyStat(statDate, "", "failed", 1)
@@ -225,12 +227,14 @@ func LogDeferred(username, msgID, recipient, errMsg string) {
 
 // LogHardBounce marks a log entry as hard_bounce and adds address to bounce list.
 func LogHardBounce(username, msgID, recipient, errMsg string) {
-	statDate := time.Now().Format("2006-01-02")
+	now := time.Now()
+	statDate := now.Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
-			"status": "hard_bounce",
-			"error":  errMsg,
+			"status":  "hard_bounce",
+			"error":   errMsg,
+			"sent_at": now, // bounce time (was missing — UI showed queue time)
 		})
 	incrementDailyStat(statDate, username, "hard_bounce", 1)
 	incrementDailyStat(statDate, "", "hard_bounce", 1)
@@ -1115,12 +1119,14 @@ func SetCFToken(username, token string) error {
 
 // LogSuppressed updates an email log entry status to "suppressed".
 func LogSuppressed(username, msgID, recipient, reason string) {
-	statDate := time.Now().Format("2006-01-02")
+	now := time.Now()
+	statDate := now.Format("2006-01-02")
 	DB.Model(&EmailLog{}).
 		Where("message_id = ? AND recipient = ?", msgID, recipient).
 		Updates(map[string]interface{}{
-			"status": "suppressed",
-			"error":  reason,
+			"status":  "suppressed",
+			"error":   reason,
+			"sent_at": now,
 		})
 	incrementDailyStat(statDate, username, "suppressed", 1)
 	incrementDailyStat(statDate, "", "suppressed", 1)
@@ -1374,10 +1380,11 @@ func GetSummaryStats() (today, yesterday, last7Days int64) {
 	return today, yesterday, last7Days
 }
 
-// RecentDeliveryForLogs is shown on send-log pages: last successful delivery time.
+// RecentDeliveryForLogs is the newest terminal outcome row (for send-log banner).
 type RecentDeliveryForLogs struct {
 	HasLast    bool
 	LastSentAt time.Time
+	Status     string // delivered | failed | hard_bounce | suppressed
 }
 
 // RecentDeliverySnapshotAdmin returns delivery stats across all users (admin send logs).
@@ -1397,14 +1404,16 @@ func recentDeliverySnapshot(username string) RecentDeliveryForLogs {
 	}
 	user := strings.TrimSpace(username)
 
-	qLast := DB.Model(&EmailLog{}).Where("status = ?", "delivered")
+	terminal := []string{"delivered", "failed", "hard_bounce", "suppressed"}
+	qLast := DB.Model(&EmailLog{}).Where("status IN ?", terminal)
 	if user != "" {
 		qLast = qLast.Where("username = ?", user)
 	}
 	var row EmailLog
-	if err := qLast.Order("sent_at DESC").Limit(1).First(&row).Error; err == nil && !row.SentAt.IsZero() {
+	if err := qLast.Order("sent_at DESC, id DESC").Limit(1).First(&row).Error; err == nil && !row.SentAt.IsZero() {
 		out.HasLast = true
 		out.LastSentAt = row.SentAt
+		out.Status = row.Status
 	}
 	return out
 }
