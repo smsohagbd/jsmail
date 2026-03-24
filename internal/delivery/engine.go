@@ -209,6 +209,9 @@ type Engine struct {
 
 	traceMu      sync.Mutex
 	activeTraces map[string]*deliveryTrace // messages currently in deliver()
+
+	outboundMXPorts []string // per MX host, tried in order (default 25, 587)
+	dialNetwork     string   // tcp4 or tcp
 }
 
 // New creates a delivery Engine.
@@ -235,6 +238,10 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 	} else {
 		e.connectTO = 30 * time.Second
 	}
+
+	e.outboundMXPorts = normalizeOutboundMXPorts(cfg.OutboundMXPorts)
+	e.dialNetwork = normalizeOutboundDialNetwork(cfg.OutboundDialNetwork)
+	log.Printf("delivery: outbound MX ports %v, dial network=%s, connect timeout=%v", e.outboundMXPorts, e.dialNetwork, e.connectTO)
 
 	e.ipPoolMinDefer = 0
 	s := strings.TrimSpace(cfg.IPPoolMinDefer)
@@ -748,9 +755,32 @@ func (e *Engine) deliver(msg *queue.Message) {
 	}
 }
 
-// deliveryPorts defines the ports tried in order for outbound delivery.
-// Port 25 is the standard MTA port; 587 is tried as fallback when 25 is blocked.
-var deliveryPorts = []string{"25", "587"}
+func normalizeOutboundMXPorts(in []string) []string {
+	var out []string
+	for _, p := range in {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return []string{"25", "587"}
+	}
+	return out
+}
+
+func normalizeOutboundDialNetwork(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "tcp", "tcp6":
+		return "tcp"
+	case "tcp4", "":
+		return "tcp4"
+	default:
+		log.Printf("delivery: unknown outbound_dial_network %q — using tcp4", s)
+		return "tcp4"
+	}
+}
 
 // isTempRateLimitError returns true when the SMTP server responded with a
 // 421 temporary rate-limit (e.g. Yahoo TSS04, AOL similar codes).
@@ -940,7 +970,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 	allRateLimited := true
 
 	for _, mx := range mxRecords {
-		for _, port := range deliveryPorts {
+		for _, port := range e.outboundMXPorts {
 			e.logV("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
 
 			// Respect per-MX connection limit (blocks when all slots to same MX host are in use).
@@ -1636,7 +1666,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 		}
 		e.tracePhase(traceID, "tcp_dial_bind", fmt.Sprintf("src=%s → %s", outIP, addr))
 		e.logV("[IPPOOL]   selected outbound IP %s → %s", outIP, addr)
-		conn, err = dialer.Dial("tcp4", addr)
+		conn, err = dialer.Dial(e.dialNetwork, addr)
 		if err != nil {
 			// Binding to this pool IP failed (not assigned to interface or OS error).
 			// Undo the reservation so the counter stays accurate, then fall back.
@@ -1649,14 +1679,14 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
 			e.tracePhase(traceID, "tcp_dial_fallback", addr)
-			conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
+			conn, err = net.DialTimeout(e.dialNetwork, addr, e.connectTO)
 		} else {
 			usedPoolIP = true
 		}
 	} else {
 		// Pool is disabled/empty — use system default IP.
 		e.tracePhase(traceID, "tcp_dial_system", addr)
-		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
+		conn, err = net.DialTimeout(e.dialNetwork, addr, e.connectTO)
 	}
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)

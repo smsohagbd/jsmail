@@ -21,6 +21,9 @@ delivery:
   retry_interval: "5m"
   connect_timeout: "30s"
   send_timeout: "5m"
+  # If Yahoo/AOL/sbcglobal/bellsouth dials often end in i/o timeout: try connect_timeout: "45s" or "60s", ensure host allows outbound 25+587, then optional:
+  # outbound_mx_ports: ["25"]       # default is 25 then 587; error text often shows the last port tried (587).
+  # outbound_dial_network: "tcp"    # default tcp4; tcp = dual-stack if MX has only AAAA, etc.
   helo_name: "mail.cashpilotspro.com"
   # Second/hub server only: force DKIM d= to your domain, strip upstream DKIM-Signature from first server.
   # Add the same domain in Admin → Domains with DKIM key, OR set dkim.domain to match and enable dkim below.
