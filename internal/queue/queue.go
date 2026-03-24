@@ -615,7 +615,7 @@ func (q *Queue) InflightClaimedIDs() map[string]bool {
 
 // scanner periodically wakes workers so deferred messages get retried.
 func (q *Queue) scanner() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	run := func() {
 		n := q.RepairOrphanInflightFiles()

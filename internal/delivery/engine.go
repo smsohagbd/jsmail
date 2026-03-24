@@ -212,6 +212,12 @@ type Engine struct {
 
 	outboundMXPorts []string // per MX host, tried in order (default 25, 587)
 	dialNetwork     string   // tcp4 or tcp
+
+	// Domain dial-failure cache: when ALL MX hosts for a domain fail with
+	// connection errors (timeout / refused), skip that domain for a few minutes
+	// instead of burning 30s+ of worker time per message on each attempt.
+	dialFailMu sync.Mutex
+	dialFails  map[string]time.Time // domain → "do not dial until" time
 }
 
 // New creates a delivery Engine.
@@ -225,6 +231,7 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 		ipCounters:       make(map[string]*ipCounter),
 		userRelayIdx:     make(map[string]int),
 		throttleCounters: make(map[string]*throttleCounter),
+		dialFails:        make(map[string]time.Time),
 		metrics:          newDeliveryMetrics(),
 	}
 
@@ -318,7 +325,7 @@ func (e *Engine) Start() {
 // dispatch pulls batches from the file queue and fills workCh so workers never
 // contend on the queue mutex (previously each worker called PopFair and scanned all files).
 func (e *Engine) dispatch() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	capacity := cap(e.workCh)
 	for {
@@ -609,10 +616,25 @@ func (e *Engine) deliver(msg *queue.Message) {
 		}
 
 		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data, onRcptBounce, msg.ID)
+
+		// IP pool exhausted — instead of deferring to disk immediately,
+		// sleep in-memory for the computed wait (typically a few seconds)
+		// then retry once. Avoids costly disk write→read→parse round-trip.
+		if err != nil && isIPPoolLimited(err) {
+			var poolErr *ipPoolLimitedError
+			errors.As(err, &poolErr)
+			wait := poolErr.waitFor
+			if wait > 0 && wait <= 25*time.Second {
+				e.logV("[IPPOOL] ⏳ message %s: all IPs busy for %s — sleeping %v then retrying in-memory", msg.ID, domain, wait)
+				time.Sleep(wait)
+				mxHost, err = e.deliverToDomain(msg.From, domain, rcpts, data, onRcptBounce, msg.ID)
+			}
+		}
+
 		if err != nil {
 			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
 
-			// IP pool exhausted — defer without burning a retry slot.
+			// IP pool still exhausted after in-memory retry — defer to disk.
 			if isIPPoolLimited(err) {
 				var poolErr *ipPoolLimitedError
 				errors.As(err, &poolErr)
@@ -631,9 +653,24 @@ func (e *Engine) deliver(msg *queue.Message) {
 				return
 			}
 
+			// Domain dial-failure cached — defer without burning a retry slot.
+			if isDomainDialCached(err) {
+				var dErr *domainDialCachedError
+				errors.As(err, &dErr)
+				e.queue.DeferNoIncrement(msg, dErr.waitFor, err.Error())
+				if e.OnEvent != nil {
+					for _, rcpt := range rcpts {
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: rcpt, Status: "deferred",
+							Error: err.Error(),
+						})
+					}
+				}
+				return
+			}
+
 			if isPermanentSMTPError(err) {
-				// Hard bounce — log event and remember these recipients so the
-				// final "delivered" sweep never fires for them.
 				log.Printf("[DELIVERY] ✗ hard bounce for domain %q", domain)
 				for _, rcpt := range rcpts {
 					hardBouncedRcpts[rcpt] = true
@@ -647,8 +684,6 @@ func (e *Engine) deliver(msg *queue.Message) {
 						})
 					}
 				}
-				// Do NOT set lastErr — hard bounces are terminal per-recipient
-				// and must not trigger global retries.
 			} else if isTempRateLimitError(err) || strings.Contains(err.Error(), "rate-limited") {
 				e.logV("[DELIVERY] ⏳ domain %q is rate-limited — will defer (retries not consumed)", domain)
 				lastErr = err
@@ -838,6 +873,68 @@ func (e *Engine) clearCooldown(domain string) {
 	delete(e.cooldowns, domain)
 }
 
+// ── Domain dial-failure cache ────────────────────────────────────────────────
+// After ALL MX hosts for a domain fail with TCP dial errors (connection
+// refused or i/o timeout), we cache the failure for a few minutes.  Next
+// messages to the same domain are immediately deferred without consuming
+// 30s+ of worker time per MX attempt.
+
+type domainDialCachedError struct {
+	domain  string
+	waitFor time.Duration
+}
+
+func (e *domainDialCachedError) Error() string {
+	return fmt.Sprintf("domain %s: all MX dial failures cached — skip %v", e.domain, e.waitFor.Round(time.Second))
+}
+
+func isDomainDialCached(err error) bool {
+	var e *domainDialCachedError
+	return errors.As(err, &e)
+}
+
+// isDomainDialBlocked checks if the domain is in the connection-failure cache.
+func (e *Engine) isDomainDialBlocked(domain string) (bool, time.Duration) {
+	e.dialFailMu.Lock()
+	defer e.dialFailMu.Unlock()
+	t, ok := e.dialFails[domain]
+	if !ok {
+		return false, 0
+	}
+	rem := time.Until(t)
+	if rem <= 0 {
+		delete(e.dialFails, domain)
+		return false, 0
+	}
+	return true, rem
+}
+
+func (e *Engine) recordDomainDialFail(domain string, dur time.Duration) {
+	e.dialFailMu.Lock()
+	defer e.dialFailMu.Unlock()
+	e.dialFails[domain] = time.Now().Add(dur)
+	log.Printf("[DELIVERY] domain %q: all MX servers unreachable — caching failure for %v", domain, dur)
+}
+
+func (e *Engine) clearDomainDialFail(domain string) {
+	e.dialFailMu.Lock()
+	defer e.dialFailMu.Unlock()
+	delete(e.dialFails, domain)
+}
+
+// isDialError returns true if the error is a TCP dial failure (not an SMTP error).
+func isDialError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "dial ") && (strings.Contains(s, "timeout") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "no route") ||
+		strings.Contains(s, "network is unreachable") ||
+		strings.Contains(s, "i/o timeout"))
+}
+
 // mxSlotCap returns the per-MX-host concurrency limit (shared across all workers and source IPs).
 func (e *Engine) mxSlotCap() int {
 	n := e.cfg.MXMaxConcurrent
@@ -948,6 +1045,13 @@ func (e *Engine) returnOutboundIPTok(ip, rcptDomain string) {
 // Those recipients are skipped from DATA; the remaining valid recipients are delivered.
 func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte,
 	onRcptBounce func(rcpt, reason string), traceID string) (string, error) {
+	// Check dial-failure cache — domain known to be unreachable.
+	if blocked, rem := e.isDomainDialBlocked(domain); blocked {
+		e.tracePhase(traceID, "domain_dial_cached", fmt.Sprintf("%s blocked ~%v", domain, rem.Round(time.Second)))
+		e.logV("[DELIVERY] ⏭ domain %q dial-fail cached — skipping for %v", domain, rem.Round(time.Second))
+		return "", &domainDialCachedError{domain: domain, waitFor: rem}
+	}
+
 	// Check per-domain 421 cooldown before doing anything.
 	if until := e.domainCooldownUntil(domain); !until.IsZero() && time.Now().Before(until) {
 		wait := time.Until(until).Round(time.Second)
@@ -971,28 +1075,48 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 
 	var lastMXErr error
 	allRateLimited := true
+	allDialErrors := true // track whether EVERY failure was a TCP dial error
+	hadDialTimeout := false // first MX timed out → use shorter timeout for rest
 
 	for _, mx := range mxRecords {
 		for _, port := range e.outboundMXPorts {
 			e.logV("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
 
+			// After the first dial timeout, use a shorter timeout for remaining MX
+			// hosts. If port 25 is blocked at the network level, ALL hosts will
+			// timeout — no need to burn 30s per host.
+			connectTO := e.connectTO
+			if hadDialTimeout {
+				connectTO = 10 * time.Second
+				if connectTO > e.connectTO {
+					connectTO = e.connectTO
+				}
+			}
+
 			// Respect per-MX connection limit (blocks when all slots to same MX host are in use).
 			e.tracePhase(traceID, "waiting_mx_semaphore", fmt.Sprintf("%s:%s (max %d concurrent)", mx.Host, port, e.mxSlotCap()))
 			e.acquireMXSlot(mx.Host)
 			e.tracePhase(traceID, "smtp_connect_send", fmt.Sprintf("%s:%s", mx.Host, port))
-			mxErr := e.sendToMX(from, domain, mx.Host, port, rcpts, data, onRcptBounce, traceID)
+			mxErr := e.sendToMX(from, domain, mx.Host, port, rcpts, data, onRcptBounce, traceID, connectTO)
 			e.releaseMXSlot(mx.Host)
 
 			if mxErr == nil {
 				e.logV("[DELIVERY] ✓ delivered via MX %s:%s", mx.Host, port)
-				e.clearCooldown(domain) // success — reset streak
+				e.clearCooldown(domain)
+				e.clearDomainDialFail(domain)
 				return mx.Host, nil
 			}
 			log.Printf("[DELIVERY] ✗ MX %s:%s failed: %v", mx.Host, port, mxErr)
 
-			// 5xx permanent failure (mailbox not found, user rejected, etc.) —
-			// all MX hosts will give the same answer, so stop immediately and
-			// return the 5xx error so the caller can hard-bounce.
+			// Track dial errors for the cache.
+			if isDialError(mxErr) {
+				if strings.Contains(mxErr.Error(), "timeout") {
+					hadDialTimeout = true
+				}
+			} else {
+				allDialErrors = false
+			}
+
 			// IP pool limited — all our outbound IPs are at capacity.
 			// Return immediately; no point trying other MX hosts.
 			if isIPPoolLimited(mxErr) {
@@ -1006,12 +1130,17 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 
 			if isTempRateLimitError(mxErr) {
 				lastMXErr = mxErr
-				// Continue to next MX/port, but remember all were rate-limited.
 			} else {
 				allRateLimited = false
 				lastMXErr = mxErr
 			}
 		}
+	}
+
+	// If every MX attempt was a dial error (connection refused / timeout),
+	// cache the failure so subsequent messages to this domain skip immediately.
+	if allDialErrors && lastMXErr != nil && !allRateLimited {
+		e.recordDomainDialFail(domain, 3*time.Minute)
 	}
 
 	// If every MX returned a 421, set a domain-level cooldown and return a
@@ -1631,7 +1760,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 }
 
 func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, data []byte,
-	onRcptBounce func(rcpt, reason string), traceID string) error {
+	onRcptBounce func(rcpt, reason string), traceID string, connectTimeout time.Duration) error {
 	addr := net.JoinHostPort(mxHost, port)
 	e.tracePhase(traceID, "outbound_ip_pick", domain)
 	e.logV("[DELIVERY]   connecting to %s …", addr)
@@ -1664,7 +1793,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	usedPoolIP := false
 	if outIP != "" {
 		dialer := &net.Dialer{
-			Timeout:   e.connectTO,
+			Timeout:   connectTimeout,
 			LocalAddr: &net.TCPAddr{IP: net.ParseIP(outIP)},
 		}
 		e.tracePhase(traceID, "tcp_dial_bind", fmt.Sprintf("src=%s → %s", outIP, addr))
@@ -1682,14 +1811,14 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
 			e.tracePhase(traceID, "tcp_dial_fallback", addr)
-			conn, err = net.DialTimeout(e.dialNetwork, addr, e.connectTO)
+			conn, err = net.DialTimeout(e.dialNetwork, addr, connectTimeout)
 		} else {
 			usedPoolIP = true
 		}
 	} else {
 		// Pool is disabled/empty — use system default IP.
 		e.tracePhase(traceID, "tcp_dial_system", addr)
-		conn, err = net.DialTimeout(e.dialNetwork, addr, e.connectTO)
+		conn, err = net.DialTimeout(e.dialNetwork, addr, connectTimeout)
 	}
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
