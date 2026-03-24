@@ -478,17 +478,18 @@ func (h *Handler) QueueInflightPage(w http.ResponseWriter, r *http.Request) {
 		waitApprox = 0
 	}
 	h.Tmpl.Render(w, "admin/queue-inflight", map[string]interface{}{
-		"Page":             "queue",
-		"ActiveUser":       claims.Username,
-		"InflightRows":     rows,
-		"TraceByID":        traceByID,
-		"WorkChLen":        workQ,
-		"WorkChCap":        workCap,
-		"Workers":          workers,
-		"InflightMemory":   h.Queue.InflightMemoryCount(),
-		"QueueInflightCnt": qs.Inflight,
-		"ActiveTraceCount": len(traceByID),
-		"WaitChannelApprox": waitApprox,
+		"Page":              "queue",
+		"ActiveUser":        claims.Username,
+		"InflightRows":      rows,
+		"TraceByID":         traceByID,
+		"InflightClaimed":    h.Queue.InflightClaimedIDs(),
+		"WorkChLen":          workQ,
+		"WorkChCap":          workCap,
+		"Workers":            workers,
+		"InflightMemory":     h.Queue.InflightMemoryCount(),
+		"QueueInflightCnt":   qs.Inflight,
+		"ActiveTraceCount":   len(traceByID),
+		"WaitChannelApprox":  waitApprox,
 	})
 }
 

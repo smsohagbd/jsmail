@@ -260,6 +260,7 @@ func (q *Queue) popFairBatchLocked(maxN int) []*Message {
 
 			msg := best.msg
 			msg.Status = StatusInflight
+			msg.LastError = "" // previous defer reason is misleading while waiting in work channel
 			if err := q.saveRelocating(&msg, best.fullPath); err != nil {
 				log.Printf("queue: failed to claim message %s: %v", msg.ID, err)
 				continue
@@ -530,11 +531,90 @@ func (q *Queue) resetInflightLocked() {
 	}
 }
 
+// repairOrphanInflightFiles finds JSON files with status=inflight that are not in the
+// in-memory claim map (e.g. crash after writing inflight, or failed save after Defer
+// removed the map entry) and resets them to pending so they can be claimed again.
+func (q *Queue) repairOrphanInflightFiles() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.repairOrphanInflightLocked()
+}
+
+func (q *Queue) repairOrphanInflightLocked() int {
+	count := 0
+	repairFile := func(fullPath string) {
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return
+		}
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return
+		}
+		if msg.Status != StatusInflight {
+			return
+		}
+		if q.inflight[msg.ID] {
+			return
+		}
+		msg.Status = StatusPending
+		msg.LastError = ""
+		if err := q.saveRelocating(&msg, fullPath); err != nil {
+			log.Printf("queue: repair orphan inflight %s: %v", msg.ID, err)
+			return
+		}
+		count++
+	}
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return count
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			if filepath.Ext(entry.Name()) == ".json" {
+				repairFile(filepath.Join(q.dir, entry.Name()))
+			}
+			continue
+		}
+		if entry.Name() == "failed" {
+			continue
+		}
+		sub := filepath.Join(q.dir, entry.Name())
+		files, err := os.ReadDir(sub)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+				continue
+			}
+			repairFile(filepath.Join(sub, f.Name()))
+		}
+	}
+	return count
+}
+
+// InflightClaimedIDs returns a snapshot of message IDs the dispatcher has claimed
+// (in-memory map until Complete/Defer/Fail/Cancel).
+func (q *Queue) InflightClaimedIDs() map[string]bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	m := make(map[string]bool, len(q.inflight))
+	for id := range q.inflight {
+		m[id] = true
+	}
+	return m
+}
+
 // scanner periodically wakes workers so deferred messages get retried.
 func (q *Queue) scanner() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
+		n := q.repairOrphanInflightFiles()
+		if n > 0 {
+			log.Printf("queue: repaired %d orphan inflight file(s) (disk inflight, not in claim map)", n)
+		}
 		q.signal()
 	}
 }
