@@ -35,6 +35,18 @@ func main() {
 		}
 	}
 
+	// Redirect log output to a file when configured (avoids slow console I/O
+	// on Windows which can block delivery workers contending on the log mutex).
+	if logFile := cfg.Logging.File; logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			log.Fatalf("main: cannot open log file %q: %v", logFile, err)
+		}
+		defer f.Close()
+		log.SetOutput(f)
+		log.Printf("main: logging to file %q", logFile)
+	}
+
 	// Initialize database (SQLite or MySQL) and JWT auth.
 	driver, dsn := dbDSN(cfg)
 	if err := appdb.Init(driver, dsn, cfg.Admin.Username, cfg.Admin.Password); err != nil {

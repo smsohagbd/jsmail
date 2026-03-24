@@ -65,3 +65,4 @@ database:
 
 logging:
   level: "info"
+  file: "smtp-server.log"   # write logs to file instead of console (much faster — console I/O blocks workers on Windows)

@@ -122,6 +122,7 @@ type APIConfig struct {
 
 type LoggingConfig struct {
 	Level string `yaml:"level"`
+	File  string `yaml:"file"` // optional: write logs to file instead of console (much faster I/O on Windows)
 }
 
 // Load reads and parses the YAML config file at path.

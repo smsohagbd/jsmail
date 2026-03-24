@@ -632,7 +632,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 		}
 
 		if err != nil {
-			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
+			e.logV("[DELIVERY] ✗ domain %q failed: %v", domain, err)
 
 			// IP pool still exhausted after in-memory retry — defer to disk.
 			if isIPPoolLimited(err) {
@@ -671,7 +671,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			}
 
 			if isPermanentSMTPError(err) {
-				log.Printf("[DELIVERY] ✗ hard bounce for domain %q", domain)
+				e.logV("[DELIVERY] ✗ hard bounce for domain %q", domain)
 				for _, rcpt := range rcpts {
 					hardBouncedRcpts[rcpt] = true
 				}
@@ -755,8 +755,8 @@ func (e *Engine) deliver(msg *queue.Message) {
 	}
 
 	if msg.RetryCount >= e.cfg.MaxRetries {
-		log.Printf("[DELIVERY] ✗ message %s PERMANENTLY FAILED (max retries reached)", msg.ID)
-		log.Printf("[DELIVERY]   reason: %v", lastErr)
+		e.logV("[DELIVERY] ✗ message %s PERMANENTLY FAILED (max retries reached)", msg.ID)
+		e.logV("[DELIVERY]   reason: %v", lastErr)
 		e.queue.Fail(msg, fmt.Sprintf("max retries exceeded: %v", lastErr))
 		if e.OnEvent != nil {
 			for _, to := range msg.To {
@@ -1106,7 +1106,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 				e.clearDomainDialFail(domain)
 				return mx.Host, nil
 			}
-			log.Printf("[DELIVERY] ✗ MX %s:%s failed: %v", mx.Host, port, mxErr)
+			e.logV("[DELIVERY] ✗ MX %s:%s failed: %v", mx.Host, port, mxErr)
 
 			// Track dial errors for the cache.
 			if isDialError(mxErr) {
@@ -1124,7 +1124,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 			}
 
 			if isPermanentSMTPError(mxErr) {
-				log.Printf("[DELIVERY] ✗ permanent 5xx from %s — stopping MX attempts for %q", mx.Host, domain)
+				e.logV("[DELIVERY] ✗ permanent 5xx from %s — stopping MX attempts for %q", mx.Host, domain)
 				return "", mxErr
 			}
 
@@ -1807,9 +1807,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 				releaseIPTok()
 				releaseIPTok = nil
 			}
-			log.Printf("[IPPOOL] ✗ bind to %s FAILED: %v", outIP, err)
-			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
-			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
+			e.logV("[IPPOOL] ✗ bind to %s FAILED: %v — falling back to system default IP", outIP, err)
 			e.tracePhase(traceID, "tcp_dial_fallback", addr)
 			conn, err = net.DialTimeout(e.dialNetwork, addr, connectTimeout)
 		} else {
@@ -1856,7 +1854,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			InsecureSkipVerify: false,
 		}
 		if err := client.StartTLS(tlsCfg); err != nil {
-			log.Printf("[DELIVERY] ⚠ STARTTLS failed (continuing plain): %v", err)
+			e.logV("[DELIVERY] ⚠ STARTTLS failed (continuing plain): %v", err)
 		} else {
 			e.logV("[DELIVERY]   STARTTLS ok (TLS active)")
 		}
@@ -1883,7 +1881,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 		if err := client.Rcpt(rcpt); err != nil {
 			if isPermanentSMTPError(err) {
 				reason := fmt.Sprintf("RCPT TO <%s>: %v", rcpt, err)
-				log.Printf("[DELIVERY] ✗ RCPT TO <%s> → hard bounce (5xx) — aborting for this recipient: %v",
+				e.logV("[DELIVERY] ✗ RCPT TO <%s> → hard bounce (5xx) — aborting for this recipient: %v",
 					rcpt, err)
 				if onRcptBounce != nil {
 					onRcptBounce(rcpt, reason)
@@ -1892,7 +1890,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 				continue // skip to next recipient — do NOT abort the whole session yet
 			}
 			// Temporary RCPT error — abort and retry later.
-			log.Printf("[DELIVERY] ✗ RCPT TO <%s> → temp error (will retry): %v", rcpt, err)
+			e.logV("[DELIVERY] ✗ RCPT TO <%s> → temp error (will retry): %v", rcpt, err)
 			client.Quit()
 			return fmt.Errorf("RCPT TO <%s>: %w", rcpt, err)
 		}
@@ -1902,7 +1900,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 
 	if len(accepted) == 0 {
 		// Every recipient was permanently rejected — abort without sending DATA.
-		log.Printf("[DELIVERY] ✗ all %d recipient(s) hard-bounced during RCPT — session aborted, DATA not sent",
+		e.logV("[DELIVERY] ✗ all %d recipient(s) hard-bounced during RCPT — session aborted, DATA not sent",
 			len(rcpts))
 		client.Quit()
 		// Return the last bounce error so isPermanentSMTPError fires in the caller.
@@ -1930,7 +1928,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	e.logV("[DELIVERY]   DATA sent (%d bytes) to %d recipient(s) → ok", n, len(accepted))
 
 	if err := client.Quit(); err != nil {
-		log.Printf("[DELIVERY] ⚠ QUIT error (message was accepted): %v", err)
+		e.logV("[DELIVERY] ⚠ QUIT error (message was accepted): %v", err)
 	}
 	return nil
 }
