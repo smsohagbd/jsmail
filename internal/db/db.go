@@ -21,6 +21,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -1205,16 +1206,17 @@ func GetTodayYesterdayMonthAdmin() (today, yesterday, month int64) {
 	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", todayStr, "").First(&d).Error; err == nil {
 		today = d.Sent
 	} else {
-		DB.Model(&EmailLog{}).Where("sent_at >= ?", t).Count(&today)
+		// Fallback: count by created_at (queued/sent), not sent_at — matches DailyStats "sent" from LogQueued
+		DB.Model(&EmailLog{}).Where("created_at >= ?", t).Count(&today)
 	}
 	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", yesterdayStr, "").First(&d).Error; err == nil {
 		yesterday = d.Sent
 	} else {
-		DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ?", t.AddDate(0, 0, -1), t).Count(&yesterday)
+		DB.Model(&EmailLog{}).Where("created_at >= ? AND created_at < ?", t.AddDate(0, 0, -1), t).Count(&yesterday)
 	}
 	DB.Model(&DailyStats{}).Where("username = ? AND stat_date >= ?", "", monthStart).Select("COALESCE(SUM(sent),0)").Scan(&month)
 	if month == 0 {
-		DB.Model(&EmailLog{}).Where("sent_at >= ?", t.AddDate(0, -1, 0)).Count(&month)
+		DB.Model(&EmailLog{}).Where("created_at >= ?", t.AddDate(0, -1, 0)).Count(&month)
 	}
 	return today, yesterday, month
 }
@@ -1229,16 +1231,16 @@ func GetTodayYesterdayMonthUser(username string) (today, yesterday, month int64)
 	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", todayStr, username).First(&d).Error; err == nil {
 		today = d.Sent
 	} else {
-		DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ?", username, t).Count(&today)
+		DB.Model(&EmailLog{}).Where("username = ? AND created_at >= ?", username, t).Count(&today)
 	}
 	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", yesterdayStr, username).First(&d).Error; err == nil {
 		yesterday = d.Sent
 	} else {
-		DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ? AND sent_at < ?", username, t.AddDate(0, 0, -1), t).Count(&yesterday)
+		DB.Model(&EmailLog{}).Where("username = ? AND created_at >= ? AND created_at < ?", username, t.AddDate(0, 0, -1), t).Count(&yesterday)
 	}
 	DB.Model(&DailyStats{}).Where("username = ? AND stat_date >= ?", username, monthStart).Select("COALESCE(SUM(sent),0)").Scan(&month)
 	if month == 0 {
-		DB.Model(&EmailLog{}).Where("username = ? AND sent_at >= ?", username, t.AddDate(0, -1, 0)).Count(&month)
+		DB.Model(&EmailLog{}).Where("username = ? AND created_at >= ?", username, t.AddDate(0, -1, 0)).Count(&month)
 	}
 	return today, yesterday, month
 }
@@ -1272,37 +1274,39 @@ func GetDailyCountsAdmin(days int) (labels []string, delivered, bounced []int64)
 	return labels, delivered, bounced
 }
 
-// minuteBucketRow is one GROUP BY bucket from aggregated minute queries.
+// minuteBucketRow is one GROUP BY bucket from aggregated minute queries (lm = Unix minute id).
 type minuteBucketRow struct {
-	LM string `gorm:"column:lm"`
-	N  int64  `gorm:"column:n"`
+	LM int64 `gorm:"column:lm"`
+	N  int64 `gorm:"column:n"`
 }
 
 // GetLast60MinuteBuckets returns per-minute incoming (created) and outgoing (delivered) for the last 60 minutes.
-// Uses two aggregated queries instead of 120 COUNT scans so the admin dashboard stays fast with large email_logs.
+// Buckets by Unix minute so SQLite/MySQL match regardless of session timezone (wall-clock labels use local TZ).
 func GetLast60MinuteBuckets() (labels []string, incoming, outgoing []int64) {
+	if DB == nil {
+		return nil, nil, nil
+	}
 	now := time.Now()
 	since := now.Add(-60 * time.Minute).Truncate(time.Minute)
 	windowEnd := since.Add(60 * time.Minute)
+	baseMin := since.Unix() / 60
 
 	labels = make([]string, 60)
 	incoming = make([]int64, 60)
 	outgoing = make([]int64, 60)
-	keys := make([]string, 60)
-	for i := 0; i < 60; i++ {
-		bucketStart := since.Add(time.Duration(i) * time.Minute)
-		labels[i] = bucketStart.Format("15:04")
-		keys[i] = bucketStart.Format("2006-01-02 15:04")
-	}
+	inMap := make(map[int64]int64, 72)
+	outMap := make(map[int64]int64, 72)
 
-	inMap := make(map[string]int64, 72)
-	outMap := make(map[string]int64, 72)
+	for i := 0; i < 60; i++ {
+		bid := baseMin + int64(i)
+		labels[i] = time.Unix(bid*60, 0).In(time.Local).Format("15:04")
+	}
 
 	switch DB.Dialector.Name() {
 	case "sqlite":
 		var inRows, outRows []minuteBucketRow
 		DB.Raw(`
-			SELECT strftime('%Y-%m-%d %H:%M', created_at, 'localtime') AS lm, COUNT(*) AS n
+			SELECT (CAST(strftime('%s', created_at) AS INTEGER) / 60) AS lm, COUNT(*) AS n
 			FROM email_logs
 			WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL
 			GROUP BY lm
@@ -1311,9 +1315,9 @@ func GetLast60MinuteBuckets() (labels []string, incoming, outgoing []int64) {
 			inMap[r.LM] = r.N
 		}
 		DB.Raw(`
-			SELECT strftime('%Y-%m-%d %H:%M', sent_at, 'localtime') AS lm, COUNT(*) AS n
+			SELECT (CAST(strftime('%s', sent_at) AS INTEGER) / 60) AS lm, COUNT(*) AS n
 			FROM email_logs
-			WHERE status = ? AND sent_at >= ? AND sent_at < ? AND deleted_at IS NULL
+			WHERE status = ? AND sent_at IS NOT NULL AND sent_at >= ? AND sent_at < ? AND deleted_at IS NULL
 			GROUP BY lm
 		`, "delivered", since, windowEnd).Scan(&outRows)
 		for _, r := range outRows {
@@ -1322,19 +1326,19 @@ func GetLast60MinuteBuckets() (labels []string, incoming, outgoing []int64) {
 	case "mysql":
 		var inRows, outRows []minuteBucketRow
 		DB.Raw(`
-			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS lm, COUNT(*) AS n
+			SELECT FLOOR(UNIX_TIMESTAMP(created_at)/60) AS lm, COUNT(*) AS n
 			FROM email_logs
 			WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL
-			GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d %H:%i')
+			GROUP BY FLOOR(UNIX_TIMESTAMP(created_at)/60)
 		`, since, windowEnd).Scan(&inRows)
 		for _, r := range inRows {
 			inMap[r.LM] = r.N
 		}
 		DB.Raw(`
-			SELECT DATE_FORMAT(sent_at, '%Y-%m-%d %H:%i') AS lm, COUNT(*) AS n
+			SELECT FLOOR(UNIX_TIMESTAMP(sent_at)/60) AS lm, COUNT(*) AS n
 			FROM email_logs
-			WHERE status = ? AND sent_at >= ? AND sent_at < ? AND deleted_at IS NULL
-			GROUP BY DATE_FORMAT(sent_at, '%Y-%m-%d %H:%i')
+			WHERE status = ? AND sent_at IS NOT NULL AND sent_at >= ? AND sent_at < ? AND deleted_at IS NULL
+			GROUP BY FLOOR(UNIX_TIMESTAMP(sent_at)/60)
 		`, "delivered", since, windowEnd).Scan(&outRows)
 		for _, r := range outRows {
 			outMap[r.LM] = r.N
@@ -1344,14 +1348,15 @@ func GetLast60MinuteBuckets() (labels []string, incoming, outgoing []int64) {
 			bucketStart := since.Add(time.Duration(i) * time.Minute)
 			bucketEnd := bucketStart.Add(time.Minute)
 			DB.Model(&EmailLog{}).Where("created_at >= ? AND created_at < ?", bucketStart, bucketEnd).Count(&incoming[i])
-			DB.Model(&EmailLog{}).Where("status = ? AND sent_at >= ? AND sent_at < ?", "delivered", bucketStart, bucketEnd).Count(&outgoing[i])
+			DB.Model(&EmailLog{}).Where("status = ? AND sent_at IS NOT NULL AND sent_at >= ? AND sent_at < ?", "delivered", bucketStart, bucketEnd).Count(&outgoing[i])
 		}
 		return labels, incoming, outgoing
 	}
 
 	for i := 0; i < 60; i++ {
-		incoming[i] = inMap[keys[i]]
-		outgoing[i] = outMap[keys[i]]
+		bid := baseMin + int64(i)
+		incoming[i] = inMap[bid]
+		outgoing[i] = outMap[bid]
 	}
 	return labels, incoming, outgoing
 }
@@ -1410,9 +1415,15 @@ func recentDeliverySnapshot(username string) RecentDeliveryForLogs {
 		qLast = qLast.Where("username = ?", user)
 	}
 	var row EmailLog
-	if err := qLast.Order("sent_at DESC, id DESC").Limit(1).First(&row).Error; err == nil && !row.SentAt.IsZero() {
+	if err := qLast.Clauses(clause.OrderBy{
+		Expression: clause.Expr{SQL: "COALESCE(sent_at, created_at) DESC, id DESC"},
+	}).Limit(1).First(&row).Error; err == nil {
 		out.HasLast = true
-		out.LastSentAt = row.SentAt
+		ts := row.SentAt
+		if ts.IsZero() {
+			ts = row.CreatedAt
+		}
+		out.LastSentAt = ts
 		out.Status = row.Status
 	}
 	return out

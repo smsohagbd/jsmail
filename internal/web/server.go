@@ -154,6 +154,7 @@ func (s *Server) Start() {
 	}
 	mux.HandleFunc("/admin", webauth.RequireAdmin(ah.Dashboard))
 	mux.HandleFunc("/admin/dashboard/realtime", webauth.RequireAdmin(ah.DashboardRealtime))
+	mux.HandleFunc("/admin/reports/kpi", webauth.RequireAdmin(ah.ReportsKPI))
 	mux.HandleFunc("/admin/users", webauth.RequireAdmin(ah.Users))
 	mux.HandleFunc("/admin/users/create", webauth.RequireAdmin(ah.CreateUser))
 	mux.HandleFunc("/admin/users/update", webauth.RequireAdmin(ah.UpdateUser))
@@ -222,6 +223,7 @@ func (s *Server) Start() {
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer, ConfigSnapshot: s.cfg}
 	mux.HandleFunc("/user", webauth.RequireUser(uh.Dashboard))
+	mux.HandleFunc("/user/dashboard/stats", webauth.RequireUser(uh.DashboardStats))
 	mux.HandleFunc("/user/logs", webauth.RequireUser(uh.Logs))
 	mux.HandleFunc("/user/queue", webauth.RequireUser(uh.QueuePage))
 	mux.HandleFunc("/user/queue/delete", webauth.RequireUser(uh.DeleteQueueItem))
@@ -230,6 +232,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/verify/single", webauth.RequireUser(uh.VerifySingle))
 	mux.HandleFunc("/user/verify/bulk", webauth.RequireUser(uh.VerifyBulk))
 	mux.HandleFunc("/user/reports", webauth.RequireUser(uh.Reports))
+	mux.HandleFunc("/user/reports/kpi", webauth.RequireUser(uh.ReportsKPI))
 	mux.HandleFunc("/user/domains", webauth.RequireUser(uh.Domains))
 	mux.HandleFunc("/user/domains/add", webauth.RequireUser(uh.AddDomain))
 	mux.HandleFunc("/user/domains/delete", webauth.RequireUser(uh.DeleteDomain))

@@ -765,7 +765,10 @@ func normalizeOutboundMXPorts(in []string) []string {
 		out = append(out, p)
 	}
 	if len(out) == 0 {
-		return []string{"25", "587"}
+		// MTA-to-MTA is almost always port 25. Trying 587 second often doubles connect_timeout
+		// on Yahoo/AOL/ATT (*.yahoodns.net) and similar MX where 587 may blackhole or stall.
+		// Set delivery.outbound_mx_ports: ["25","587"] (or ["587","25"]) if your host blocks 25.
+		return []string{"25"}
 	}
 	return out
 }

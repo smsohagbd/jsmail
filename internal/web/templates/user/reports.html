@@ -12,33 +12,33 @@
 <div class="reports-kpi-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;">
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Total Sent</div>
-    <div class="reports-kpi-value" style="font-size:32px;font-weight:700;color:#e4e4e7;">{{.TotalSent}}</div>
+    <div class="reports-kpi-value" id="user-report-kpi-total-sent" style="font-size:32px;font-weight:700;color:#e4e4e7;">{{.TotalSent}}</div>
   </div>
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Delivered</div>
-    <div class="reports-kpi-value" style="font-size:32px;font-weight:700;color:#4ade80;">{{.Delivered}}</div>
+    <div class="reports-kpi-value" id="user-report-kpi-delivered" style="font-size:32px;font-weight:700;color:#4ade80;">{{.Delivered}}</div>
   </div>
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Hard Bounce</div>
-    <div class="reports-kpi-value" style="font-size:32px;font-weight:700;color:#f87171;">{{.HardBounce}}</div>
+    <div class="reports-kpi-value" id="user-report-kpi-hard-bounce" style="font-size:32px;font-weight:700;color:#f87171;">{{.HardBounce}}</div>
   </div>
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Soft Bounce / Deferred</div>
-    <div class="reports-kpi-value" style="font-size:32px;font-weight:700;color:#fbbf24;">{{.SoftBounce}}</div>
+    <div class="reports-kpi-value" id="user-report-kpi-soft-bounce" style="font-size:32px;font-weight:700;color:#fbbf24;">{{.SoftBounce}}</div>
   </div>
 </div>
 <div class="reports-kpi-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px;">
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Pending / Queued</div>
-    <div class="reports-kpi-value" style="font-size:32px;font-weight:700;color:#60a5fa;">{{.Queued}}</div>
+    <div class="reports-kpi-value" id="user-report-kpi-queued" style="font-size:32px;font-weight:700;color:#60a5fa;">{{.Queued}}</div>
   </div>
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Max Retries Exceeded</div>
-    <div class="reports-kpi-value" style="font-size:32px;font-weight:700;color:#a78bfa;">{{.Failed}}</div>
+    <div class="reports-kpi-value" id="user-report-kpi-failed" style="font-size:32px;font-weight:700;color:#a78bfa;">{{.Failed}}</div>
   </div>
   <div class="card" style="padding:20px;">
     <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Delivery Rate</div>
-    <div class="reports-kpi-value" style="font-size:32px;font-weight:700;color:#34d399;">{{printf "%.1f" .DeliveryRate}}%</div>
+    <div class="reports-kpi-value" id="user-report-kpi-delivery-rate" style="font-size:32px;font-weight:700;color:#34d399;">{{printf "%.1f" .DeliveryRate}}%</div>
   </div>
 </div>
 
@@ -49,15 +49,15 @@
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px;">
       <div>
         <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Campaign Emails Sent</div>
-        <div style="font-size:24px;font-weight:700;color:#e4e4e7;">{{.CampaignSent}}</div>
+        <div style="font-size:24px;font-weight:700;color:#e4e4e7;" id="user-report-campaign-sent">{{.CampaignSent}}</div>
       </div>
       <div>
         <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Opens</div>
-        <div style="font-size:24px;font-weight:700;color:#4ade80;">{{.CampaignOpens}}</div>
+        <div style="font-size:24px;font-weight:700;color:#4ade80;" id="user-report-campaign-opens">{{.CampaignOpens}}</div>
       </div>
       <div>
         <div style="font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;">Clicks</div>
-        <div style="font-size:24px;font-weight:700;color:#60a5fa;">{{.CampaignClicks}}</div>
+        <div style="font-size:24px;font-weight:700;color:#60a5fa;" id="user-report-campaign-clicks">{{.CampaignClicks}}</div>
       </div>
     </div>
     {{if .RecentCampaigns}}
@@ -135,6 +135,39 @@
         x: { stacked: false, ticks: { color: '#71717a', maxTicksLimit: 10 }, grid: { color: '#27272a' } },
         y: { beginAtZero: true, ticks: { color: '#71717a' }, grid: { color: '#27272a' } }
       }
+    }
+  });
+})();
+(function () {
+  function refreshKPI() {
+    fetch('/user/reports/kpi')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        document.getElementById('user-report-kpi-total-sent').textContent = d.total_sent;
+        document.getElementById('user-report-kpi-delivered').textContent = d.delivered;
+        document.getElementById('user-report-kpi-hard-bounce').textContent = d.hard_bounce;
+        document.getElementById('user-report-kpi-soft-bounce').textContent = d.soft_bounce;
+        document.getElementById('user-report-kpi-queued').textContent = d.queued;
+        document.getElementById('user-report-kpi-failed').textContent = d.failed;
+        document.getElementById('user-report-kpi-delivery-rate').textContent =
+          (typeof d.delivery_rate === 'number' ? d.delivery_rate.toFixed(1) : '0.0') + '%';
+        var cs = document.getElementById('user-report-campaign-sent');
+        var co = document.getElementById('user-report-campaign-opens');
+        var cc = document.getElementById('user-report-campaign-clicks');
+        if (cs) cs.textContent = d.campaign_sent;
+        if (co) co.textContent = d.campaign_opens;
+        if (cc) cc.textContent = d.campaign_clicks;
+      })
+      .catch(function () {});
+  }
+  var ms = 30000;
+  var iv = setInterval(refreshKPI, ms);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (iv) { clearInterval(iv); iv = null; }
+    } else if (!iv) {
+      refreshKPI();
+      iv = setInterval(refreshKPI, ms);
     }
   });
 })();

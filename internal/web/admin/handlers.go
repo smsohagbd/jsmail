@@ -144,16 +144,21 @@ func (h *Handler) DashboardRealtime(w http.ResponseWriter, r *http.Request) {
 	labels, incoming, outgoing := appdb.GetLast60MinuteBuckets()
 	today, yesterday, last7 := appdb.GetSummaryStats()
 	qStats := h.Queue.Stats()
+	var emailPending int64
+	h.DB.Model(&appdb.EmailLog{}).Where("status IN ?", []string{"queued", "deferred"}).Count(&emailPending)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"labels":       labels,
-		"incoming":     incoming,
-		"outgoing":     outgoing,
-		"today":        today,
-		"yesterday":    yesterday,
-		"last7":        last7,
-		"queue_pending": qStats.Pending,
-		"queue_deferred": qStats.Deferred,
+		"labels":           labels,
+		"incoming":         incoming,
+		"outgoing":         outgoing,
+		"today":            today,
+		"yesterday":        yesterday,
+		"last7":            last7,
+		"queue_pending":    qStats.Pending,
+		"queue_deferred":   qStats.Deferred,
+		"queue_inflight":   qStats.Inflight,
+		"queue_failed":     qStats.Failed,
+		"email_pending":    emailPending,
 	})
 }
 
@@ -724,6 +729,31 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 		"ChartDelivered":   string(deliveredJSON),
 		"ChartBounced":     string(bouncedJSON),
 		"RecentBounces":    recentBounces,
+	})
+}
+
+// ReportsKPI returns aggregate KPI numbers for live refresh on the reports page.
+func (h *Handler) ReportsKPI(w http.ResponseWriter, r *http.Request) {
+	s := appdb.GetAggregateStatsAdmin()
+	totalSent, delivered, hardBounce, failed, deferred, queued := s.Sent, s.Delivered, s.HardBounce, s.Failed, s.Deferred, s.Queued
+	softBounce := s.SoftBounce + s.Deferred
+	var bounceListTotal int64
+	h.DB.Model(&appdb.BounceList{}).Count(&bounceListTotal)
+	attempted := totalSent - queued - deferred
+	var deliveryRate float64
+	if attempted > 0 {
+		deliveryRate = float64(delivered) / float64(attempted) * 100
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_sent":        totalSent,
+		"delivered":         delivered,
+		"hard_bounce":       hardBounce,
+		"soft_bounce":       softBounce,
+		"queued":            queued,
+		"failed":            failed,
+		"delivery_rate":     deliveryRate,
+		"bounce_list_total": bounceListTotal,
 	})
 }
 

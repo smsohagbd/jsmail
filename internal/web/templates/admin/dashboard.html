@@ -10,7 +10,7 @@
 <div class="card" style="margin-bottom:24px;">
   <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
     <span class="card-title">Real-time — Last 60 Minutes</span>
-    <span style="font-size:11px;color:#52525b;" id="realtime-updated">Updating every 60s</span>
+    <span style="font-size:11px;color:#52525b;" id="realtime-updated">Updating every 30s</span>
   </div>
   <div class="card-body" style="padding-top:12px;">
     <canvas id="realtime-chart" height="80"></canvas>
@@ -73,7 +73,7 @@
       </div>
       <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #18181b;">
         <span style="font-size:13px;color:#a1a1aa;">In-flight</span>
-        <span style="font-size:14px;font-weight:600;color:#818cf8;">{{.QueueStats.Inflight}}</span>
+        <span style="font-size:14px;font-weight:600;color:#818cf8;" id="queue-inflight">{{.QueueStats.Inflight}}</span>
       </div>
       <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #18181b;">
         <span style="font-size:13px;color:#a1a1aa;">Deferred</span>
@@ -81,7 +81,7 @@
       </div>
       <div style="padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
         <span style="font-size:13px;color:#a1a1aa;">Failed</span>
-        <span style="font-size:14px;font-weight:600;color:#f87171;">{{.QueueStats.Failed}}</span>
+        <span style="font-size:14px;font-weight:600;color:#f87171;" id="queue-failed">{{.QueueStats.Failed}}</span>
       </div>
     </div>
   </div>
@@ -187,6 +187,11 @@ function fetchRealtime() {
       document.getElementById('stat-last7').textContent = d.last7;
       document.getElementById('queue-pending').textContent = d.queue_pending;
       document.getElementById('queue-deferred').textContent = d.queue_deferred;
+      document.getElementById('stat-pending').textContent = d.email_pending;
+      var qi = document.getElementById('queue-inflight');
+      if (qi) qi.textContent = d.queue_inflight;
+      var qf = document.getElementById('queue-failed');
+      if (qf) qf.textContent = d.queue_failed;
       document.getElementById('realtime-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     })
     .catch(function(){ document.getElementById('realtime-updated').textContent = 'Update failed'; });
@@ -194,8 +199,8 @@ function fetchRealtime() {
 
 // Initial data from server (no flash of empty chart)
 initRealtimeChart({{.RealtimeLabels}}, {{.RealtimeIncoming}}, {{.RealtimeOutgoing}});
-// Refresh every 60s; pause when tab hidden
-var rtMs = 60000;
+// Refresh every 30s; pause when tab hidden
+var rtMs = 30000;
 var rtIv = setInterval(fetchRealtime, rtMs);
 document.addEventListener('visibilitychange', function () {
   if (document.hidden) {

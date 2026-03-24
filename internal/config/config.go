@@ -98,8 +98,7 @@ type DeliveryConfig struct {
 	// domain. Only IP pool Admin limits (per-min, interval, etc.) apply when 0. When >0, mx_max_concurrent is auto-bumped
 	// to at least pool_size×this value (capped in engine) so per-MX limits do not undercut that parallelism.
 	PerOutboundIPConcurrent int `yaml:"per_outbound_ip_concurrent"`
-	// OutboundMXPorts: TCP ports tried per MX host in order (default 25 then 587). Use ["25"] if 587 always stalls on
-	// your network; Yahoo/AOL/ATT MX normally expect MTA traffic on 25.
+	// OutboundMXPorts: TCP ports tried per MX host in order (default [25] only). Add 587 if your network blocks 25.
 	OutboundMXPorts []string `yaml:"outbound_mx_ports"`
 	// OutboundDialNetwork: "tcp4" (default) or "tcp" to allow IPv4/IPv6 dual-stack when resolving MX hosts.
 	OutboundDialNetwork string `yaml:"outbound_dial_network"`

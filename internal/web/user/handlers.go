@@ -89,6 +89,22 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	}))
 }
 
+// DashboardStats returns JSON for the dashboard stat cards (poll from the browser).
+func (h *Handler) DashboardStats(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	totalToday, totalYesterday, totalMonth := appdb.GetTodayYesterdayMonthUser(claims.Username)
+	var pending int64
+	h.DB.Model(&appdb.EmailLog{}).Where("username = ? AND status IN ?",
+		claims.Username, []string{"queued", "deferred"}).Count(&pending)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_today":     totalToday,
+		"total_yesterday": totalYesterday,
+		"total_month":     totalMonth,
+		"pending":         pending,
+	})
+}
+
 // ──────────────────────────── Logs ───────────────────────────────────────────
 
 func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
@@ -721,6 +737,34 @@ func (h *Handler) Reports(w http.ResponseWriter, r *http.Request) {
 		"CampaignClicks":  campClicks,
 		"RecentCampaigns": recentCampaigns,
 	}))
+}
+
+// ReportsKPI returns aggregate KPI numbers for live refresh on the reports page.
+func (h *Handler) ReportsKPI(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	uname := claims.Username
+	s := appdb.GetAggregateStatsUser(uname)
+	totalSent, delivered, hardBounce, failed, deferred, queued := s.Sent, s.Delivered, s.HardBounce, s.Failed, s.Deferred, s.Queued
+	softBounce := s.SoftBounce + s.Deferred
+	attempted := totalSent - queued - deferred
+	var deliveryRate float64
+	if attempted > 0 {
+		deliveryRate = float64(delivered) / float64(attempted) * 100
+	}
+	campSent, campOpens, campClicks := appdb.GetCampaignStatsUser(uname)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_sent":       totalSent,
+		"delivered":        delivered,
+		"hard_bounce":      hardBounce,
+		"soft_bounce":      softBounce,
+		"queued":           queued,
+		"failed":           failed,
+		"delivery_rate":    deliveryRate,
+		"campaign_sent":    campSent,
+		"campaign_opens":   campOpens,
+		"campaign_clicks":  campClicks,
+	})
 }
 
 // ─────────────────────── Suppression list (user) ─────────────────────────────

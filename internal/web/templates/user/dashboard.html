@@ -15,19 +15,19 @@
 
 <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);">
   <div class="stat-card indigo">
-    <div class="stat-value">{{.TotalToday}}</div>
+    <div class="stat-value" id="user-stat-today">{{.TotalToday}}</div>
     <div class="stat-label">Sent Today</div>
   </div>
   <div class="stat-card green">
-    <div class="stat-value">{{.TotalYesterday}}</div>
+    <div class="stat-value" id="user-stat-yesterday">{{.TotalYesterday}}</div>
     <div class="stat-label">Yesterday</div>
   </div>
   <div class="stat-card blue">
-    <div class="stat-value">{{.TotalMonth}}</div>
+    <div class="stat-value" id="user-stat-month">{{.TotalMonth}}</div>
     <div class="stat-label">This Month</div>
   </div>
   <div class="stat-card amber">
-    <div class="stat-value">{{.Pending}}</div>
+    <div class="stat-value" id="user-stat-pending">{{.Pending}}</div>
     <div class="stat-label">Pending</div>
   </div>
 </div>
@@ -85,4 +85,29 @@
   </div>
 </div>
 </div>
+<script>
+(function () {
+  function refresh() {
+    fetch('/user/dashboard/stats')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        document.getElementById('user-stat-today').textContent = d.total_today;
+        document.getElementById('user-stat-yesterday').textContent = d.total_yesterday;
+        document.getElementById('user-stat-month').textContent = d.total_month;
+        document.getElementById('user-stat-pending').textContent = d.pending;
+      })
+      .catch(function () {});
+  }
+  var ms = 30000;
+  var iv = setInterval(refresh, ms);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (iv) { clearInterval(iv); iv = null; }
+    } else if (!iv) {
+      refresh();
+      iv = setInterval(refresh, ms);
+    }
+  });
+})();
+</script>
 {{end}}
