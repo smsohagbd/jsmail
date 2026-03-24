@@ -1361,26 +1361,24 @@ func GetLast60MinuteBuckets() (labels []string, incoming, outgoing []int64) {
 	return labels, incoming, outgoing
 }
 
-// GetSummaryStats returns today delivered, yesterday delivered, and last 7 days total delivered.
+// GetSummaryStats returns today delivered, yesterday delivered, and sum of delivered for the same
+// 7 calendar days as GetDailyCountsAdmin(7) / the dashboard chart (today through today-6).
+// Previously today/yesterday could come from DailyStats while "last 7" summed 8 days from a different
+// query, so cards disagreed with each other and with the chart.
 func GetSummaryStats() (today, yesterday, last7Days int64) {
-	t := time.Now().Truncate(24 * time.Hour)
-	todayStr := t.Format("2006-01-02")
-	yesterdayStr := t.AddDate(0, 0, -1).Format("2006-01-02")
-	var d DailyStats
-	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", todayStr, "").First(&d).Error; err == nil {
-		today = d.Delivered
-	} else {
-		DB.Model(&EmailLog{}).Where("sent_at >= ? AND status = ?", t, "delivered").Count(&today)
+	if DB == nil {
+		return 0, 0, 0
 	}
-	if err := DB.Model(&DailyStats{}).Where("stat_date = ? AND username = ?", yesterdayStr, "").First(&d).Error; err == nil {
-		yesterday = d.Delivered
-	} else {
-		DB.Model(&EmailLog{}).Where("sent_at >= ? AND sent_at < ? AND status = ?", t.AddDate(0, 0, -1), t, "delivered").Count(&yesterday)
-	}
-	sevenDaysAgo := t.AddDate(0, 0, -7)
-	DB.Model(&DailyStats{}).Where("username = ? AND stat_date >= ?", "", sevenDaysAgo.Format("2006-01-02")).Select("COALESCE(SUM(delivered),0)").Scan(&last7Days)
-	if last7Days == 0 {
-		DB.Model(&EmailLog{}).Where("sent_at >= ? AND status = ?", sevenDaysAgo, "delivered").Count(&last7Days)
+	_, delivered, _ := GetDailyCountsAdmin(7)
+	if n := len(delivered); n >= 2 {
+		today = delivered[n-1]
+		yesterday = delivered[n-2]
+		for _, v := range delivered {
+			last7Days += v
+		}
+	} else if n == 1 {
+		today = delivered[0]
+		last7Days = delivered[0]
 	}
 	return today, yesterday, last7Days
 }
