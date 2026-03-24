@@ -1002,11 +1002,28 @@ func (e *ipPoolLimitedError) Error() string {
 	return fmt.Sprintf("ip pool: all IPs rate-limited — retry in %v", e.waitFor)
 }
 
-// ipEffectiveLimits returns per-min/hour/day and interval for one outbound IP sending to recipient domain `domain`.
-// Priority: 1) Per-IP domain rule (exact match on domain), 2) Global master domain rule, 3) IP pool entry defaults.
-// IntervalSec is the minimum seconds between successive sends from this IP to this recipient domain (queue pacing).
-func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHour, perDay, intervalSec int) {
-	domain = strings.ToLower(domain)
+// ipPoolMasterSnap holds master IP-pool limits for one recipient domain without calling the DB.
+// Used so ipMu is never held across IPPoolMasterProvider / heavy work.
+type ipPoolMasterSnap struct {
+	perMin, perHour, perDay, intervalSec int
+	found                                bool
+}
+
+func (e *Engine) snapshotIPPoolMaster(domain string) ipPoolMasterSnap {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if e.IPPoolMasterProvider == nil {
+		return ipPoolMasterSnap{}
+	}
+	pm, ph, pd, iv, found := e.IPPoolMasterProvider(domain)
+	if !found {
+		return ipPoolMasterSnap{}
+	}
+	return ipPoolMasterSnap{pm, ph, pd, iv, true}
+}
+
+// ipEffectiveLimitsWithMaster resolves limits without calling IPPoolMasterProvider (use under ipMu).
+func (e *Engine) ipEffectiveLimitsWithMaster(entry *IPEntry, domain string, master ipPoolMasterSnap) (perMin, perHour, perDay, intervalSec int) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
 	for _, r := range entry.DomainRules {
 		if r.Domain == domain {
 			perMin, perHour, perDay = r.PerMin, r.PerHour, r.PerDay
@@ -1018,14 +1035,17 @@ func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHo
 			return
 		}
 	}
-	// No IP-specific domain rule — use master rule for this domain if it exists
-	if e.IPPoolMasterProvider != nil {
-		mPerMin, mPerHour, mPerDay, mInterval, found := e.IPPoolMasterProvider(domain)
-		if found {
-			return mPerMin, mPerHour, mPerDay, mInterval
-		}
+	if master.found {
+		return master.perMin, master.perHour, master.perDay, master.intervalSec
 	}
 	return entry.PerMin, entry.PerHour, entry.PerDay, entry.IntervalSec
+}
+
+// ipEffectiveLimits returns per-min/hour/day and interval for one outbound IP sending to recipient domain `domain`.
+// Priority: 1) Per-IP domain rule (exact match on domain), 2) Global master domain rule, 3) IP pool entry defaults.
+// Prefer snapshotIPPoolMaster + ipEffectiveLimitsWithMaster on hot paths to avoid DB under ipMu.
+func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHour, perDay, intervalSec int) {
+	return e.ipEffectiveLimitsWithMaster(entry, domain, e.snapshotIPPoolMaster(domain))
 }
 
 // nextOutboundIP selects the next available IP from the pool using round-robin.
@@ -1044,6 +1064,7 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 	}
 
 	domain = strings.ToLower(domain)
+	master := e.snapshotIPPoolMaster(domain)
 
 	e.ipMu.Lock()
 	defer e.ipMu.Unlock()
@@ -1053,7 +1074,7 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 
 	for i := 0; i < n; i++ {
 		entry := entries[(e.ipIdx+i)%n]
-		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(&entry, domain)
+		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimitsWithMaster(&entry, domain, master)
 
 		// Counter key: ip|domain for per-domain tracking
 		counterKey := entry.IP + "|" + domain
@@ -1122,7 +1143,7 @@ func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) 
 	foundWait := false
 	for i := range entries {
 		entry := &entries[i]
-		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(entry, domain)
+		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimitsWithMaster(entry, domain, master)
 		counterKey := entry.IP + "|" + domain
 		c, ok := e.ipCounters[counterKey]
 		if !ok {
@@ -1225,10 +1246,10 @@ func (e *Engine) getOrRollIPCounterUnderLock(ip, domain string, now time.Time) *
 }
 
 // ipDomainSendAllowedUnderLock is true if this IP may send to domain now (e.ipMu held; does not consume a slot).
-func (e *Engine) ipDomainSendAllowedUnderLock(entry *IPEntry, domain string, now time.Time) bool {
+func (e *Engine) ipDomainSendAllowedUnderLock(entry *IPEntry, domain string, now time.Time, master ipPoolMasterSnap) bool {
 	domain = strings.ToLower(domain)
 	c := e.getOrRollIPCounterUnderLock(entry.IP, domain, now)
-	perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(entry, domain)
+	perMin, perHour, perDay, intervalSec := e.ipEffectiveLimitsWithMaster(entry, domain, master)
 
 	effectivePerDay := perDay
 	if entry.WarmupPerDay > 0 {
@@ -1268,13 +1289,13 @@ func (e *Engine) reserveOutboundIPDomainUnderLock(entry *IPEntry, domain string,
 }
 
 // ipPoolLimitedErrWhenAllBusy computes defer duration when every IP is over limits (e.ipMu held).
-func (e *Engine) ipPoolLimitedErrWhenAllBusy(entries []IPEntry, domain string, now time.Time) error {
+func (e *Engine) ipPoolLimitedErrWhenAllBusy(entries []IPEntry, domain string, now time.Time, master ipPoolMasterSnap) error {
 	domain = strings.ToLower(domain)
 	minWait := 24 * time.Hour
 	foundWait := false
 	for i := range entries {
 		entry := &entries[i]
-		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(entry, domain)
+		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimitsWithMaster(entry, domain, master)
 		counterKey := entry.IP + "|" + domain
 		c, ok := e.ipCounters[counterKey]
 		if !ok {
@@ -1339,27 +1360,27 @@ func (e *Engine) claimOutboundIPForSMTP(domain string, traceID string) (ip, host
 	}
 outer:
 	for {
-		e.ipMu.Lock()
 		if e.IPPoolProvider == nil {
-			e.ipMu.Unlock()
 			return "", "", nil, nil
 		}
 		entries := e.IPPoolProvider()
 		n := len(entries)
 		if n == 0 {
-			e.ipMu.Unlock()
 			return "", "", nil, nil
 		}
+		master := e.snapshotIPPoolMaster(domain)
+
+		e.ipMu.Lock()
 		now := time.Now()
 		var cands []cand
 		for i := 0; i < n; i++ {
 			ent := entries[(e.ipIdx+i)%n]
-			if e.ipDomainSendAllowedUnderLock(&ent, domain, now) {
+			if e.ipDomainSendAllowedUnderLock(&ent, domain, now, master) {
 				cands = append(cands, cand{ent, i})
 			}
 		}
 		if len(cands) == 0 {
-			err := e.ipPoolLimitedErrWhenAllBusy(entries, domain, now)
+			err := e.ipPoolLimitedErrWhenAllBusy(entries, domain, now, master)
 			e.ipMu.Unlock()
 			return "", "", nil, err
 		}
@@ -1371,7 +1392,7 @@ outer:
 			}
 			e.ipMu.Lock()
 			now = time.Now()
-			if !e.ipDomainSendAllowedUnderLock(&ci.ent, domain, now) {
+			if !e.ipDomainSendAllowedUnderLock(&ci.ent, domain, now, master) {
 				e.returnOutboundIPTok(ci.ent.IP, domain)
 				e.ipMu.Unlock()
 				continue outer
@@ -1393,7 +1414,7 @@ outer:
 		e.takeOutboundIPTokBlocking(traceID, ci.ent.IP, domain)
 		e.ipMu.Lock()
 		now = time.Now()
-		if !e.ipDomainSendAllowedUnderLock(&ci.ent, domain, now) {
+		if !e.ipDomainSendAllowedUnderLock(&ci.ent, domain, now, master) {
 			e.returnOutboundIPTok(ci.ent.IP, domain)
 			e.ipMu.Unlock()
 			continue outer
