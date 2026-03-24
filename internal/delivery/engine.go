@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emersion/go-msgauth/dkim"
@@ -186,9 +187,14 @@ type Engine struct {
 	cooldownMu sync.Mutex
 	cooldowns  map[string]*domainCooldownEntry
 
-	// Per-MX-host connection semaphores (max 2 concurrent per host).
+	// Per-MX-host connection semaphores (capacity from delivery.mx_max_concurrent, default 2).
 	semMu sync.Mutex
 	sems  map[string]chan struct{}
+
+	// Per-(pool IP × recipient domain) SMTP slot tokens when delivery.per_outbound_ip_concurrent > 0.
+	outIPTokMu  sync.Mutex
+	outIPTokens map[string]chan struct{}
+	ipSlotFair  uint64 // rotate blocking wait across pool IPs
 
 	// IP pool rotation + per-IP rate limiting (all guarded by ipMu).
 	ipMu       sync.Mutex
@@ -212,6 +218,7 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 		queue:            q,
 		cooldowns:        make(map[string]*domainCooldownEntry),
 		sems:             make(map[string]chan struct{}),
+		outIPTokens:      make(map[string]chan struct{}),
 		ipCounters:       make(map[string]*ipCounter),
 		userRelayIdx:     make(map[string]int),
 		throttleCounters: make(map[string]*throttleCounter),
@@ -798,13 +805,53 @@ func (e *Engine) clearCooldown(domain string) {
 	delete(e.cooldowns, domain)
 }
 
+// mxSlotCap returns the per-MX-host concurrency limit (shared across all workers and source IPs).
+func (e *Engine) mxSlotCap() int {
+	n := e.cfg.MXMaxConcurrent
+	if n < 1 {
+		n = 2
+	}
+	if e.usePerOutboundPipeline() {
+		pool := e.IPPoolProvider()
+		need := len(pool) * e.perOutboundSMTPConnsPerIP()
+		if need > n {
+			n = need
+		}
+	}
+	const hardMax = 32
+	if n > hardMax {
+		return hardMax
+	}
+	return n
+}
+
+// perOutboundSMTPConnsPerIP is 0 when the per-(IP×domain) pipeline feature is off.
+func (e *Engine) perOutboundSMTPConnsPerIP() int {
+	n := e.cfg.PerOutboundIPConcurrent
+	if n < 1 {
+		return 0
+	}
+	const hardMax = 16
+	if n > hardMax {
+		return hardMax
+	}
+	return n
+}
+
+func (e *Engine) usePerOutboundPipeline() bool {
+	if e.perOutboundSMTPConnsPerIP() < 1 || e.IPPoolProvider == nil {
+		return false
+	}
+	return len(e.IPPoolProvider()) > 0
+}
+
 // acquireMXSlot blocks until a connection slot is available for the MX host.
-// Max 2 concurrent connections per MX host (Yahoo/AOL requirement).
 func (e *Engine) acquireMXSlot(mxHost string) {
+	capacity := e.mxSlotCap()
 	e.semMu.Lock()
 	sem, ok := e.sems[mxHost]
 	if !ok {
-		sem = make(chan struct{}, 2) // max 2 concurrent per MX
+		sem = make(chan struct{}, capacity)
 		e.sems[mxHost] = sem
 	}
 	e.semMu.Unlock()
@@ -816,6 +863,51 @@ func (e *Engine) releaseMXSlot(mxHost string) {
 	sem := e.sems[mxHost]
 	e.semMu.Unlock()
 	<-sem
+}
+
+// outboundIPTokMapKey identifies one concurrency bucket: outbound pool IP + recipient domain (e.g. gmail.com).
+func outboundIPTokMapKey(ip, rcptDomain string) string {
+	return ip + "\x1e" + strings.ToLower(strings.TrimSpace(rcptDomain))
+}
+
+// outboundIPTokChan returns the token channel for (pool IP × recipient domain): N tokens = up to N concurrent
+// SMTP sessions from that IP to that domain only. Other domains for the same IP use different channels.
+func (e *Engine) outboundIPTokChan(ip, rcptDomain string) chan struct{} {
+	capN := e.perOutboundSMTPConnsPerIP()
+	key := outboundIPTokMapKey(ip, rcptDomain)
+	e.outIPTokMu.Lock()
+	defer e.outIPTokMu.Unlock()
+	ch, ok := e.outIPTokens[key]
+	if !ok {
+		ch = make(chan struct{}, capN)
+		for i := 0; i < capN; i++ {
+			ch <- struct{}{}
+		}
+		e.outIPTokens[key] = ch
+	}
+	return ch
+}
+
+func (e *Engine) tryTakeOutboundIPTok(ip, rcptDomain string) bool {
+	select {
+	case <-e.outboundIPTokChan(ip, rcptDomain):
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) takeOutboundIPTokBlocking(traceID, ip, rcptDomain string) {
+	e.tracePhase(traceID, "waiting_outbound_ip_slot", fmt.Sprintf("%s → %s", ip, strings.ToLower(strings.TrimSpace(rcptDomain))))
+	<-e.outboundIPTokChan(ip, rcptDomain)
+}
+
+func (e *Engine) returnOutboundIPTok(ip, rcptDomain string) {
+	select {
+	case e.outboundIPTokChan(ip, rcptDomain) <- struct{}{}:
+	default:
+		log.Printf("[IPPOOL] ⚠ outbound IP×domain token imbalance for %s → %s", ip, rcptDomain)
+	}
 }
 
 // deliverToDomain attempts delivery to a domain, returning the successful MX host on success.
@@ -851,8 +943,8 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 		for _, port := range deliveryPorts {
 			e.logV("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
 
-			// Respect per-MX connection limit (blocks when >2 in use to same MX host).
-			e.tracePhase(traceID, "waiting_mx_semaphore", fmt.Sprintf("%s:%s (max 2 concurrent)", mx.Host, port))
+			// Respect per-MX connection limit (blocks when all slots to same MX host are in use).
+			e.tracePhase(traceID, "waiting_mx_semaphore", fmt.Sprintf("%s:%s (max %d concurrent)", mx.Host, port, e.mxSlotCap()))
 			e.acquireMXSlot(mx.Host)
 			e.tracePhase(traceID, "smtp_connect_send", fmt.Sprintf("%s:%s", mx.Host, port))
 			mxErr := e.sendToMX(from, domain, mx.Host, port, rcpts, data, onRcptBounce, traceID)
@@ -1105,6 +1197,220 @@ func (e *Engine) undoIPCount(ip, domain string) {
 	}
 }
 
+// getOrRollIPCounterUnderLock returns the rolling counter for ip|domain (e.ipMu held).
+func (e *Engine) getOrRollIPCounterUnderLock(ip, domain string, now time.Time) *ipCounter {
+	key := ip + "|" + domain
+	c, ok := e.ipCounters[key]
+	if !ok {
+		c = &ipCounter{
+			minReset:  now.Add(time.Minute),
+			hourReset: now.Add(time.Hour),
+			dayReset:  now.Add(24 * time.Hour),
+		}
+		e.ipCounters[key] = c
+	}
+	if now.After(c.minReset) {
+		c.minCount = 0
+		c.minReset = now.Add(time.Minute)
+	}
+	if now.After(c.hourReset) {
+		c.hourCount = 0
+		c.hourReset = now.Add(time.Hour)
+	}
+	if now.After(c.dayReset) {
+		c.dayCount = 0
+		c.dayReset = now.Add(24 * time.Hour)
+	}
+	return c
+}
+
+// ipDomainSendAllowedUnderLock is true if this IP may send to domain now (e.ipMu held; does not consume a slot).
+func (e *Engine) ipDomainSendAllowedUnderLock(entry *IPEntry, domain string, now time.Time) bool {
+	domain = strings.ToLower(domain)
+	c := e.getOrRollIPCounterUnderLock(entry.IP, domain, now)
+	perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(entry, domain)
+
+	effectivePerDay := perDay
+	if entry.WarmupPerDay > 0 {
+		effectivePerDay = entry.WarmupPerDay
+		if perDay > 0 && perDay < effectivePerDay {
+			effectivePerDay = perDay
+		}
+	}
+
+	if intervalSec > 0 && !c.lastSendAt.IsZero() {
+		elapsed := time.Since(c.lastSendAt).Seconds()
+		if elapsed < float64(intervalSec) {
+			return false
+		}
+	}
+	if perMin > 0 && c.minCount >= perMin {
+		return false
+	}
+	if perHour > 0 && c.hourCount >= perHour {
+		return false
+	}
+	if effectivePerDay > 0 && c.dayCount >= effectivePerDay {
+		return false
+	}
+	return true
+}
+
+// reserveOutboundIPDomainUnderLock consumes one rate slot and advances ipIdx (e.ipMu held).
+func (e *Engine) reserveOutboundIPDomainUnderLock(entry *IPEntry, domain string, now time.Time, rotateOffset, poolLen int) {
+	domain = strings.ToLower(domain)
+	c := e.getOrRollIPCounterUnderLock(entry.IP, domain, now)
+	c.minCount++
+	c.hourCount++
+	c.dayCount++
+	c.lastSendAt = now
+	e.ipIdx = (e.ipIdx + rotateOffset + 1) % poolLen
+}
+
+// ipPoolLimitedErrWhenAllBusy computes defer duration when every IP is over limits (e.ipMu held).
+func (e *Engine) ipPoolLimitedErrWhenAllBusy(entries []IPEntry, domain string, now time.Time) error {
+	domain = strings.ToLower(domain)
+	minWait := 24 * time.Hour
+	foundWait := false
+	for i := range entries {
+		entry := &entries[i]
+		perMin, perHour, perDay, intervalSec := e.ipEffectiveLimits(entry, domain)
+		counterKey := entry.IP + "|" + domain
+		c, ok := e.ipCounters[counterKey]
+		if !ok {
+			continue
+		}
+		if intervalSec > 0 && !c.lastSendAt.IsZero() {
+			elapsed := time.Since(c.lastSendAt).Seconds()
+			if elapsed < float64(intervalSec) {
+				w := time.Duration(intervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
+				if w > 0 {
+					foundWait = true
+					if w < minWait {
+						minWait = w
+					}
+				}
+			}
+		}
+		if perMin > 0 && c.minCount >= perMin {
+			if w := time.Until(c.minReset); w > 0 {
+				foundWait = true
+				if w < minWait {
+					minWait = w
+				}
+			}
+		}
+		if perHour > 0 && c.hourCount >= perHour {
+			if w := time.Until(c.hourReset); w > 0 {
+				foundWait = true
+				if w < minWait {
+					minWait = w
+				}
+			}
+		}
+		if perDay > 0 && c.dayCount >= perDay {
+			if w := time.Until(c.dayReset); w > 0 {
+				foundWait = true
+				if w < minWait {
+					minWait = w
+				}
+			}
+		}
+	}
+	if !foundWait || minWait <= 0 {
+		if e.ipPoolMinDefer > 0 {
+			minWait = e.ipPoolMinDefer
+		} else {
+			minWait = 250 * time.Millisecond
+		}
+	}
+	minWait = e.finalizeIPPoolDeferWait(minWait)
+	e.logV("[IPPOOL] ⏳ all pool IPs rate-limited — defer ~%v (slot from domain/IP limits + small jitter)",
+		minWait.Round(time.Millisecond))
+	return &ipPoolLimitedError{waitFor: minWait}
+}
+
+// claimOutboundIPForSMTP takes a (pool IP × recipient domain) SMTP slot, then reserves IP-pool rate limits for that domain.
+func (e *Engine) claimOutboundIPForSMTP(domain string, traceID string) (ip, hostname string, release func(), err error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	type cand struct {
+		ent IPEntry
+		off int
+	}
+outer:
+	for {
+		e.ipMu.Lock()
+		if e.IPPoolProvider == nil {
+			e.ipMu.Unlock()
+			return "", "", nil, nil
+		}
+		entries := e.IPPoolProvider()
+		n := len(entries)
+		if n == 0 {
+			e.ipMu.Unlock()
+			return "", "", nil, nil
+		}
+		now := time.Now()
+		var cands []cand
+		for i := 0; i < n; i++ {
+			ent := entries[(e.ipIdx+i)%n]
+			if e.ipDomainSendAllowedUnderLock(&ent, domain, now) {
+				cands = append(cands, cand{ent, i})
+			}
+		}
+		if len(cands) == 0 {
+			err := e.ipPoolLimitedErrWhenAllBusy(entries, domain, now)
+			e.ipMu.Unlock()
+			return "", "", nil, err
+		}
+		e.ipMu.Unlock()
+
+		for _, ci := range cands {
+			if !e.tryTakeOutboundIPTok(ci.ent.IP, domain) {
+				continue
+			}
+			e.ipMu.Lock()
+			now = time.Now()
+			if !e.ipDomainSendAllowedUnderLock(&ci.ent, domain, now) {
+				e.returnOutboundIPTok(ci.ent.IP, domain)
+				e.ipMu.Unlock()
+				continue outer
+			}
+			e.reserveOutboundIPDomainUnderLock(&ci.ent, domain, now, ci.off, n)
+			ip := ci.ent.IP
+			host := ci.ent.Hostname
+			e.ipMu.Unlock()
+			d := domain
+			var once sync.Once
+			release = func() {
+				once.Do(func() { e.returnOutboundIPTok(ip, d) })
+			}
+			return ip, host, release, nil
+		}
+
+		fi := int(atomic.AddUint64(&e.ipSlotFair, 1)) % len(cands)
+		ci := cands[fi]
+		e.takeOutboundIPTokBlocking(traceID, ci.ent.IP, domain)
+		e.ipMu.Lock()
+		now = time.Now()
+		if !e.ipDomainSendAllowedUnderLock(&ci.ent, domain, now) {
+			e.returnOutboundIPTok(ci.ent.IP, domain)
+			e.ipMu.Unlock()
+			continue outer
+		}
+		e.reserveOutboundIPDomainUnderLock(&ci.ent, domain, now, ci.off, n)
+		ip := ci.ent.IP
+		host := ci.ent.Hostname
+		e.ipMu.Unlock()
+		d := domain
+		var once sync.Once
+		release = func() {
+			once.Do(func() { e.returnOutboundIPTok(ip, d) })
+		}
+		return ip, host, release, nil
+	}
+}
+
 // checkThrottle checks whether the user is within rate limits for the given domain.
 // Returns ("", 0) if allowed, or (reason, retryAfter) if throttled.
 // Also increments counters when allowed (consume = true).
@@ -1276,14 +1582,30 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	e.tracePhase(traceID, "outbound_ip_pick", domain)
 	e.logV("[DELIVERY]   connecting to %s …", addr)
 
+	var releaseIPTok func()
+	defer func() {
+		if releaseIPTok != nil {
+			releaseIPTok()
+		}
+	}()
+
 	var conn net.Conn
 	var err error
 
-	outIP, outHostname, ipErr := e.nextOutboundIP(domain)
-	if ipErr != nil {
-		e.tracePhase(traceID, "ip_pool_all_busy", ipErr.Error())
-		// Pool is active but ALL IPs are rate-limited — signal the caller to defer.
-		return ipErr
+	var outIP, outHostname string
+	var ipErr error
+	if e.usePerOutboundPipeline() {
+		outIP, outHostname, releaseIPTok, ipErr = e.claimOutboundIPForSMTP(domain, traceID)
+		if ipErr != nil {
+			e.tracePhase(traceID, "ip_pool_all_busy", ipErr.Error())
+			return ipErr
+		}
+	} else {
+		outIP, outHostname, ipErr = e.nextOutboundIP(domain)
+		if ipErr != nil {
+			e.tracePhase(traceID, "ip_pool_all_busy", ipErr.Error())
+			return ipErr
+		}
 	}
 	usedPoolIP := false
 	if outIP != "" {
@@ -1298,6 +1620,10 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			// Binding to this pool IP failed (not assigned to interface or OS error).
 			// Undo the reservation so the counter stays accurate, then fall back.
 			e.undoIPCount(outIP, domain)
+			if releaseIPTok != nil {
+				releaseIPTok()
+				releaseIPTok = nil
+			}
 			log.Printf("[IPPOOL] ✗ bind to %s FAILED: %v", outIP, err)
 			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")

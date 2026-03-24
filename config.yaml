@@ -13,6 +13,8 @@ smtp:
 
 delivery:
   workers: 50
+  mx_max_concurrent: 8   # per destination MX hostname; raised automatically if per_outbound_ip_concurrent > 0 (see below).
+  per_outbound_ip_concurrent: 0   # 0=off — only IP pool Admin limits + mx cap (parallel Gmail/Yahoo/… from same IP OK). >0 = cap live SMTP per (pool IP × rcpt domain), e.g. 1 ⇒ one session per IP to gmail.com but same IP can still hit yahoo.com at the same time.
   # queue_channel_size: 512   # optional; 0=auto max(64, workers×4), hard max 16000. In-flight ≈ workers + this buffer (not a fixed 500).
   # ip_pool_min_defer: "2s"   # optional; only if pool busy AND slot time can’t be computed (rare). Omit or 0 = no extra seconds — pacing follows domain Min. interval only.
   max_retries: 1

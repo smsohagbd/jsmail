@@ -89,6 +89,15 @@ type DeliveryConfig struct {
 	// (Admin → Domains key first, else delivery.dkim if domain matches). Strips existing DKIM-Signature headers
 	// from the message first so upstream (first server) signatures are replaced. Leave empty to use From: domain only.
 	OutboundDKIMDomain string `yaml:"outbound_dkim_domain"`
+	// MXMaxConcurrent caps simultaneous SMTP connections to the same MX hostname (all source IPs share this).
+	// 0 = default 2 (conservative; some providers penalize many parallel sessions to one MX). Raise for Gmail-heavy
+	// queues if you have many outbound IPs and accept provider-specific risk.
+	MXMaxConcurrent int `yaml:"mx_max_concurrent"`
+	// PerOutboundIPConcurrent: max live SMTP sessions per (pool IP × recipient domain), e.g. gmail.com (0 = off).
+	// When 1, the same IP can still talk to Yahoo and Hotmail at the same time as Gmail — separate slot per destination
+	// domain. Only IP pool Admin limits (per-min, interval, etc.) apply when 0. When >0, mx_max_concurrent is auto-bumped
+	// to at least pool_size×this value (capped in engine) so per-MX limits do not undercut that parallelism.
+	PerOutboundIPConcurrent int `yaml:"per_outbound_ip_concurrent"`
 }
 
 type DKIMConfig struct {
@@ -148,6 +157,12 @@ func applyDefaults(cfg *Config) {
 	// QueueChannelSize 0 = auto (applied in delivery engine)
 	if cfg.Delivery.MaxRetries == 0 {
 		cfg.Delivery.MaxRetries = 5
+	}
+	if cfg.Delivery.MXMaxConcurrent == 0 {
+		cfg.Delivery.MXMaxConcurrent = 2
+	}
+	if cfg.Delivery.PerOutboundIPConcurrent < 0 {
+		cfg.Delivery.PerOutboundIPConcurrent = 0
 	}
 	if cfg.Delivery.RetryInterval == "" {
 		cfg.Delivery.RetryInterval = "5m"
