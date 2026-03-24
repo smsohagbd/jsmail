@@ -71,7 +71,9 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		claims.Username, []string{"queued", "deferred"}).Count(&pending)
 
 	var recentLogs []appdb.EmailLog
-	h.DB.Where("username = ?", claims.Username).Order("created_at desc").Limit(10).Find(&recentLogs)
+	h.DB.Where("username = ?", claims.Username).
+		Where("status NOT IN ?", []string{"queued", "deferred"}).
+		Order("created_at desc").Limit(10).Find(&recentLogs)
 
 	var user appdb.User
 	h.DB.Where("username = ?", claims.Username).First(&user)
@@ -91,7 +93,8 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
-	q := h.DB.Model(&appdb.EmailLog{}).Where("username = ?", claims.Username)
+	q := h.DB.Model(&appdb.EmailLog{}).Where("username = ?", claims.Username).
+		Where("status NOT IN ?", []string{"queued", "deferred"})
 	q, dateLabel := applyFilters(q, r)
 
 	if search := r.URL.Query().Get("search"); search != "" {
@@ -114,13 +117,14 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	q.Order("created_at desc").Offset((page - 1) * perPage).Limit(perPage).Find(&logs)
 
 	h.Tmpl.Render(w, "user/logs", merge(h.base(claims.Username), map[string]interface{}{
-		"Page":      "logs",
-		"Logs":      logs,
-		"Total":     total,
-		"PageNum":   page,
-		"PerPage":   perPage,
-		"DateLabel": dateLabel,
-		"Query":     flatQuery(r.URL.Query()),
+		"Page":           "logs",
+		"Logs":           logs,
+		"Total":          total,
+		"PageNum":        page,
+		"PerPage":        perPage,
+		"DateLabel":      dateLabel,
+		"Query":          flatQuery(r.URL.Query()),
+		"RecentDelivery": appdb.RecentDeliverySnapshotUser(claims.Username),
 	}))
 }
 

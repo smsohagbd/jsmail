@@ -104,9 +104,10 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	labelsJSON, _ := json.Marshal(labels)
 	countsJSON, _ := json.Marshal(delivered)
 
-	// Recent logs
+	// Recent logs (exclude queue — same as Send Logs)
 	var recentLogs []appdb.EmailLog
-	h.DB.Order("created_at desc").Limit(10).Find(&recentLogs)
+	h.DB.Where("status NOT IN ?", []string{"queued", "deferred"}).
+		Order("created_at desc").Limit(10).Find(&recentLogs)
 
 	qStats := h.Queue.Stats()
 
@@ -260,15 +261,15 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	tab := r.URL.Query().Get("tab") // "" | "bounces"
 
-	// ── Send Logs tab ────────────────────────────────────────────────────────
-	q := h.DB.Model(&appdb.EmailLog{})
+	// ── Send Logs tab (exclude queue rows — pending/deferred live under Queue) ─
+	q := h.DB.Model(&appdb.EmailLog{}).Where("status NOT IN ?", []string{"queued", "deferred"})
 	q, dateLabel := applyLogFilters(q, r)
 
-	if search := r.URL.Query().Get("search"); search != "" {
+	if search := strings.TrimSpace(r.URL.Query().Get("search")); search != "" {
 		like := "%" + search + "%"
 		q = q.Where(`"from" LIKE ? OR recipient LIKE ? OR username LIKE ?`, like, like, like)
 	}
-	if status := r.URL.Query().Get("status"); status != "" {
+	if status := strings.TrimSpace(r.URL.Query().Get("status")); status != "" {
 		q = q.Where("status = ?", status)
 	}
 
@@ -299,20 +300,21 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	bq.Order("last_seen_at desc").Offset((bouncePage - 1) * perPage).Limit(perPage).Find(&bounces)
 
 	h.Tmpl.Render(w, "admin/logs", map[string]interface{}{
-		"Page":         "logs",
-		"ActiveUser":   claims.Username,
-		"Tab":          tab,
-		"Logs":         logs,
-		"Total":        total,
-		"PageNum":      page,
-		"PerPage":      perPage,
-		"DateLabel":    dateLabel,
-		"Query":        flatQuery(r.URL.Query()),
-		"Bounces":      bounces,
-		"BounceTotal":  bounceTotal,
-		"BouncePage":   bouncePage,
-		"BounceSearch": bounceSearch,
-		"FlashOK":      r.URL.Query().Get("ok"),
+		"Page":            "logs",
+		"ActiveUser":      claims.Username,
+		"Tab":             tab,
+		"Logs":            logs,
+		"Total":           total,
+		"PageNum":         page,
+		"PerPage":         perPage,
+		"DateLabel":       dateLabel,
+		"Query":           flatQuery(r.URL.Query()),
+		"Bounces":         bounces,
+		"BounceTotal":     bounceTotal,
+		"BouncePage":      bouncePage,
+		"BounceSearch":    bounceSearch,
+		"FlashOK":         r.URL.Query().Get("ok"),
+		"RecentDelivery":  appdb.RecentDeliverySnapshotAdmin(),
 	})
 }
 
@@ -329,24 +331,32 @@ func (h *Handler) DeleteLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		h.DB.Delete(&appdb.EmailLog{}, id)
 	} else {
-		// Collect message IDs that are still in-flight before deleting.
-		var pending []appdb.EmailLog
-		pq := h.DB.Model(&appdb.EmailLog{}).Where("status IN ?", []string{"queued", "deferred"})
-		pq, _ = applyLogFilters(pq, r)
-		pq.Find(&pending)
-		for _, l := range pending {
-			h.Queue.CancelByMessageID(l.MessageID)
-		}
-		q := h.DB.Model(&appdb.EmailLog{})
+		// Match send-log list only (no queued/deferred — use Queue page to manage those).
+		q := h.DB.Model(&appdb.EmailLog{}).Where("status NOT IN ?", []string{"queued", "deferred"})
 		q, _ = applyLogFilters(q, r)
+		if search := strings.TrimSpace(logPageParam(r, "search")); search != "" {
+			like := "%" + search + "%"
+			q = q.Where(`"from" LIKE ? OR recipient LIKE ? OR username LIKE ?`, like, like, like)
+		}
+		if status := strings.TrimSpace(logPageParam(r, "status")); status != "" {
+			q = q.Where("status = ?", status)
+		}
 		q.Delete(&appdb.EmailLog{})
 	}
 	http.Redirect(w, r, r.Header.Get("Referer"), http.StatusFound)
 }
 
+// logPageParam reads filter fields from POST (delete) or GET (logs list).
+func logPageParam(r *http.Request, key string) string {
+	if r.Method == http.MethodPost {
+		return strings.TrimSpace(r.FormValue(key))
+	}
+	return strings.TrimSpace(r.URL.Query().Get(key))
+}
+
 func applyLogFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 	today := time.Now().Truncate(24 * time.Hour)
-	rangeParam := r.URL.Query().Get("range")
+	rangeParam := logPageParam(r, "range")
 	switch rangeParam {
 	case "today":
 		return q.Where("sent_at >= ?", today), "Today"
@@ -357,8 +367,8 @@ func applyLogFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 	case "30days":
 		return q.Where("sent_at >= ?", today.AddDate(0, -1, 0)), "Last 30 Days"
 	case "custom":
-		from := r.URL.Query().Get("from_date")
-		to := r.URL.Query().Get("to_date")
+		from := logPageParam(r, "from_date")
+		to := logPageParam(r, "to_date")
 		if from != "" && to != "" {
 			fromT, _ := time.Parse("2006-01-02", from)
 			toT, _ := time.Parse("2006-01-02", to)
@@ -461,6 +471,10 @@ func (h *Handler) QueueTracesNDJSON(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) QueueInflightPage(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	max, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	// Heal stale disk inflight before listing so the page matches reality without waiting for the 30s ticker.
+	if n := h.Queue.RepairOrphanInflightFiles(); n > 0 {
+		log.Printf("admin inflight inspector: repaired %d orphan inflight file(s)", n)
+	}
 	rows := h.Queue.ListInflightMessages(max)
 	qs := h.Queue.Stats()
 	workQ, workCap := 0, 0

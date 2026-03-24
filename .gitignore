@@ -1,6 +1,3 @@
-# Config with secrets — use config.yaml.example as template
-config.yaml
-
 # SQLite database
 *.db
 
@@ -11,3 +8,6 @@ smtp-server.exe
 # Queue and temp files
 queue/
 *.log
+
+# Avoid a literal "..." directory (breaks `git add .` on Windows if created by mistake)
+.../

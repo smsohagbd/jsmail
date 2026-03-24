@@ -10,7 +10,7 @@
 <div class="card" style="margin-bottom:24px;">
   <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
     <span class="card-title">Real-time — Last 60 Minutes</span>
-    <span style="font-size:11px;color:#52525b;" id="realtime-updated">Updating every 30s</span>
+    <span style="font-size:11px;color:#52525b;" id="realtime-updated">Updating every 60s</span>
   </div>
   <div class="card-body" style="padding-top:12px;">
     <canvas id="realtime-chart" height="80"></canvas>
@@ -90,7 +90,10 @@
 <!-- Recent logs -->
 <div class="card">
   <div class="card-header">
-    <span class="card-title">Recent Activity</span>
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <span class="card-title">Recent Activity</span>
+      <span style="font-size:11px;color:#52525b;">excludes queue</span>
+    </div>
     <a href="/admin/logs" style="font-size:12px;color:#818cf8;text-decoration:none;">View all →</a>
   </div>
   <div style="overflow-x:auto;">
@@ -191,7 +194,16 @@ function fetchRealtime() {
 
 // Initial data from server (no flash of empty chart)
 initRealtimeChart({{.RealtimeLabels}}, {{.RealtimeIncoming}}, {{.RealtimeOutgoing}});
-// Refresh every 30s
-setInterval(fetchRealtime, 30000);
+// Refresh every 60s; pause when tab hidden
+var rtMs = 60000;
+var rtIv = setInterval(fetchRealtime, rtMs);
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) {
+    if (rtIv) { clearInterval(rtIv); rtIv = null; }
+  } else if (!rtIv) {
+    fetchRealtime();
+    rtIv = setInterval(fetchRealtime, rtMs);
+  }
+});
 </script>
 {{end}}

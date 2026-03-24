@@ -1266,21 +1266,86 @@ func GetDailyCountsAdmin(days int) (labels []string, delivered, bounced []int64)
 	return labels, delivered, bounced
 }
 
-// GetLast60MinuteBuckets returns per-minute incoming (queued) and outgoing (delivered) for the last 60 minutes.
-// Labels are like "14:32", incoming/outgoing are counts per minute.
+// minuteBucketRow is one GROUP BY bucket from aggregated minute queries.
+type minuteBucketRow struct {
+	LM string `gorm:"column:lm"`
+	N  int64  `gorm:"column:n"`
+}
+
+// GetLast60MinuteBuckets returns per-minute incoming (created) and outgoing (delivered) for the last 60 minutes.
+// Uses two aggregated queries instead of 120 COUNT scans so the admin dashboard stays fast with large email_logs.
 func GetLast60MinuteBuckets() (labels []string, incoming, outgoing []int64) {
 	now := time.Now()
+	since := now.Add(-60 * time.Minute).Truncate(time.Minute)
+	windowEnd := since.Add(60 * time.Minute)
+
 	labels = make([]string, 60)
 	incoming = make([]int64, 60)
 	outgoing = make([]int64, 60)
-	since := now.Add(-60 * time.Minute).Truncate(time.Minute)
-
+	keys := make([]string, 60)
 	for i := 0; i < 60; i++ {
 		bucketStart := since.Add(time.Duration(i) * time.Minute)
-		bucketEnd := bucketStart.Add(time.Minute)
 		labels[i] = bucketStart.Format("15:04")
-		DB.Model(&EmailLog{}).Where("created_at >= ? AND created_at < ?", bucketStart, bucketEnd).Count(&incoming[i])
-		DB.Model(&EmailLog{}).Where("status = ? AND sent_at >= ? AND sent_at < ?", "delivered", bucketStart, bucketEnd).Count(&outgoing[i])
+		keys[i] = bucketStart.Format("2006-01-02 15:04")
+	}
+
+	inMap := make(map[string]int64, 72)
+	outMap := make(map[string]int64, 72)
+
+	switch DB.Dialector.Name() {
+	case "sqlite":
+		var inRows, outRows []minuteBucketRow
+		DB.Raw(`
+			SELECT strftime('%Y-%m-%d %H:%M', created_at, 'localtime') AS lm, COUNT(*) AS n
+			FROM email_logs
+			WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL
+			GROUP BY lm
+		`, since, windowEnd).Scan(&inRows)
+		for _, r := range inRows {
+			inMap[r.LM] = r.N
+		}
+		DB.Raw(`
+			SELECT strftime('%Y-%m-%d %H:%M', sent_at, 'localtime') AS lm, COUNT(*) AS n
+			FROM email_logs
+			WHERE status = ? AND sent_at >= ? AND sent_at < ? AND deleted_at IS NULL
+			GROUP BY lm
+		`, "delivered", since, windowEnd).Scan(&outRows)
+		for _, r := range outRows {
+			outMap[r.LM] = r.N
+		}
+	case "mysql":
+		var inRows, outRows []minuteBucketRow
+		DB.Raw(`
+			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS lm, COUNT(*) AS n
+			FROM email_logs
+			WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL
+			GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d %H:%i')
+		`, since, windowEnd).Scan(&inRows)
+		for _, r := range inRows {
+			inMap[r.LM] = r.N
+		}
+		DB.Raw(`
+			SELECT DATE_FORMAT(sent_at, '%Y-%m-%d %H:%i') AS lm, COUNT(*) AS n
+			FROM email_logs
+			WHERE status = ? AND sent_at >= ? AND sent_at < ? AND deleted_at IS NULL
+			GROUP BY DATE_FORMAT(sent_at, '%Y-%m-%d %H:%i')
+		`, "delivered", since, windowEnd).Scan(&outRows)
+		for _, r := range outRows {
+			outMap[r.LM] = r.N
+		}
+	default:
+		for i := 0; i < 60; i++ {
+			bucketStart := since.Add(time.Duration(i) * time.Minute)
+			bucketEnd := bucketStart.Add(time.Minute)
+			DB.Model(&EmailLog{}).Where("created_at >= ? AND created_at < ?", bucketStart, bucketEnd).Count(&incoming[i])
+			DB.Model(&EmailLog{}).Where("status = ? AND sent_at >= ? AND sent_at < ?", "delivered", bucketStart, bucketEnd).Count(&outgoing[i])
+		}
+		return labels, incoming, outgoing
+	}
+
+	for i := 0; i < 60; i++ {
+		incoming[i] = inMap[keys[i]]
+		outgoing[i] = outMap[keys[i]]
 	}
 	return labels, incoming, outgoing
 }
@@ -1307,6 +1372,41 @@ func GetSummaryStats() (today, yesterday, last7Days int64) {
 		DB.Model(&EmailLog{}).Where("sent_at >= ? AND status = ?", sevenDaysAgo, "delivered").Count(&last7Days)
 	}
 	return today, yesterday, last7Days
+}
+
+// RecentDeliveryForLogs is shown on send-log pages: last successful delivery time.
+type RecentDeliveryForLogs struct {
+	HasLast    bool
+	LastSentAt time.Time
+}
+
+// RecentDeliverySnapshotAdmin returns delivery stats across all users (admin send logs).
+func RecentDeliverySnapshotAdmin() RecentDeliveryForLogs {
+	return recentDeliverySnapshot("")
+}
+
+// RecentDeliverySnapshotUser returns delivery stats for one user (user send logs).
+func RecentDeliverySnapshotUser(username string) RecentDeliveryForLogs {
+	return recentDeliverySnapshot(username)
+}
+
+func recentDeliverySnapshot(username string) RecentDeliveryForLogs {
+	var out RecentDeliveryForLogs
+	if DB == nil {
+		return out
+	}
+	user := strings.TrimSpace(username)
+
+	qLast := DB.Model(&EmailLog{}).Where("status = ?", "delivered")
+	if user != "" {
+		qLast = qLast.Where("username = ?", user)
+	}
+	var row EmailLog
+	if err := qLast.Order("sent_at DESC").Limit(1).First(&row).Error; err == nil && !row.SentAt.IsZero() {
+		out.HasLast = true
+		out.LastSentAt = row.SentAt
+	}
+	return out
 }
 
 // GetDailyCountsUser returns delivered and hard_bounce counts per day for chart (user).

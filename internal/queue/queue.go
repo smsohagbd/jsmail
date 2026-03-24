@@ -531,10 +531,12 @@ func (q *Queue) resetInflightLocked() {
 	}
 }
 
-// repairOrphanInflightFiles finds JSON files with status=inflight that are not in the
+// RepairOrphanInflightFiles finds JSON files with status=inflight that are not in the
 // in-memory claim map (e.g. crash after writing inflight, or failed save after Defer
 // removed the map entry) and resets them to pending so they can be claimed again.
-func (q *Queue) repairOrphanInflightFiles() int {
+// Safe on a single process; with multiple app instances sharing one queue dir, another
+// process may hold the ID in its map — do not run multiple senders on the same queue path.
+func (q *Queue) RepairOrphanInflightFiles() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.repairOrphanInflightLocked()
@@ -610,12 +612,16 @@ func (q *Queue) InflightClaimedIDs() map[string]bool {
 func (q *Queue) scanner() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		n := q.repairOrphanInflightFiles()
+	run := func() {
+		n := q.RepairOrphanInflightFiles()
 		if n > 0 {
 			log.Printf("queue: repaired %d orphan inflight file(s) (disk inflight, not in claim map)", n)
 		}
 		q.signal()
+	}
+	run() // first pass immediately (previously waited 30s before any repair)
+	for range ticker.C {
+		run()
 	}
 }
 

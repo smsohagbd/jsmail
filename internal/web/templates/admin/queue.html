@@ -42,7 +42,7 @@
   </div>
   <div class="card-body" style="padding-top:0;">
     <div id="live-metrics" style="font-size:13px;color:#d4d4d8;line-height:1.6;">Loading…</div>
-    <div style="font-size:11px;color:#52525b;margin-top:10px;">Polls <code>/admin/queue/live.json</code> every 5s (must be logged in as admin). Use <code>curl</code> with session cookie or browser for automation.</div>
+    <div style="font-size:11px;color:#52525b;margin-top:10px;">Polls <code>/admin/queue/live.json</code> every 15s while this tab is visible. Use <code>curl</code> with session cookie or browser for automation.</div>
   </div>
 </div>
 
@@ -79,8 +79,16 @@
       })
       .catch(function(){ el.textContent = 'Could not load live.json (refresh or re-login).'; });
   }
-  tick();
-  setInterval(tick, 5000);
+  var pollMs = 15000;
+  var iv = setInterval(tick, pollMs);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (iv) { clearInterval(iv); iv = null; }
+    } else if (!iv) {
+      tick();
+      iv = setInterval(tick, pollMs);
+    }
+  });
 })();
 </script>
 

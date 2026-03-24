@@ -3,7 +3,7 @@
 <div class="page-header" style="padding-bottom:20px;">
   <div>
     <div class="page-title">Logs</div>
-    <div class="page-sub">Send history and hard bounce suppression list</div>
+    <div class="page-sub">Delivery outcomes (excludes queue — use <a href="/admin/queue" style="color:#818cf8;">Queue</a> for pending/deferred)</div>
   </div>
 </div>
 <div class="page-body">
@@ -24,6 +24,17 @@
 
 {{if ne .Tab "bounces"}}
 <!-- ══════════════════════════ SEND LOGS TAB ══════════════════════════════════ -->
+
+<div class="card" style="margin-bottom:16px;background:#0c0c0f;border-color:#27272a;">
+  <div style="padding:14px 20px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:13px;color:#d4d4d8;line-height:1.5;">
+    <div><strong style="color:#fafafa;">Recent delivery</strong></div>
+    {{if .RecentDelivery.HasLast}}
+    <div>Last: <code style="color:#4ade80;">{{.RecentDelivery.LastSentAt.Format "Jan 2 15:04:05"}}</code> <span style="color:#71717a;">({{secondsSince .RecentDelivery.LastSentAt}}s ago)</span></div>
+    {{else}}
+    <div style="color:#71717a;">No <code>delivered</code> rows with <code>sent_at</code> yet.</div>
+    {{end}}
+  </div>
+</div>
 
 <!-- Filters -->
 <div class="card" style="margin-bottom:16px;">
@@ -50,8 +61,6 @@
         <option value="delivered"  {{if eq (index .Query "status") "delivered"}}selected{{end}}>Delivered</option>
         <option value="hard_bounce"{{if eq (index .Query "status") "hard_bounce"}}selected{{end}}>Hard Bounce</option>
         <option value="failed"     {{if eq (index .Query "status") "failed"}}selected{{end}}>Failed</option>
-        <option value="deferred"   {{if eq (index .Query "status") "deferred"}}selected{{end}}>Deferred</option>
-        <option value="queued"     {{if eq (index .Query "status") "queued"}}selected{{end}}>Queued</option>
       </select>
     </div>
     <div style="flex:1;min-width:180px;">

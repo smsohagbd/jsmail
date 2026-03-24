@@ -42,15 +42,18 @@ type UserSMTP struct {
 }
 
 type EmailLog struct {
-	gorm.Model
-	Username  string
-	MessageID string
-	From      string
-	Recipient string // 'to' renamed to avoid SQL reserved-word conflict
-	Status    string // queued | delivered | failed | deferred
-	Error     string
-	MXHost    string
-	SentAt    time.Time
+	ID        uint           `gorm:"primaryKey"`
+	CreatedAt time.Time      `gorm:"index"` // minute-bucket queries + log listing
+	UpdatedAt time.Time
+	DeletedAt gorm.DeletedAt `gorm:"index"`
+	Username  string         `gorm:"size:191"`
+	MessageID string         `gorm:"size:191;index"`
+	From      string         `gorm:"size:191"`
+	Recipient string         `gorm:"size:191"` // was SQL reserved 'to'
+	Status    string         `gorm:"size:32;index:idx_el_status_sent,priority:1"`
+	Error     string         `gorm:"type:text"`
+	MXHost    string         `gorm:"size:255"`
+	SentAt    time.Time      `gorm:"index:idx_el_status_sent,priority:2"`
 }
 
 // DailyStats stores aggregated send/delivery counts per day for statistics.
