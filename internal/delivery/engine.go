@@ -733,12 +733,24 @@ func (e *Engine) deliver(msg *queue.Message) {
 		return
 	}
 
-	// If the failure is purely a 421 rate-limit, defer with a fixed cooldown
+	// If the failure is purely a 421 rate-limit, defer matching the domain cooldown
 	// without consuming a retry slot so MaxRetries is reserved for real failures.
 	isRateLimit := isTempRateLimitError(lastErr) || strings.Contains(lastErr.Error(), "rate-limited")
 	if isRateLimit {
-		// Use the domain's cooldown + a small buffer.
-		backoff := 35 * time.Minute
+		// Parse the remaining cooldown from the domain cache (if it exists),
+		// otherwise use a short default. Previously was a hardcoded 35min
+		// which stacked on top of the domain cooldown and was way too long.
+		backoff := 2*time.Minute + 30*time.Second
+		for domain := range byDomain {
+			if until := e.domainCooldownUntil(domain); !until.IsZero() {
+				if rem := time.Until(until); rem > backoff {
+					backoff = rem + 15*time.Second
+				}
+			}
+		}
+		if backoff > 16*time.Minute {
+			backoff = 16 * time.Minute
+		}
 		e.logV("[DELIVERY] ⏳ message %s DEFERRED (rate-limited) — retry in %v (retries NOT consumed)",
 			msg.ID, backoff)
 		e.queue.DeferNoIncrement(msg, backoff, lastErr.Error())
@@ -846,7 +858,9 @@ func (e *Engine) domainCooldownUntil(domain string) time.Time {
 }
 
 // recordRateLimit records a 421 hit for a domain and extends its cooldown.
-// Each consecutive hit doubles the backoff: 15m → 30m → 60m → 120m (cap).
+// First hit: 2 min cooldown. Each consecutive hit grows: 2m → 4m → 8m → 15m (cap).
+// Previous 15m → 30m → 60m was far too aggressive and blocked ALL messages to
+// Yahoo/AOL for 15+ minutes after a single 421.
 func (e *Engine) recordRateLimit(domain string) time.Duration {
 	e.cooldownMu.Lock()
 	defer e.cooldownMu.Unlock()
@@ -856,9 +870,9 @@ func (e *Engine) recordRateLimit(domain string) time.Duration {
 		e.cooldowns[domain] = c
 	}
 	c.streak++
-	backoff := time.Duration(15*c.streak) * time.Minute
-	if backoff > 2*time.Hour {
-		backoff = 2 * time.Hour
+	backoff := time.Duration(2) * time.Minute * (1 << uint(c.streak-1)) // 2m, 4m, 8m, 16m...
+	if backoff > 15*time.Minute {
+		backoff = 15 * time.Minute
 	}
 	c.until = time.Now().Add(backoff)
 	e.logV("[DELIVERY] ⏳ domain %q rate-limited (421) — cooldown %v until %s (streak=%d)",
