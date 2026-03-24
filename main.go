@@ -50,6 +50,7 @@ func main() {
 
 	// Wire delivery events to DB log updates.
 	eng.OnEvent = func(evt delivery.DeliveryEvent) {
+		eng.RecordDeliveryTelemetry(evt.Status)
 		switch evt.Status {
 		case "delivered":
 			appdb.LogDelivered(evt.Username, evt.MessageID, evt.To, evt.MXHost)

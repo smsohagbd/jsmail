@@ -20,6 +20,9 @@ delivery:
   connect_timeout: "30s"
   send_timeout: "5m"
   helo_name: "mail.inboxdaily360.com"
+  # Second/hub server only: force DKIM d= to your domain, strip upstream DKIM-Signature from first server.
+  # Add the same domain in Admin → Domains with DKIM key, OR set dkim.domain to match and enable dkim below.
+  # outbound_dkim_domain: "mail.yourrelay.com"
   dkim:
     enabled: false
     selector: "default"

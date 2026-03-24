@@ -66,6 +66,7 @@ func formChecked(form url.Values, key string) bool {
 type Handler struct {
 	DB             *gorm.DB
 	Queue          *queue.Queue
+	Engine         *delivery.Engine // optional: live metrics + dispatch depth
 	Tmpl           TemplateRenderer
 	ConfigSnapshot map[string]string
 	ConfigPath     string // path to config.yaml for the editor
@@ -406,6 +407,89 @@ func (h *Handler) QueuePage(w http.ResponseWriter, r *http.Request) {
 		data["FlashOK"] = ok
 	}
 	h.Tmpl.Render(w, "admin/queue", data)
+}
+
+// QueueLiveJSON returns real-time delivery counters and queue/dispatcher shape (for dashboards / curl).
+func (h *Handler) QueueLiveJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	qStats := h.Queue.Stats()
+	mem := h.Queue.InflightMemoryCount()
+	snap := delivery.MetricsSnapshot{}
+	workQ, workCap, workers := 0, 0, 0
+	var traces []delivery.DeliveryTracePublic
+	if h.Engine != nil {
+		snap = h.Engine.MetricsSnapshot()
+		workQ, workCap = h.Engine.DispatchQueueDepth()
+		workers = h.Engine.WorkerCount()
+		traces = h.Engine.ActiveDeliveryTraces()
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"uptime_sec":                snap.UptimeSec,
+		"queue_file_counts":         qStats,
+		"inflight_memory_map_count": mem,
+		"dispatcher": map[string]int{
+			"work_channel_buffered": workQ,
+			"work_channel_cap":      workCap,
+			"workers":               workers,
+		},
+		"metrics_lifetime":    snap.Lifetime,
+		"metrics_rolling_60s": snap.Rolling60s,
+		"per_minute":          snap.PerMinute,
+		"active_delivery_traces": traces,
+		"explain": map[string]string{
+			"inflight_on_disk": "JSON files with status=inflight. The dispatcher claimed them from pending; they are not all 'waiting on IP pool'.",
+			"work_channel":     "Messages sitting in memory waiting for a free worker. Typical: inflight_disk ≈ work_channel_buffered + workers busy in SMTP.",
+			"rolling_60s":        "Delivered/deferred/failed/etc. counted in the last ~60 seconds (12×5s buckets). Resets gradually as buckets age out.",
+			"active_delivery_traces": "Only messages currently inside deliver() on a worker. Phase shows where time is spent (MX semaphore, TCP, SMTP, IP pool pick, relay). Rows on disk without a trace are still in the work channel buffer.",
+		},
+	})
+}
+
+// QueueTracesNDJSON streams one JSON object per line for active deliver() traces (easy tail / grep).
+func (h *Handler) QueueTracesNDJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	if h.Engine == nil {
+		return
+	}
+	enc := json.NewEncoder(w)
+	for _, t := range h.Engine.ActiveDeliveryTraces() {
+		_ = enc.Encode(t)
+	}
+}
+
+// QueueInflightPage lists up to N queue files currently in inflight status (oldest first).
+func (h *Handler) QueueInflightPage(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	max, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	rows := h.Queue.ListInflightMessages(max)
+	qs := h.Queue.Stats()
+	workQ, workCap := 0, 0
+	workers := 0
+	traceByID := map[string]delivery.DeliveryTracePublic{}
+	if h.Engine != nil {
+		workQ, workCap = h.Engine.DispatchQueueDepth()
+		workers = h.Engine.WorkerCount()
+		for _, t := range h.Engine.ActiveDeliveryTraces() {
+			traceByID[t.MessageID] = t
+		}
+	}
+	waitApprox := qs.Inflight - len(traceByID)
+	if waitApprox < 0 {
+		waitApprox = 0
+	}
+	h.Tmpl.Render(w, "admin/queue-inflight", map[string]interface{}{
+		"Page":             "queue",
+		"ActiveUser":       claims.Username,
+		"InflightRows":     rows,
+		"TraceByID":        traceByID,
+		"WorkChLen":        workQ,
+		"WorkChCap":        workCap,
+		"Workers":          workers,
+		"InflightMemory":   h.Queue.InflightMemoryCount(),
+		"QueueInflightCnt": qs.Inflight,
+		"ActiveTraceCount": len(traceByID),
+		"WaitChannelApprox": waitApprox,
+	})
 }
 
 func (h *Handler) DeleteQueueItem(w http.ResponseWriter, r *http.Request) {

@@ -85,6 +85,10 @@ type DeliveryConfig struct {
 	// IPPoolMinDefer optional: only if every pool IP is busy AND no slot time could be computed (rare).
 	// Leave empty or "0" for no extra delay — defer uses domain interval timing only (+ tiny jitter).
 	IPPoolMinDefer string `yaml:"ip_pool_min_defer"`
+	// OutboundDKIMDomain optional: on relay/hub servers, sign every outbound message with this domain's DKIM key
+	// (Admin → Domains key first, else delivery.dkim if domain matches). Strips existing DKIM-Signature headers
+	// from the message first so upstream (first server) signatures are replaced. Leave empty to use From: domain only.
+	OutboundDKIMDomain string `yaml:"outbound_dkim_domain"`
 }
 
 type DKIMConfig struct {

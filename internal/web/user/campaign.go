@@ -416,7 +416,21 @@ func (h *Handler) CampaignDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
-	appdb.DeleteCampaign(uint(id), claims.Username)
+	camp := appdb.GetCampaignByID(uint(id), claims.Username)
+	if camp == nil {
+		http.Redirect(w, r, "/user/campaigns", http.StatusFound)
+		return
+	}
+	// Stop any pending/deferred sends: remove queue files so workers won't retry.
+	msgIDs := appdb.CampaignSendMessageIDs(camp.ID)
+	for _, mid := range msgIDs {
+		h.Queue.CancelByMessageID(mid)
+	}
+	if len(msgIDs) > 0 {
+		h.DB.Where("username = ? AND message_id IN ? AND status IN ?",
+			claims.Username, msgIDs, []string{"queued", "deferred"}).Delete(&appdb.EmailLog{})
+	}
+	_ = appdb.DeleteCampaign(uint(id), claims.Username)
 	http.Redirect(w, r, "/user/campaigns", http.StatusFound)
 }
 

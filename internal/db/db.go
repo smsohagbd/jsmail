@@ -1654,8 +1654,44 @@ func UpdateCampaign(id uint, username string, updates map[string]interface{}) er
 	return DB.Model(&Campaign{}).Where("id = ? AND owner_username = ?", id, username).Updates(updates).Error
 }
 
+// CampaignSendMessageIDs returns distinct non-empty queue message IDs for a campaign
+// (used to cancel pending/deferred mail when the campaign is deleted).
+func CampaignSendMessageIDs(campaignID uint) []string {
+	var raw []string
+	_ = DB.Model(&CampaignSend{}).
+		Where("campaign_id = ? AND message_id != '' AND message_id IS NOT NULL", campaignID).
+		Pluck("message_id", &raw)
+	seen := make(map[string]bool)
+	var out []string
+	for _, id := range raw {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// DeleteCampaign removes the campaign and related sends/track events.
+// Callers should cancel queue files for CampaignSendMessageIDs first so delivery stops.
 func DeleteCampaign(id uint, username string) error {
-	return DB.Where("id = ? AND owner_username = ?", id, username).Delete(&Campaign{}).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var sendIDs []uint
+		if err := tx.Model(&CampaignSend{}).Where("campaign_id = ?", id).Pluck("id", &sendIDs).Error; err != nil {
+			return err
+		}
+		if len(sendIDs) > 0 {
+			if err := tx.Where("send_id IN ?", sendIDs).Delete(&TrackEvent{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("campaign_id = ?", id).Delete(&CampaignSend{}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("id = ? AND owner_username = ?", id, username).Delete(&Campaign{}).Error
+	})
 }
 
 // CreateCampaignSend creates a send record with a unique tracking token. Returns (token, sendID, error).

@@ -105,6 +105,23 @@ type SMTPRelay struct {
 	FromAddress string // override From when sending via this relay (required for rotation)
 }
 
+// formatRelayLogMX is stored in email_logs.mx_host when mail was accepted by a custom relay only.
+// It must not look like a recipient-domain MX (avoids confusing relay IP/host with gmail-smtp-in, etc.).
+func formatRelayLogMX(r SMTPRelay) string {
+	label := strings.TrimSpace(r.Label)
+	if label == "" {
+		label = "custom-smtp"
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return `relay "` + label + `" (no host)`
+	}
+	if r.Port > 0 {
+		return fmt.Sprintf(`relay "%s" → %s:%d (handed off; recipient MX is on relay server)`, label, host, r.Port)
+	}
+	return fmt.Sprintf(`relay "%s" → %s (handed off; recipient MX is on relay server)`, label, host)
+}
+
 // ipCounter tracks rolling send counts for one outbound IP (or IP+domain).
 type ipCounter struct {
 	minCount   int
@@ -181,6 +198,11 @@ type Engine struct {
 	// workCh feeds workers; a single dispatcher calls PopFairBatch to avoid
 	// N workers hammering the queue mutex and re-reading every file per pop.
 	workCh chan *queue.Message
+
+	metrics *deliveryMetrics // live counters for admin monitoring
+
+	traceMu      sync.Mutex
+	activeTraces map[string]*deliveryTrace // messages currently in deliver()
 }
 
 // New creates a delivery Engine.
@@ -193,6 +215,7 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 		ipCounters:       make(map[string]*ipCounter),
 		userRelayIdx:     make(map[string]int),
 		throttleCounters: make(map[string]*throttleCounter),
+		metrics:          newDeliveryMetrics(),
 	}
 
 	if d, err := time.ParseDuration(cfg.RetryInterval); err == nil {
@@ -223,6 +246,9 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 			e.dkimSigner = opts
 			log.Printf("delivery: DKIM enabled for domain=%s selector=%s", cfg.DKIM.Domain, cfg.DKIM.Selector)
 		}
+	}
+	if od := strings.TrimSpace(cfg.OutboundDKIMDomain); od != "" {
+		log.Printf("delivery: outbound_dkim_domain=%q — strip upstream DKIM-Signature, re-sign with this domain (Admin→Domains key, or config dkim if domain matches)", od)
 	}
 
 	return e
@@ -266,6 +292,7 @@ func (e *Engine) Start() {
 		buf = maxQueueBuf
 	}
 	e.workCh = make(chan *queue.Message, buf)
+	e.startMetricsRotator()
 	go e.dispatch()
 	log.Printf("delivery: starting %d workers (per-user queue dirs, buffer=%d — typical in-flight ≤ workers+buffer, not a fixed 500 cap)", n, buf)
 	for i := 0; i < n; i++ {
@@ -359,6 +386,9 @@ func (e *Engine) worker(id int) {
 }
 
 func (e *Engine) deliver(msg *queue.Message) {
+	e.RecordDeliveryAttempt()
+	e.traceStart(msg)
+	defer e.traceEnd(msg.ID)
 	e.logV("[DELIVERY] ══════════════════════════════════════════")
 	e.logV("[DELIVERY]   id      = %s", msg.ID)
 	e.logV("[DELIVERY]   from    = %s", msg.From)
@@ -366,6 +396,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 	e.logV("[DELIVERY]   attempt = %d / %d", msg.RetryCount+1, e.cfg.MaxRetries+1)
 	e.logV("[DELIVERY]   size    = %d bytes", len(msg.Data))
 
+	e.tracePhase(msg.ID, "inject_headers", "")
 	data := injectMissingHeaders(msg.Data, e.cfg.HeloName, msg.From)
 
 	// ── Unsubscribe header injection ───────────────────────────────────────
@@ -375,6 +406,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 		data = injectUnsubHeaders(data, unsubURL)
 	}
 
+	e.tracePhase(msg.ID, "suppression_check", "")
 	// ── Suppression filter — skip opted-out recipients ─────────────────────
 	if e.SuppressionChecker != nil {
 		var active []string
@@ -413,6 +445,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 		if mode == "custom_only" || mode == "system_and_custom" {
 			relay := e.pickRelay(msg.Username, mode, relays)
 			if relay != nil {
+				e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
 				e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
 				fromAddr := msg.From
 				relayData := data
@@ -420,7 +453,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 					fromAddr = relay.FromAddress
 					relayData = email.RewriteFromHeader(data, fromAddr)
 				}
-				if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData); err != nil {
+				if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData, msg.ID); err != nil {
 					log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
 					if isPermanentSMTPError(err) {
 						if e.OnEvent != nil {
@@ -428,7 +461,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 								e.OnEvent(DeliveryEvent{
 									MessageID: msg.ID, Username: msg.Username,
 									From: msg.From, To: to, Status: "hard_bounce",
-									Error: err.Error(), MXHost: relay.Host,
+									Error: err.Error(), MXHost: formatRelayLogMX(*relay),
 								})
 							}
 						}
@@ -444,7 +477,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 								e.OnEvent(DeliveryEvent{
 									MessageID: msg.ID, Username: msg.Username,
 									From: msg.From, To: to, Status: "deferred",
-									Error: err.Error(), MXHost: relay.Host,
+									Error: err.Error(), MXHost: formatRelayLogMX(*relay),
 								})
 							}
 						}
@@ -453,11 +486,12 @@ func (e *Engine) deliver(msg *queue.Message) {
 					e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
 					e.queue.Complete(msg.ID)
 					if e.OnEvent != nil {
+						relayMX := formatRelayLogMX(*relay)
 						for _, to := range msg.To {
 							e.OnEvent(DeliveryEvent{
 								MessageID: msg.ID, Username: msg.Username,
 								From: msg.From, To: to, Status: "delivered",
-								MXHost: relay.Host,
+								MXHost: relayMX,
 							})
 						}
 					}
@@ -484,29 +518,21 @@ func (e *Engine) deliver(msg *queue.Message) {
 	}
 	// ── end custom relay routing ───────────────────────────────────────────
 
-	// Resolve DKIM signer: prefer per-domain key from DB, fallback to config key.
-	signer := e.dkimSigner
-	if e.DKIMKeyLoader != nil {
-		fromDomain := extractFromDomain(data)
-		if fromDomain != "" {
-			if privPEM, sel, ok := e.DKIMKeyLoader(fromDomain); ok {
-				if dbSigner, err := parseDKIMSignerFromPEM(fromDomain, sel, privPEM); err == nil {
-					signer = dbSigner
-					e.logV("[DELIVERY]   using DB DKIM key for domain %q selector=%q", fromDomain, sel)
-				}
-			}
-		}
-	}
+	e.tracePhase(msg.ID, "dkim_resolve", "")
+	// Resolve DKIM signer: optional fixed outbound domain (relay server), else From: domain, else config key.
+	signer := e.resolveDKIMSigner(data)
 	if signer != nil {
+		data = stripDKIMSignatureHeaders(data)
 		signed, err := signDKIM(data, signer)
 		if err != nil {
 			log.Printf("[DELIVERY] ⚠ DKIM sign failed (sending unsigned): %v", err)
 		} else {
 			data = signed
-			e.logV("[DELIVERY]   DKIM signed ok")
+			e.logV("[DELIVERY]   DKIM signed ok (d=%s)", signer.Domain)
 		}
 	}
 
+	e.tracePhase(msg.ID, "group_by_domain", fmt.Sprintf("%d recipients", len(msg.To)))
 	// Group recipients by domain for efficient delivery.
 	byDomain := make(map[string][]string)
 	for _, rcpt := range msg.To {
@@ -526,11 +552,18 @@ func (e *Engine) deliver(msg *queue.Message) {
 	// These must never receive a "delivered" event.
 	hardBouncedRcpts := make(map[string]bool)
 
+	if len(byDomain) == 0 {
+		e.tracePhase(msg.ID, "no_valid_domains", "all recipients skipped or invalid")
+	}
+
 	for domain, rcpts := range byDomain {
+		e.traceDomain(msg.ID, domain)
+		e.tracePhase(msg.ID, "domain_round", fmt.Sprintf("%s (%d rcpt)", domain, len(rcpts)))
 		e.logV("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
 
 		// ── Per-user throttle check ───────────────────────────────────────────
 		if reason, retryAfter := e.checkThrottle(msg.Username, domain, true); reason != "" {
+			e.tracePhase(msg.ID, "user_throttle_block", fmt.Sprintf("%s defer_in=%v", reason, retryAfter.Round(time.Second)))
 			e.logV("[DELIVERY] ⏳ %s", reason)
 			if retryAfter < 5*time.Second {
 				retryAfter = 5 * time.Second
@@ -561,7 +594,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			}
 		}
 
-		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data, onRcptBounce)
+		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data, onRcptBounce, msg.ID)
 		if err != nil {
 			log.Printf("[DELIVERY] ✗ domain %q failed: %v", domain, err)
 
@@ -789,14 +822,16 @@ func (e *Engine) releaseMXSlot(mxHost string) {
 // onRcptBounce is called for each recipient that receives a permanent 5xx during RCPT TO.
 // Those recipients are skipped from DATA; the remaining valid recipients are delivered.
 func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte,
-	onRcptBounce func(rcpt, reason string)) (string, error) {
+	onRcptBounce func(rcpt, reason string), traceID string) (string, error) {
 	// Check per-domain 421 cooldown before doing anything.
 	if until := e.domainCooldownUntil(domain); !until.IsZero() && time.Now().Before(until) {
 		wait := time.Until(until).Round(time.Second)
+		e.tracePhase(traceID, "domain_421_cooldown", fmt.Sprintf("%s blocked ~%v", domain, wait))
 		e.logV("[DELIVERY] ⏳ domain %q is rate-limited — skipping for %v", domain, wait)
 		return "", fmt.Errorf("domain rate-limited (421 cooldown), retry after %v", wait)
 	}
 
+	e.tracePhase(traceID, "mx_dns_lookup", domain)
 	e.logV("[DELIVERY]   DNS MX lookup for %q", domain)
 	mxRecords, err := lookupMX(domain)
 	if err != nil {
@@ -816,9 +851,11 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 		for _, port := range deliveryPorts {
 			e.logV("[DELIVERY]   trying MX %s port=%s (pref=%d)", mx.Host, port, mx.Pref)
 
-			// Respect per-MX connection limit.
+			// Respect per-MX connection limit (blocks when >2 in use to same MX host).
+			e.tracePhase(traceID, "waiting_mx_semaphore", fmt.Sprintf("%s:%s (max 2 concurrent)", mx.Host, port))
 			e.acquireMXSlot(mx.Host)
-			mxErr := e.sendToMX(from, domain, mx.Host, port, rcpts, data, onRcptBounce)
+			e.tracePhase(traceID, "smtp_connect_send", fmt.Sprintf("%s:%s", mx.Host, port))
+			mxErr := e.sendToMX(from, domain, mx.Host, port, rcpts, data, onRcptBounce, traceID)
 			e.releaseMXSlot(mx.Host)
 
 			if mxErr == nil {
@@ -1184,12 +1221,13 @@ func (e *Engine) pickRelay(username, mode string, relays []SMTPRelay) *SMTPRelay
 }
 
 // deliverViaRelay sends all recipients of a message through an authenticated SMTP relay.
-func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, data []byte) error {
+func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, data []byte, traceID string) error {
 	addr := fmt.Sprintf("%s:%d", relay.Host, relay.Port)
 	tlsMode := strings.TrimSpace(relay.TLSMode)
 	if tlsMode == "" {
 		tlsMode = "auto"
 	}
+	e.tracePhase(traceID, "relay_tcp_dial", addr)
 	e.logV("[DELIVERY]   relay connecting to %s (TLS: %s) …", addr, tlsMode)
 
 	heloName := e.cfg.HeloName
@@ -1206,6 +1244,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 		return fmt.Errorf("relay %s: %w", addr, err)
 	}
 	defer client.Close()
+	e.tracePhase(traceID, "relay_smtp_mail_rcpt", addr)
 
 	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("relay MAIL FROM <%s>: %w", from, err)
@@ -1215,6 +1254,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 			return fmt.Errorf("relay RCPT TO <%s>: %w", rcpt, err)
 		}
 	}
+	e.tracePhase(traceID, "relay_smtp_data", fmt.Sprintf("%d bytes", len(data)))
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("relay DATA: %w", err)
@@ -1231,8 +1271,9 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 }
 
 func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, data []byte,
-	onRcptBounce func(rcpt, reason string)) error {
+	onRcptBounce func(rcpt, reason string), traceID string) error {
 	addr := net.JoinHostPort(mxHost, port)
+	e.tracePhase(traceID, "outbound_ip_pick", domain)
 	e.logV("[DELIVERY]   connecting to %s …", addr)
 
 	var conn net.Conn
@@ -1240,6 +1281,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 
 	outIP, outHostname, ipErr := e.nextOutboundIP(domain)
 	if ipErr != nil {
+		e.tracePhase(traceID, "ip_pool_all_busy", ipErr.Error())
 		// Pool is active but ALL IPs are rate-limited — signal the caller to defer.
 		return ipErr
 	}
@@ -1249,6 +1291,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			Timeout:   e.connectTO,
 			LocalAddr: &net.TCPAddr{IP: net.ParseIP(outIP)},
 		}
+		e.tracePhase(traceID, "tcp_dial_bind", fmt.Sprintf("src=%s → %s", outIP, addr))
 		e.logV("[IPPOOL]   selected outbound IP %s → %s", outIP, addr)
 		conn, err = dialer.Dial("tcp4", addr)
 		if err != nil {
@@ -1258,17 +1301,20 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 			log.Printf("[IPPOOL] ✗ bind to %s FAILED: %v", outIP, err)
 			log.Printf("[IPPOOL]   ↳ IP may not be configured on the OS network interface.")
 			log.Printf("[IPPOOL]   ↳ Falling back to system default IP for this connection.")
+			e.tracePhase(traceID, "tcp_dial_fallback", addr)
 			conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
 		} else {
 			usedPoolIP = true
 		}
 	} else {
 		// Pool is disabled/empty — use system default IP.
+		e.tracePhase(traceID, "tcp_dial_system", addr)
 		conn, err = net.DialTimeout("tcp4", addr, e.connectTO)
 	}
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
+	e.tracePhase(traceID, "tcp_connected", addr)
 	e.logV("[DELIVERY]   TCP connected to %s", addr)
 
 	// HELO must match rDNS/PTR for the outbound IP. If we used a pool IP with a hostname, use it.
@@ -1288,6 +1334,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	}
 	defer client.Close()
 
+	e.tracePhase(traceID, "smtp_ehlo", heloName)
 	if err := client.Hello(heloName); err != nil {
 		return fmt.Errorf("EHLO: %w", err)
 	}
@@ -1308,6 +1355,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 		e.logV("[DELIVERY]   STARTTLS not supported, sending plain")
 	}
 
+	e.tracePhase(traceID, "smtp_mail_from", from)
 	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM <%s>: %w", from, err)
 	}
@@ -1319,6 +1367,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	// recipient and continue trying the remaining ones so a single bad
 	// address never blocks a valid one in the same batch.
 	// If ALL recipients are rejected we abort immediately; DATA is never sent.
+	e.tracePhase(traceID, "smtp_rcpt_to", fmt.Sprintf("%d recipients", len(rcpts)))
 	var accepted []string
 	var lastRcptBounceErr error
 	for _, rcpt := range rcpts {
@@ -1356,6 +1405,7 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	}
 	// ── end RCPT TO ────────────────────────────────────────────────────────
 
+	e.tracePhase(traceID, "smtp_data_body", fmt.Sprintf("%d bytes", len(data)))
 	w, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("DATA: %w", err)
@@ -1567,6 +1617,84 @@ func signDKIM(data []byte, opts *dkim.SignOptions) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// stripDKIMSignatureHeaders removes all DKIM-Signature fields (including folded continuation lines)
+// so a relay server can add a fresh signature without stacking or invalidating body hash from upstream.
+func stripDKIMSignatureHeaders(data []byte) []byte {
+	idx := bytes.Index(data, []byte("\r\n\r\n"))
+	var head, body []byte
+	if idx >= 0 {
+		head = data[:idx]
+		body = data[idx+4:]
+	} else {
+		idx = bytes.Index(data, []byte("\n\n"))
+		if idx < 0 {
+			return data
+		}
+		head = data[:idx]
+		body = data[idx+2:]
+	}
+	shead := strings.ReplaceAll(string(head), "\r\n", "\n")
+	lines := strings.Split(shead, "\n")
+	var kept []string
+	inSkip := false
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		isCont := line[0] == ' ' || line[0] == '\t'
+		if isCont {
+			if inSkip {
+				continue
+			}
+			kept = append(kept, line)
+			continue
+		}
+		inSkip = strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "dkim-signature:")
+		if inSkip {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	newHead := strings.Join(kept, "\r\n")
+	return append(append([]byte(newHead), []byte("\r\n\r\n")...), body...)
+}
+
+func (e *Engine) resolveDKIMSigner(data []byte) *dkim.SignOptions {
+	forced := strings.TrimSpace(e.cfg.OutboundDKIMDomain)
+	if forced != "" {
+		if e.DKIMKeyLoader != nil {
+			if privPEM, sel, ok := e.DKIMKeyLoader(forced); ok {
+				dbSigner, err := parseDKIMSignerFromPEM(forced, sel, privPEM)
+				if err != nil {
+					log.Printf("[DELIVERY] ⚠ outbound_dkim_domain %q: invalid DB key PEM: %v", forced, err)
+				} else {
+					e.logV("[DELIVERY]   DKIM: outbound_dkim_domain %q (Admin Domains key)", forced)
+					return dbSigner
+				}
+			}
+		}
+		if e.dkimSigner != nil && strings.EqualFold(strings.TrimSpace(e.cfg.DKIM.Domain), forced) {
+			e.logV("[DELIVERY]   DKIM: outbound_dkim_domain %q (config dkim private key)", forced)
+			return e.dkimSigner
+		}
+		log.Printf("[DELIVERY] ⚠ outbound_dkim_domain=%q: add DKIM key in Admin→Domains for this domain, or set delivery.dkim.domain to match and enable dkim", forced)
+	}
+
+	signer := e.dkimSigner
+	if e.DKIMKeyLoader != nil {
+		fromDomain := extractFromDomain(data)
+		if fromDomain != "" {
+			if privPEM, sel, ok := e.DKIMKeyLoader(fromDomain); ok {
+				if dbSigner, err := parseDKIMSignerFromPEM(fromDomain, sel, privPEM); err == nil {
+					signer = dbSigner
+					e.logV("[DELIVERY]   using DB DKIM key for From domain %q selector=%q", fromDomain, sel)
+				}
+			}
+		}
+	}
+	return signer
 }
 
 // extractFromDomain parses the sender domain from the From: header of raw RFC 5322 data.

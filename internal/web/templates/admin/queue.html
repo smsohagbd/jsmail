@@ -31,9 +31,58 @@
   </div>
 </div>
 
-<div style="font-size:12px;color:#71717a;margin-bottom:14px;line-height:1.5;">
-  <strong>Throughput:</strong> IP Pool <em>Min. interval (seconds)</em> is per <code style="color:#a78bfa;">outbound IP × recipient domain</code> (e.g. 30s → ~2/min to that domain from that IP). Each user’s mail lives under <code style="color:#a78bfa;">queue/&lt;user&gt;/</code> and the dispatcher round-robins users so one huge backlog does not block others. Stats above are from the queue folder; the table is the DB log (paginate for older rows).
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <span class="card-title">Live delivery (last ~60s + lifetime)</span>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <a href="/admin/queue/inflight" class="btn btn-secondary" style="font-size:12px;">In-flight inspector</a>
+      <a href="/admin/queue/live.json" class="btn btn-secondary" style="font-size:12px;" target="_blank" rel="noopener">live.json</a>
+      <a href="/admin/queue/traces.ndjson" class="btn btn-secondary" style="font-size:12px;" target="_blank" rel="noopener">traces.ndjson</a>
+    </div>
+  </div>
+  <div class="card-body" style="padding-top:0;">
+    <div id="live-metrics" style="font-size:13px;color:#d4d4d8;line-height:1.6;">Loading…</div>
+    <div style="font-size:11px;color:#52525b;margin-top:10px;">Polls <code>/admin/queue/live.json</code> every 5s (must be logged in as admin). Use <code>curl</code> with session cookie or browser for automation.</div>
+  </div>
 </div>
+
+<div style="font-size:12px;color:#71717a;margin-bottom:14px;line-height:1.5;">
+  <strong>Throughput:</strong> IP Pool <em>Min. interval (seconds)</em> is per <code style="color:#a78bfa;">outbound IP × recipient domain</code> (e.g. 30s → ~2/min to that domain from that IP). Each user’s mail lives under <code style="color:#a78bfa;">queue/&lt;user&gt;/</code> and the dispatcher round-robins users so one huge backlog does not block others. <strong>In-flight</strong> is mostly backlog in the work channel + up to <em>workers</em> in SMTP — see <a href="/admin/queue/inflight" style="color:#818cf8;">inspector</a>. Stats above are from the queue folder; the table is the DB log (paginate for older rows).
+</div>
+
+<script>
+(function(){
+  var el = document.getElementById('live-metrics');
+  if (!el) return;
+  function fmt(o) {
+    if (!o) return '—';
+    return 'delivered '+o.delivered+' · deferred '+o.deferred+' · failed '+o.failed+' · hard_bounce '+o.hard_bounce+' · suppressed '+o.suppressed+' · attempts '+o.attempts;
+  }
+  function tick() {
+    fetch('/admin/queue/live.json', { credentials: 'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var d = j.dispatcher || {};
+        var tr = j.active_delivery_traces || [];
+        var trLines = '';
+        for (var i = 0; i < Math.min(8, tr.length); i++) {
+          var t = tr[i];
+          trLines += '<div style="font-size:12px;color:#a1a1aa;margin-top:2px;">· <code style="color:#818cf8;">'+ (t.phase||'') +'</code> '+ (t.detail||'').substring(0,120) +
+            ' <span style="color:#fbbf24;">'+ Math.round(t.seconds_since_phase_update||0) +'s in phase</span> <span style="color:#52525b;">'+ (t.message_id||'').substring(0,18)+'…</span></div>';
+        }
+        if (tr.length > 8) trLines += '<div style="font-size:11px;color:#52525b;margin-top:4px;">… +'+(tr.length-8)+' more — open <a href="/admin/queue/inflight" style="color:#818cf8;">inflight</a> or <a href="/admin/queue/traces.ndjson" style="color:#818cf8;">traces.ndjson</a></div>';
+        el.innerHTML =
+          '<div style="margin-bottom:8px;"><strong style="color:#fafafa;">Rolling ~60s:</strong> '+fmt(j.metrics_rolling_60s)+'</div>'+
+          '<div style="margin-bottom:8px;"><strong style="color:#fafafa;">Lifetime:</strong> '+fmt(j.metrics_lifetime)+' <span style="color:#52525b;">(uptime '+j.uptime_sec+'s)</span></div>'+
+          '<div style="margin-bottom:8px;"><strong style="color:#fafafa;">Dispatcher:</strong> work channel '+d.work_channel_buffered+' / '+d.work_channel_cap+' buffered · '+d.workers+' workers · inflight memory map '+j.inflight_memory_map_count+'</div>'+
+          (tr.length ? '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #27272a;"><strong style="color:#fafafa;">Active deliver() traces ('+tr.length+')</strong> — where workers are now:'+trLines+'</div>' : '');
+      })
+      .catch(function(){ el.textContent = 'Could not load live.json (refresh or re-login).'; });
+  }
+  tick();
+  setInterval(tick, 5000);
+})();
+</script>
 
 <div class="card">
   <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">

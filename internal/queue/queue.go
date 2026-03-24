@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -669,6 +670,94 @@ func (q *Queue) Stats() Stats {
 		}
 	}
 	return s
+}
+
+// InflightMessage is a queue file currently marked inflight (claimed by dispatcher).
+type InflightMessage struct {
+	ID         string    `json:"id"`
+	Username   string    `json:"username"`
+	From       string    `json:"from"`
+	To         []string  `json:"to"`
+	RcptDomain string    `json:"rcpt_domain"`
+	CreatedAt  time.Time `json:"created_at"`
+	RetryCount int       `json:"retry_count"`
+	LastError  string    `json:"last_error,omitempty"`
+	RelPath    string    `json:"rel_path"`
+}
+
+// ListInflightMessages scans the queue dir for status=inflight (oldest first after sort).
+// max caps rows (0 = default 500).
+func (q *Queue) ListInflightMessages(max int) []InflightMessage {
+	if max <= 0 {
+		max = 500
+	}
+	var out []InflightMessage
+	appendFile := func(fullPath, rel string) {
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return
+		}
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return
+		}
+		if msg.Status != StatusInflight {
+			return
+		}
+		domain := ""
+		if len(msg.To) > 0 {
+			parts := strings.SplitN(msg.To[0], "@", 2)
+			if len(parts) == 2 {
+				domain = strings.ToLower(parts[1])
+			}
+		}
+		out = append(out, InflightMessage{
+			ID: msg.ID, Username: msg.Username, From: msg.From, To: msg.To,
+			RcptDomain: domain, CreatedAt: msg.CreatedAt, RetryCount: msg.RetryCount,
+			LastError: msg.LastError, RelPath: rel,
+		})
+	}
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			if filepath.Ext(entry.Name()) == ".json" {
+				appendFile(filepath.Join(q.dir, entry.Name()), entry.Name())
+			}
+			continue
+		}
+		if entry.Name() == "failed" {
+			continue
+		}
+		sub := filepath.Join(q.dir, entry.Name())
+		files, err := os.ReadDir(sub)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+				continue
+			}
+			rel := filepath.Join(entry.Name(), f.Name())
+			appendFile(filepath.Join(sub, f.Name()), rel)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
+}
+
+// InflightMemoryCount is how many message IDs are in the in-process inflight map.
+func (q *Queue) InflightMemoryCount() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.inflight)
 }
 
 func generateID() (string, error) {

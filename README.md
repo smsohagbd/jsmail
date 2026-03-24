@@ -222,7 +222,7 @@ Admin sets hard limits per user in Users → Edit:
 ### Features
 - **Contact Lists** — Create audiences, add contacts (email, first name, last name)
 - **Templates** — HTML email templates with merge tags: `{{.Name}}`, `{{.Email}}`, `{{.FirstName}}`, `{{.LastName}}`
-- **Campaigns** — Create campaigns, select template + list, send to all subscribers
+- **Campaigns** — Create campaigns, select template + list, send to all subscribers. **Deleting a campaign** cancels any **queued or deferred** messages for that campaign (stops further sends); delivered/failed log rows for past sends are kept.
 - **Tracking** — Open tracking (1×1 pixel), click tracking (redirect URLs)
 - **Automation** — Trigger-based workflows: subscribe, email opened, link clicked, time delay
 

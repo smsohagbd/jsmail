@@ -1,0 +1,68 @@
+{{define "title"}}Queue — In-flight inspector{{end}}
+{{define "content"}}
+<div class="page-header" style="padding-bottom:20px;">
+  <div class="page-title">In-flight inspector</div>
+  <div class="page-sub">What “in-flight” means on disk vs workers</div>
+</div>
+<div class="page-body">
+
+<div style="font-size:13px;color:#a1a1aa;margin-bottom:20px;line-height:1.6;max-width:900px;">
+  <p><strong>In-flight on disk</strong> ({{.QueueInflightCnt}} files): the dispatcher already claimed these messages from <em>pending</em> and wrote <code style="color:#818cf8;">status=inflight</code> to the JSON file. They are <strong>not</strong> all blocked on the IP pool.</p>
+  <p><strong>Work channel</strong>: <strong>{{.WorkChLen}}</strong> of <strong>{{.WorkChCap}}</strong> slots are filled — those messages are waiting in memory for one of <strong>{{.Workers}}</strong> workers to pick them up.</p>
+  <p><strong>Actively in SMTP</strong>: at most <strong>{{.Workers}}</strong> messages can be inside <code>deliver()</code> at once (connection attempts, DATA, etc.). The rest of in-flight is backlog in the channel.</p>
+  <p><strong>Memory inflight map</strong>: <strong>{{.InflightMemory}}</strong> (should match disk inflight when steady). IP pool / throttle / 421 defer happens <em>inside</em> a worker; after defer the file becomes <em>deferred</em> and leaves in-flight.</p>
+  <p><strong>Live delivery trace</strong>: <strong>{{.ActiveTraceCount}}</strong> message(s) currently inside <code>deliver()</code> on a worker — the <em>Phase</em> column shows where each one is spending time (not IP pool unless you see <code>waiting_mx_semaphore</code>, <code>ip_pool_all_busy</code>, <code>tcp_dial_*</code>, <code>smtp_*</code>, etc.).</p>
+  <p><strong>~Queued for worker</strong> (approx): <strong>{{.WaitChannelApprox}}</strong> in-flight files with no trace yet = still in the work channel buffer, not stuck in IP pool logic.</p>
+  <p style="margin-top:12px;">
+    <a href="/admin/queue" class="btn btn-secondary" style="font-size:12px;">← Back to Queue</a>
+    <a href="/admin/queue/live.json" class="btn btn-secondary" style="font-size:12px;margin-left:8px;">live.json</a>
+    <a href="/admin/queue/traces.ndjson" class="btn btn-secondary" style="font-size:12px;margin-left:8px;">traces.ndjson</a>
+    <span style="font-size:12px;color:#52525b;margin-left:12px;">Add <code>?limit=2000</code> for more rows.</span>
+  </p>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">In-flight messages (oldest first, cap by limit)</span>
+    <span style="font-size:12px;color:#52525b;">{{len .InflightRows}} row(s) shown</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Age</th>
+        <th>Live phase</th>
+        <th>Phase detail</th>
+        <th>Stuck</th>
+        <th>User</th>
+        <th>Rcpt domain</th>
+        <th>To</th>
+        <th>From</th>
+        <th>Retry</th>
+        <th>File</th>
+        <th style="padding-right:20px;">Last error (if any)</th>
+      </tr></thead>
+      <tbody>
+        {{range .InflightRows}}
+        {{$tr := index $.TraceByID .ID}}
+        <tr>
+          <td style="padding-left:20px;font-size:12px;color:#52525b;white-space:nowrap;">{{secondsSince .CreatedAt}}s</td>
+          <td style="font-size:11px;color:#818cf8;white-space:nowrap;">{{if $tr}}{{$tr.Phase}}{{else}}<span style="color:#52525b">queued_buffer</span>{{end}}</td>
+          <td class="truncate-cell" style="font-size:10px;max-width:200px;" title="{{if $tr}}{{$tr.Detail}}{{end}}">{{if $tr}}{{$tr.Detail}}{{else}}—{{end}}</td>
+          <td style="font-size:11px;color:#fbbf24;white-space:nowrap;">{{if $tr}}{{printf "%.0f" $tr.SecondsSincePhaseUpdate}}s{{else}}—{{end}}</td>
+          <td style="font-size:12px;">{{.Username}}</td>
+          <td style="font-size:12px;color:#a78bfa;">{{if $tr}}{{$tr.Domain}}{{else}}{{.RcptDomain}}{{end}}</td>
+          <td class="truncate-cell" style="font-size:11px;max-width:180px;" title="{{range $i, $t := .To}}{{if $i}}, {{end}}{{$t}}{{end}}">{{if .To}}{{index .To 0}}{{if gt (len .To) 1}} +{{sub (len .To) 1}}{{end}}{{end}}</td>
+          <td class="truncate-cell" style="font-size:11px;max-width:140px;">{{.From}}</td>
+          <td style="font-size:12px;">{{.RetryCount}}</td>
+          <td style="font-size:10px;color:#52525b;font-family:monospace;">{{.RelPath}}</td>
+          <td style="padding-right:20px;font-size:10px;color:#f87171;max-width:220px;overflow:hidden;text-overflow:ellipsis;">{{if .LastError}}{{.LastError}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="11" class="empty-state" style="padding-left:20px;">No in-flight queue files (or scan empty).</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div>
+{{end}}

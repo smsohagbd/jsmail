@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -59,6 +60,16 @@ func (r *tmplRenderer) Render(w http.ResponseWriter, name string, data map[strin
 					return a
 				}
 				return b
+			},
+			"secondsSince": func(t time.Time) int64 {
+				if t.IsZero() {
+					return 0
+				}
+				s := int64(time.Since(t).Seconds())
+				if s < 0 {
+					return 0
+				}
+				return s
 			},
 		}).
 		ParseFS(r.fs, files...)
@@ -130,6 +141,7 @@ func (s *Server) Start() {
 	ah := &webadmin.Handler{
 		DB:             s.db,
 		Queue:          s.queue,
+		Engine:         s.engine,
 		Tmpl:           s.renderer,
 		ConfigSnapshot: s.cfg,
 		ConfigPath:     s.configPath,
@@ -149,6 +161,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/logs", webauth.RequireAdmin(ah.Logs))
 	mux.HandleFunc("/admin/logs/delete", webauth.RequireAdmin(ah.DeleteLogs))
 	mux.HandleFunc("/admin/queue", webauth.RequireAdmin(ah.QueuePage))
+	mux.HandleFunc("/admin/queue/inflight", webauth.RequireAdmin(ah.QueueInflightPage))
+	mux.HandleFunc("/admin/queue/live.json", webauth.RequireAdmin(ah.QueueLiveJSON))
+	mux.HandleFunc("/admin/queue/traces.ndjson", webauth.RequireAdmin(ah.QueueTracesNDJSON))
 	mux.HandleFunc("/admin/queue/delete", webauth.RequireAdmin(ah.DeleteQueueItem))
 	mux.HandleFunc("/admin/queue/delete-all", webauth.RequireAdmin(ah.DeleteQueueAll))
 	mux.HandleFunc("/admin/throttle", webauth.RequireAdmin(ah.Throttle))
