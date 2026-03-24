@@ -304,15 +304,15 @@ func (q *Queue) PopFairBatch(maxN int) []*Message {
 // Complete removes a successfully delivered message from the queue.
 func (q *Queue) Complete(id string) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	delete(q.inflight, id)
 	_ = os.Remove(q.findMessageFileLocked(id))
+	q.mu.Unlock()
+	q.signal() // wake delivery dispatcher to refill workCh when more files are waiting
 }
 
 // Defer reschedules a message for later retry and increments the retry counter.
 func (q *Queue) Defer(msg *Message, retryAfter time.Duration, lastError string) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	delete(q.inflight, msg.ID)
 	msg.Status = StatusDeferred
 	msg.RetryCount++
@@ -321,6 +321,8 @@ func (q *Queue) Defer(msg *Message, retryAfter time.Duration, lastError string) 
 	if err := q.saveRelocating(msg, q.findMessageFileLocked(msg.ID)); err != nil {
 		log.Printf("queue: failed to defer message %s: %v", msg.ID, err)
 	}
+	q.mu.Unlock()
+	q.signal()
 }
 
 // DeferNoIncrement reschedules a message for later retry WITHOUT incrementing
@@ -328,7 +330,6 @@ func (q *Queue) Defer(msg *Message, retryAfter time.Duration, lastError string) 
 // reserved for real SMTP failures.
 func (q *Queue) DeferNoIncrement(msg *Message, retryAfter time.Duration, lastError string) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	delete(q.inflight, msg.ID)
 	msg.Status = StatusDeferred
 	// RetryCount intentionally not incremented.
@@ -337,12 +338,13 @@ func (q *Queue) DeferNoIncrement(msg *Message, retryAfter time.Duration, lastErr
 	if err := q.saveRelocating(msg, q.findMessageFileLocked(msg.ID)); err != nil {
 		log.Printf("queue: failed to defer (no-inc) message %s: %v", msg.ID, err)
 	}
+	q.mu.Unlock()
+	q.signal()
 }
 
 // Fail permanently fails a message and moves it to the failed/ subdirectory.
 func (q *Queue) Fail(msg *Message, reason string) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	delete(q.inflight, msg.ID)
 	msg.Status = StatusFailed
 	msg.LastError = reason
@@ -350,14 +352,17 @@ func (q *Queue) Fail(msg *Message, reason string) {
 	data, _ := json.MarshalIndent(msg, "", "  ")
 	_ = os.WriteFile(filepath.Join(q.dir, "failed", msg.ID+".json"), data, 0644)
 	_ = os.Remove(q.findMessageFileLocked(msg.ID))
+	q.mu.Unlock()
+	q.signal()
 }
 
 // CancelByMessageID removes a message from the queue by its ID.
 func (q *Queue) CancelByMessageID(msgID string) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	delete(q.inflight, msgID)
 	_ = os.Remove(q.findMessageFileLocked(msgID))
+	q.mu.Unlock()
+	q.signal()
 }
 
 // ClearAll removes all messages from the queue (pending, deferred, failed).
