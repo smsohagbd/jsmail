@@ -218,6 +218,13 @@ type Engine struct {
 	// instead of burning 30s+ of worker time per message on each attempt.
 	dialFailMu sync.Mutex
 	dialFails  map[string]time.Time // domain → "do not dial until" time
+
+	// Recipient dedup: prevents the same (user, recipient) pair from being
+	// delivered more than once within a short window.  Catches duplicate queue
+	// entries from bulk imports and avoids relay re-delivery when
+	// system_and_custom mode uses the user's own server as relay.
+	dedupMu   sync.Mutex
+	dedupSeen map[string]time.Time // "username\x1eto" → last delivery time
 }
 
 // New creates a delivery Engine.
@@ -232,6 +239,7 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 		userRelayIdx:     make(map[string]int),
 		throttleCounters: make(map[string]*throttleCounter),
 		dialFails:        make(map[string]time.Time),
+		dedupSeen:        make(map[string]time.Time),
 		metrics:          newDeliveryMetrics(),
 	}
 
@@ -320,6 +328,7 @@ func (e *Engine) Start() {
 		go e.worker(i)
 	}
 	go e.logIPPoolStatus()
+	go e.dedupCleaner()
 }
 
 // dispatch pulls batches from the file queue and fills workCh so workers never
@@ -458,6 +467,30 @@ func (e *Engine) deliver(msg *queue.Message) {
 		}
 	}
 
+	// ── Recipient deduplication ──────────────────────────────────────────
+	// Prevent the same (user, recipient) pair from being delivered twice in a
+	// short window.  Catches duplicate queue entries and relay re-delivery.
+	{
+		var unique []string
+		for _, rcpt := range msg.To {
+			if e.isRecentDuplicate(msg.Username, rcpt) {
+				e.logV("[DELIVERY] ⏭ %s: duplicate — recently delivered for user %q, skipping", rcpt, msg.Username)
+			} else {
+				unique = append(unique, rcpt)
+			}
+		}
+		if len(unique) == 0 {
+			e.logV("[DELIVERY] ✓ message %s: all %d recipient(s) recently delivered — duplicate, completing", msg.ID, len(msg.To))
+			e.queue.Complete(msg.ID)
+			return
+		}
+		if len(unique) < len(msg.To) {
+			filtered := *msg
+			filtered.To = unique
+			msg = &filtered
+		}
+	}
+
 	// ── Custom SMTP relay routing ──────────────────────────────────────────
 	// If a UserSMTPProvider is registered, check whether this user's messages
 	// should be routed through a custom relay instead of direct MX delivery.
@@ -465,16 +498,16 @@ func (e *Engine) deliver(msg *queue.Message) {
 		mode, relays := e.UserSMTPProvider(msg.Username)
 		if mode == "custom_only" || mode == "system_and_custom" {
 			relay := e.pickRelay(msg.Username, mode, relays)
-			if relay != nil {
-				e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
-				e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
-				fromAddr := msg.From
-				relayData := data
-				if relay.FromAddress != "" {
-					fromAddr = relay.FromAddress
-					relayData = email.RewriteFromHeader(data, fromAddr)
-				}
-				if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData, msg.ID); err != nil {
+		if relay != nil {
+			e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
+			e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
+			fromAddr := msg.From
+			relayData := stripDKIMSignatureHeaders(data)
+			if relay.FromAddress != "" {
+				fromAddr = relay.FromAddress
+				relayData = email.RewriteFromHeader(relayData, fromAddr)
+			}
+			if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData, msg.ID); err != nil {
 					log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
 					if isPermanentSMTPError(err) {
 						if e.OnEvent != nil {
@@ -503,20 +536,21 @@ func (e *Engine) deliver(msg *queue.Message) {
 							}
 						}
 					}
-				} else {
-					e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
-					e.queue.Complete(msg.ID)
+			} else {
+				e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
+				e.queue.Complete(msg.ID)
+				relayMX := formatRelayLogMX(*relay)
+				for _, to := range msg.To {
+					e.recordDedup(msg.Username, to)
 					if e.OnEvent != nil {
-						relayMX := formatRelayLogMX(*relay)
-						for _, to := range msg.To {
-							e.OnEvent(DeliveryEvent{
-								MessageID: msg.ID, Username: msg.Username,
-								From: msg.From, To: to, Status: "delivered",
-								MXHost: relayMX,
-							})
-						}
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: to, Status: "delivered",
+							MXHost: relayMX,
+						})
 					}
 				}
+			}
 				return
 			}
 			// No relay available for custom_only → fail
@@ -718,11 +752,12 @@ func (e *Engine) deliver(msg *queue.Message) {
 		// (delivered or hard-bounced).
 		e.queue.Complete(msg.ID)
 
-		if e.OnEvent != nil {
-			for _, to := range msg.To {
-				if hardBouncedRcpts[to] {
-					continue // hard_bounce event already emitted above
-				}
+		for _, to := range msg.To {
+			if hardBouncedRcpts[to] {
+				continue
+			}
+			e.recordDedup(msg.Username, to)
+			if e.OnEvent != nil {
 				e.OnEvent(DeliveryEvent{
 					MessageID: msg.ID, Username: msg.Username,
 					From: msg.From, To: to, Status: "delivered",
@@ -934,6 +969,40 @@ func (e *Engine) clearDomainDialFail(domain string) {
 	e.dialFailMu.Lock()
 	defer e.dialFailMu.Unlock()
 	delete(e.dialFails, domain)
+}
+
+// ── Recipient deduplication ──────────────────────────────────────────────
+
+const dedupWindow = 30 * time.Minute
+
+func (e *Engine) isRecentDuplicate(username, to string) bool {
+	key := strings.ToLower(username) + "\x1e" + strings.ToLower(to)
+	e.dedupMu.Lock()
+	defer e.dedupMu.Unlock()
+	t, ok := e.dedupSeen[key]
+	return ok && time.Since(t) < dedupWindow
+}
+
+func (e *Engine) recordDedup(username, to string) {
+	key := strings.ToLower(username) + "\x1e" + strings.ToLower(to)
+	e.dedupMu.Lock()
+	e.dedupSeen[key] = time.Now()
+	e.dedupMu.Unlock()
+}
+
+func (e *Engine) dedupCleaner() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		e.dedupMu.Lock()
+		now := time.Now()
+		for k, t := range e.dedupSeen {
+			if now.Sub(t) > dedupWindow {
+				delete(e.dedupSeen, k)
+			}
+		}
+		e.dedupMu.Unlock()
+	}
 }
 
 // isDialError returns true if the error is a TCP dial failure (not an SMTP error).
