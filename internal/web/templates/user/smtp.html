@@ -93,9 +93,6 @@
         <tr>
           <td style="padding-left:20px;">
             <div style="display:flex;align-items:center;gap:8px;">
-              {{if .IsDefault}}
-              <span style="background:#1e1b4b;color:#818cf8;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;letter-spacing:.04em;">DEFAULT</span>
-              {{end}}
               <span style="font-size:13px;font-weight:600;color:#e4e4e7;">{{.Label}}</span>
             </div>
           </td>
@@ -120,14 +117,18 @@
                   <input type="number" name="limit_per_day" value="{{.LimitPerDay}}" min="0" placeholder="0=∞"
                     style="width:60px;padding:3px 5px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
                 </div>
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;">
-                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:{{if .VerifyBeforeSend}}#a78bfa{{else}}#52525b{{end}};"
-                    title="When ON: each recipient is verified (MX + SMTP probe) before this relay receives the message. Invalid addresses are suppressed without touching your relay.">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;gap:6px;">
+                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:{{if .VerifyBeforeSend}}#a78bfa{{else}}#71717a{{end}};"
+                    title="Verify before send: each recipient is checked (MX + SMTP probe) before the relay receives the message. Invalid addresses are suppressed silently.">
                     <input type="checkbox" name="verify_before_send" value="on" {{if .VerifyBeforeSend}}checked{{end}}
+                      onchange="this.form.submit()"
                       style="accent-color:#818cf8;width:12px;height:12px;cursor:pointer;"/>
-                    Verify emails before send
+                    Verify before send
                   </label>
-                  <button type="submit" class="btn btn-ghost" style="font-size:10px;padding:2px 8px;">Save</button>
+                  <button type="submit"
+                    style="font-size:10px;padding:3px 10px;background:#1e1b4b;border:1px solid #4338ca;color:#a5b4fc;border-radius:5px;cursor:pointer;white-space:nowrap;">
+                    Save
+                  </button>
                 </div>
               </div>
             </form>
@@ -172,12 +173,6 @@
           </td>
           <td style="padding-right:20px;text-align:right;">
             <div style="display:flex;gap:6px;justify-content:flex-end;">
-              {{if not .IsDefault}}
-              <form method="POST" action="/user/smtp/default" style="display:inline;">
-                <input type="hidden" name="id" value="{{.ID}}"/>
-                <button type="submit" class="btn btn-ghost" style="font-size:11px;padding:4px 10px;">Set Default</button>
-              </form>
-              {{end}}
               <form method="POST" action="/user/smtp/delete" style="display:inline;"
                 onsubmit="return confirm('Delete this SMTP server?')">
                 <input type="hidden" name="id" value="{{.ID}}"/>
@@ -207,18 +202,12 @@
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
       <div style="font-size:11px;color:#818cf8;font-weight:600;margin-bottom:4px;">Rotation OFF</div>
-      <div style="font-size:12px;color:#71717a;">All mail goes through the DEFAULT server. Use its From Address (or message's From).</div>
+      <div style="font-size:12px;color:#71717a;">All mail is sent directly via system MX delivery. Custom SMTP servers are not used.</div>
     </div>
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
       <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:4px;">Rotation ON</div>
-      <div style="font-size:12px;color:#71717a;">Each message uses the next server in round-robin. Set <strong>From Address</strong> on each server so the correct sender is used.</div>
+      <div style="font-size:12px;color:#71717a;">Each message is routed through your custom SMTP servers in round-robin order. Set a <strong>From Address</strong> on each server so the correct sender is used.</div>
     </div>
-    {{if eq .SMTPMode "system_and_custom"}}
-    <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
-      <div style="font-size:11px;color:#fbbf24;font-weight:600;margin-bottom:4px;">System + Custom</div>
-      <div style="font-size:12px;color:#71717a;">System SMTP (direct MX delivery) is included in the rotation pool alongside your custom servers</div>
-    </div>
-    {{end}}
   </div>
 </div>
 {{end}}
