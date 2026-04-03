@@ -699,6 +699,9 @@ func (e *Engine) deliver(msg *queue.Message) {
 	// hardBouncedRcpts tracks recipients that permanently failed (5xx).
 	// These must never receive a "delivered" event.
 	hardBouncedRcpts := make(map[string]bool)
+	// suppressedRcpts tracks recipients silently dropped (skip domain list, etc.).
+	// These already have a "suppressed" log entry and must not be overwritten with "delivered".
+	suppressedRcpts := make(map[string]bool)
 
 	if len(byDomain) == 0 {
 		e.tracePhase(msg.ID, "no_valid_domains", "all recipients skipped or invalid")
@@ -712,6 +715,9 @@ func (e *Engine) deliver(msg *queue.Message) {
 		// ── Admin domain skip list — no handshake, no MX lookup ──────────────
 		if e.SkipDomainChecker != nil && e.SkipDomainChecker(domain) {
 			e.logV("[DELIVERY] ⏭ domain %q is on skip list — silently skipping %d recipient(s)", domain, len(rcpts))
+			for _, rcpt := range rcpts {
+				suppressedRcpts[rcpt] = true
+			}
 			if e.OnEvent != nil {
 				for _, rcpt := range rcpts {
 					e.OnEvent(DeliveryEvent{
@@ -840,10 +846,10 @@ func (e *Engine) deliver(msg *queue.Message) {
 	}
 
 	if lastErr == nil {
-		// Count recipients that were actually delivered (not hard-bounced).
+		// Count recipients that were actually delivered (not hard-bounced or suppressed).
 		deliveredRcpts := 0
 		for _, to := range msg.To {
-			if !hardBouncedRcpts[to] {
+			if !hardBouncedRcpts[to] && !suppressedRcpts[to] {
 				deliveredRcpts++
 			}
 		}
@@ -852,16 +858,15 @@ func (e *Engine) deliver(msg *queue.Message) {
 			e.logV("[DELIVERY] ✓ message %s DELIVERED SUCCESSFULLY (%d/%d recipients)",
 				msg.ID, deliveredRcpts, len(msg.To))
 		} else {
-			log.Printf("[DELIVERY] ✗ message %s — all %d recipient(s) hard-bounced, removing from queue",
+			log.Printf("[DELIVERY] ✗ message %s — all %d recipient(s) hard-bounced or suppressed, removing from queue",
 				msg.ID, len(msg.To))
 		}
 
-		// Remove from queue regardless — all recipients are definitively handled
-		// (delivered or hard-bounced).
+		// Remove from queue regardless — all recipients are definitively handled.
 		e.queue.Complete(msg.ID)
 
 		for _, to := range msg.To {
-			if hardBouncedRcpts[to] {
+			if hardBouncedRcpts[to] || suppressedRcpts[to] {
 				continue
 			}
 			e.recordDedup(msg.Username, to)

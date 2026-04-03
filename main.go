@@ -133,13 +133,9 @@ func main() {
 			return "system_only", nil
 		}
 
-		// Rotation OFF → send directly via system; ignore all custom relays.
-		if !rotation {
-			return "system_only", nil
-		}
-
 		dbRelays := appdb.GetActiveUserSMTPs(username)
 
+		// Build relay list (GetActiveUserSMTPs sorts is_default DESC, so index 0 = default relay).
 		out := make([]delivery.SMTPRelay, 0, len(dbRelays))
 		for _, r := range dbRelays {
 			tlsMode := r.TLSMode
@@ -164,6 +160,15 @@ func main() {
 				LimitPerDay:      r.LimitPerDay,
 				VerifyBeforeSend: r.VerifyBeforeSend,
 			})
+		}
+
+		// Rotation OFF: send only via the DEFAULT relay (no round-robin with system).
+		// Force custom_only so the system slot is never included in the pool.
+		if !rotation {
+			if len(out) > 0 {
+				return "custom_only", out[:1]
+			}
+			return "system_only", nil
 		}
 		return mode, out
 	}
