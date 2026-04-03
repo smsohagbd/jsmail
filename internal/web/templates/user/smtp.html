@@ -49,13 +49,13 @@
 
     {{if ne .SMTPMode "system_only"}}
     <div style="display:flex;align-items:center;gap:10px;">
-      <span style="font-size:13px;color:#71717a;">Rotate across all SMTPs:</span>
       <form method="POST" action="/user/smtp/rotation" style="display:inline;">
         <button type="submit" style="background:{{if .SMTPRotation}}#1e4620{{else}}#1c1917{{end}};
           border:1px solid {{if .SMTPRotation}}#14532d{{else}}#44403c{{end}};
           color:{{if .SMTPRotation}}#4ade80{{else}}#78716c{{end}};
-          padding:5px 14px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;">
-          {{if .SMTPRotation}}✓ Rotation On{{else}}✗ Rotation Off{{end}}
+          padding:5px 14px;border-radius:20px;font-size:12px;cursor:pointer;transition:all .15s;"
+          title="{{if .SMTPRotation}}ON: emails are going through your custom SMTP servers. Click to switch to direct system delivery.{{else}}OFF: emails are going direct via system MX. Click to route through your custom SMTP servers.{{end}}">
+          {{if .SMTPRotation}}✓ Using Custom SMTP{{else}}✗ Using Direct (System){{end}}
         </button>
       </form>
     </div>
@@ -201,12 +201,12 @@
   <div style="font-size:13px;font-weight:600;color:#e4e4e7;margin-bottom:8px;">How delivery works</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
-      <div style="font-size:11px;color:#818cf8;font-weight:600;margin-bottom:4px;">Rotation OFF</div>
-      <div style="font-size:12px;color:#71717a;">All mail is sent directly via system MX delivery. Custom SMTP servers are not used.</div>
+      <div style="font-size:11px;color:#818cf8;font-weight:600;margin-bottom:4px;">✗ Using Direct (System)</div>
+      <div style="font-size:12px;color:#71717a;">All mail goes directly to recipient MX servers. Your custom SMTP servers are <strong>not</strong> used.</div>
     </div>
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
-      <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:4px;">Rotation ON</div>
-      <div style="font-size:12px;color:#71717a;">Each message is routed through your custom SMTP servers in round-robin order. Set a <strong>From Address</strong> on each server so the correct sender is used.</div>
+      <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:4px;">✓ Using Custom SMTP</div>
+      <div style="font-size:12px;color:#71717a;">Every message is routed through your custom SMTP servers in round-robin order. Set a <strong>From Address</strong> on each server so the right sender is used.</div>
     </div>
   </div>
 </div>
