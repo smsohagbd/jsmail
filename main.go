@@ -167,9 +167,10 @@ func main() {
 			return "system_only", nil
 		}
 
-		// Rotation ON → round-robin through all custom relays only.
-		// System MX delivery is never mixed into the pool regardless of mode.
-		return "custom_only", out
+		// Rotation ON → use the configured mode with all relays.
+		// system_and_custom: round-robin includes system MX slot + all custom relays.
+		// custom_only: round-robin through custom relays only.
+		return mode, out
 	}
 
 	// IP pool: round-robin with per-IP and per-domain rate limits from DB.

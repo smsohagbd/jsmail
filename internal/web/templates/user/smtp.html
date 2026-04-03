@@ -206,7 +206,11 @@
     </div>
     <div style="background:#09090b;border:1px solid #27272a;border-radius:8px;padding:12px;">
       <div style="font-size:11px;color:#4ade80;font-weight:600;margin-bottom:4px;">✓ Using Custom SMTP</div>
-      <div style="font-size:12px;color:#71717a;">Every message is routed through your custom SMTP servers in round-robin order. Set a <strong>From Address</strong> on each server so the right sender is used.</div>
+      {{if eq .SMTPMode "system_and_custom"}}
+      <div style="font-size:12px;color:#71717a;">Round-robin across <strong>system MX + all custom relays</strong>. Each message takes the next slot in order. Set a <strong>From Address</strong> on each relay so the right sender is used.</div>
+      {{else}}
+      <div style="font-size:12px;color:#71717a;">Round-robin through your custom SMTP servers. Set a <strong>From Address</strong> on each so the right sender is used.</div>
+      {{end}}
     </div>
   </div>
 </div>
