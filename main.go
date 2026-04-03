@@ -132,14 +132,13 @@ func main() {
 		if mode == "system_only" || mode == "" {
 			return "system_only", nil
 		}
-		dbRelays := appdb.GetActiveUserSMTPs(username)
 
-		// When rotation is OFF, only the DEFAULT relay is used.
-		// GetActiveUserSMTPs already sorts is_default DESC, so relay[0] is the default.
-		// Passing a single-element slice means pickAvailableRelay has no choice to rotate.
-		if !rotation && len(dbRelays) > 0 {
-			dbRelays = dbRelays[:1] // keep only the default (first) relay
+		// Rotation OFF → send directly via system; ignore all custom relays.
+		if !rotation {
+			return "system_only", nil
 		}
+
+		dbRelays := appdb.GetActiveUserSMTPs(username)
 
 		out := make([]delivery.SMTPRelay, 0, len(dbRelays))
 		for _, r := range dbRelays {
