@@ -39,6 +39,10 @@ type UserSMTP struct {
 	IsDefault     bool   `gorm:"default:false"`             // preferred relay when rotation is off
 	Active        bool   `gorm:"default:true"`
 	FromAddress   string `gorm:"size:191"` // override From when using this relay (rotation: use per-relay; no rotation: use default's)
+	// Sending rate limits for this relay. 0 = unlimited.
+	LimitPerMin  int `gorm:"default:0"`
+	LimitPerHour int `gorm:"default:0"`
+	LimitPerDay  int `gorm:"default:0"`
 }
 
 type EmailLog struct {
@@ -46,14 +50,21 @@ type EmailLog struct {
 	CreatedAt time.Time      `gorm:"index"` // minute-bucket queries + log listing
 	UpdatedAt time.Time
 	DeletedAt gorm.DeletedAt `gorm:"index"`
-	Username  string         `gorm:"size:191"`
-	MessageID string         `gorm:"size:191;index"`
+	// idx_el_user_sent  : per-user log listing (WHERE username ORDER BY sent_at)
+	// idx_el_user_status: per-user stat counts (WHERE username AND status)
+	Username  string         `gorm:"size:191;index:idx_el_user_sent,priority:1;index:idx_el_user_status,priority:1"`
+	// idx_el_msgid_rcpt : log UPDATE lookups — WHERE message_id=? AND recipient=?
+	MessageID string         `gorm:"size:191;index;index:idx_el_msgid_rcpt,priority:1"`
 	From      string         `gorm:"size:191"`
-	Recipient string         `gorm:"size:191"` // was SQL reserved 'to'
-	Status    string         `gorm:"size:32;index:idx_el_status_sent,priority:1"`
+	Recipient string         `gorm:"size:191;index:idx_el_msgid_rcpt,priority:2"`
+	// idx_el_status_sent: pending count, admin log sort
+	// idx_el_user_status: per-user stat counts
+	Status    string         `gorm:"size:32;index:idx_el_status_sent,priority:1;index:idx_el_user_status,priority:2"`
 	Error     string         `gorm:"type:text"`
 	MXHost    string         `gorm:"size:255"`
-	SentAt    time.Time      `gorm:"index:idx_el_status_sent,priority:2"`
+	// idx_el_status_sent: admin log sort (status, sent_at)
+	// idx_el_user_sent  : per-user log sort  (username, sent_at)
+	SentAt    time.Time      `gorm:"index:idx_el_status_sent,priority:2;index:idx_el_user_sent,priority:2"`
 }
 
 // DailyStats stores aggregated send/delivery counts per day for statistics.
@@ -180,10 +191,11 @@ func (ip *IPPool) WarmupDayLimit() int {
 // from a specific user's account. Checked at delivery time.
 type Suppression struct {
 	gorm.Model
-	Username string `gorm:"index;size:191;not null"` // the sending user's username
-	Email    string `gorm:"size:191;not null"`       // suppressed address (stored lowercase)
-	Reason   string                          // "unsubscribed" | "manual" | "bounce"
-	Source   string                          // "link" | "user" | "admin" | "api"
+	// idx_suppression_ue: composite (username, email) for IsSuppressed lookup
+	Username string `gorm:"index;size:191;not null;index:idx_suppression_ue,priority:1"` // the sending user's username
+	Email    string `gorm:"size:191;not null;index:idx_suppression_ue,priority:2"`        // suppressed address (stored lowercase)
+	Reason   string // "unsubscribed" | "manual" | "bounce"
+	Source   string // "link" | "user" | "admin" | "api"
 }
 
 // ─── Campaign & Automation (Mailchimp-style) ───────────────────────────────────
@@ -296,6 +308,15 @@ type AutomationSend struct {
 	Email        string     `gorm:"size:191;not null"`
 	Status       string     `gorm:"size:20;default:sent"` // sent | failed
 	SentAt       *time.Time
+}
+
+// SkipDomain is a recipient domain that should be silently skipped at delivery time.
+// No SMTP handshake is made — the message is immediately marked suppressed for all
+// recipients whose address belongs to this domain.
+type SkipDomain struct {
+	gorm.Model
+	Domain string `gorm:"uniqueIndex;size:191;not null"` // e.g. gmail.com
+	Note   string `gorm:"size:500"`                      // optional admin note
 }
 
 // Domain represents a verified sending domain with its DKIM keys and DNS records.

@@ -104,23 +104,31 @@ type SMTPRelay struct {
 	Password    string
 	TLSMode     string // "none" | "starttls" | "ssl"
 	FromAddress string // override From when sending via this relay (required for rotation)
+	// Per-relay sending rate limits. 0 = unlimited.
+	LimitPerMin  int
+	LimitPerHour int
+	LimitPerDay  int
 }
 
-// formatRelayLogMX is stored in email_logs.mx_host when mail was accepted by a custom relay only.
-// It must not look like a recipient-domain MX (avoids confusing relay IP/host with gmail-smtp-in, etc.).
+// relayCounter tracks rolling send counts for one custom SMTP relay.
+type relayCounter struct {
+	minCount  int
+	hourCount int
+	dayCount  int
+	minReset  time.Time
+	hourReset time.Time
+	dayReset  time.Time
+}
+
+// formatRelayLogMX is stored in email_logs.mx_host when mail was accepted by a custom relay.
+// We intentionally omit the relay host/port/IP so internal infrastructure details are not
+// exposed in user-visible log views.
 func formatRelayLogMX(r SMTPRelay) string {
 	label := strings.TrimSpace(r.Label)
 	if label == "" {
-		label = "custom-smtp"
+		label = "custom smtp"
 	}
-	host := strings.TrimSpace(r.Host)
-	if host == "" {
-		return `relay "` + label + `" (no host)`
-	}
-	if r.Port > 0 {
-		return fmt.Sprintf(`relay "%s" → %s:%d (handed off; recipient MX is on relay server)`, label, host, r.Port)
-	}
-	return fmt.Sprintf(`relay "%s" → %s (handed off; recipient MX is on relay server)`, label, host)
+	return "via relay: " + label
 }
 
 // ipCounter tracks rolling send counts for one outbound IP (or IP+domain).
@@ -169,6 +177,10 @@ type Engine struct {
 	throttleMu       sync.Mutex
 	throttleCounters map[string]*throttleCounter
 
+	// SkipDomainChecker returns true when the recipient domain is on the admin skip list.
+	// No SMTP handshake is attempted — recipients are immediately marked suppressed.
+	SkipDomainChecker func(domain string) bool
+
 	// SuppressionChecker returns true if the recipient has unsubscribed from this user's mail.
 	SuppressionChecker func(username, email string) bool
 
@@ -179,9 +191,10 @@ type Engine struct {
 	// UnsubTokenFn generates a user-level HMAC token given a username.
 	UnsubTokenFn func(username string) string
 
-	// Per-user relay rotation tracking (guarded by userRelayMu).
-	userRelayMu  sync.Mutex
-	userRelayIdx map[string]int
+	// Per-user relay rotation and per-relay rate-limit counters (both guarded by userRelayMu).
+	userRelayMu   sync.Mutex
+	userRelayIdx  map[string]int
+	relayCounters map[uint]*relayCounter
 
 	// Per-domain 421 cooldown tracking.
 	cooldownMu sync.Mutex
@@ -237,6 +250,7 @@ func New(cfg config.DeliveryConfig, q *queue.Queue) *Engine {
 		outIPTokens:      make(map[string]chan struct{}),
 		ipCounters:       make(map[string]*ipCounter),
 		userRelayIdx:     make(map[string]int),
+		relayCounters:    make(map[uint]*relayCounter),
 		throttleCounters: make(map[string]*throttleCounter),
 		dialFails:        make(map[string]time.Time),
 		dedupSeen:        make(map[string]time.Time),
@@ -497,17 +511,35 @@ func (e *Engine) deliver(msg *queue.Message) {
 	if e.UserSMTPProvider != nil && msg.Username != "" {
 		mode, relays := e.UserSMTPProvider(msg.Username)
 		if mode == "custom_only" || mode == "system_and_custom" {
-			relay := e.pickRelay(msg.Username, mode, relays)
-		if relay != nil {
-			e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
-			e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
-			fromAddr := msg.From
-			relayData := stripDKIMSignatureHeaders(data)
-			if relay.FromAddress != "" {
-				fromAddr = relay.FromAddress
-				relayData = email.RewriteFromHeader(relayData, fromAddr)
+			relay, retryAfter := e.pickAvailableRelay(msg.Username, mode, relays)
+
+			// All custom relays are at their send limit — defer the message.
+			if relay == nil && retryAfter > 0 {
+				e.logV("[DELIVERY] ⏳ message %s: all custom relays at send limit for %q — defer %v",
+					msg.ID, msg.Username, retryAfter.Round(time.Second))
+				e.queue.DeferNoIncrement(msg, retryAfter, "custom SMTP relay send limit reached")
+				if e.OnEvent != nil {
+					for _, to := range msg.To {
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: to, Status: "deferred",
+							Error: "custom SMTP relay send limit reached",
+						})
+					}
+				}
+				return
 			}
-			if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData, msg.ID); err != nil {
+
+			if relay != nil {
+				e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
+				e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
+				fromAddr := msg.From
+				relayData := stripDKIMSignatureHeaders(data)
+				if relay.FromAddress != "" {
+					fromAddr = relay.FromAddress
+					relayData = email.RewriteFromHeader(relayData, fromAddr)
+				}
+				if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData, msg.ID); err != nil {
 					log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
 					if isPermanentSMTPError(err) {
 						if e.OnEvent != nil {
@@ -536,24 +568,27 @@ func (e *Engine) deliver(msg *queue.Message) {
 							}
 						}
 					}
-			} else {
-				e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
-				e.queue.Complete(msg.ID)
-				relayMX := formatRelayLogMX(*relay)
-				for _, to := range msg.To {
-					e.recordDedup(msg.Username, to)
-					if e.OnEvent != nil {
-						e.OnEvent(DeliveryEvent{
-							MessageID: msg.ID, Username: msg.Username,
-							From: msg.From, To: to, Status: "delivered",
-							MXHost: relayMX,
-						})
+				} else {
+					e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
+					e.queue.Complete(msg.ID)
+					relayMX := formatRelayLogMX(*relay)
+					for _, to := range msg.To {
+						e.recordDedup(msg.Username, to)
+						if e.OnEvent != nil {
+							e.OnEvent(DeliveryEvent{
+								MessageID: msg.ID, Username: msg.Username,
+								From: msg.From, To: to, Status: "delivered",
+								MXHost: relayMX,
+							})
+						}
 					}
 				}
-			}
 				return
 			}
-			// No relay available for custom_only → fail
+
+			// relay == nil and retryAfter == 0:
+			// system_and_custom selected the system slot → fall through.
+			// custom_only with no relays configured → fail.
 			if mode == "custom_only" {
 				log.Printf("[DELIVERY] ✗ message %s FAILED: no active custom SMTP for user %q", msg.ID, msg.Username)
 				e.queue.Fail(msg, "no active custom SMTP configured")
@@ -568,7 +603,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 				}
 				return
 			}
-			// system_and_custom with no relays → fall through to system delivery
+			// system_and_custom with system slot → fall through to system delivery.
 		}
 	}
 	// ── end custom relay routing ───────────────────────────────────────────
@@ -615,6 +650,21 @@ func (e *Engine) deliver(msg *queue.Message) {
 		e.traceDomain(msg.ID, domain)
 		e.tracePhase(msg.ID, "domain_round", fmt.Sprintf("%s (%d rcpt)", domain, len(rcpts)))
 		e.logV("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
+
+		// ── Admin domain skip list — no handshake, no MX lookup ──────────────
+		if e.SkipDomainChecker != nil && e.SkipDomainChecker(domain) {
+			e.logV("[DELIVERY] ⏭ domain %q is on skip list — silently skipping %d recipient(s)", domain, len(rcpts))
+			if e.OnEvent != nil {
+				for _, rcpt := range rcpts {
+					e.OnEvent(DeliveryEvent{
+						MessageID: msg.ID, Username: msg.Username,
+						From: msg.From, To: rcpt, Status: "suppressed",
+						Error: "domain is on admin skip list",
+					})
+				}
+			}
+			continue
+		}
 
 		// ── Per-user throttle check ───────────────────────────────────────────
 		if reason, retryAfter := e.checkThrottle(msg.Username, domain, true); reason != "" {
@@ -1756,40 +1806,99 @@ func (e *Engine) checkThrottle(username, domain string, consume bool) (reason st
 	return "", 0
 }
 
-// pickRelay selects the next relay for a user using round-robin rotation.
-// For system_and_custom mode, index 0 means "use system MX delivery" (returns nil).
-// For custom_only, only custom relays are in the pool.
-func (e *Engine) pickRelay(username, mode string, relays []SMTPRelay) *SMTPRelay {
+// pickAvailableRelay selects the next relay for a user using round-robin, respecting per-relay
+// sending limits. Returns:
+//   (relay != nil, 0)     — use this relay (counter already consumed)
+//   (nil, 0)              — use system MX delivery (system_and_custom system slot selected, or no relays)
+//   (nil, retryAfter > 0) — all custom relays are at their send limit; defer the message
+func (e *Engine) pickAvailableRelay(username, mode string, relays []SMTPRelay) (*SMTPRelay, time.Duration) {
 	if len(relays) == 0 {
-		return nil
+		return nil, 0
 	}
 
 	e.userRelayMu.Lock()
 	defer e.userRelayMu.Unlock()
 
-	// Build the pool: for system_and_custom, slot 0 = system (nil), then custom relays.
+	systemSlot := mode == "system_and_custom"
 	poolSize := len(relays)
-	systemSlot := false
-	if mode == "system_and_custom" {
-		poolSize++
-		systemSlot = true
-	}
-
-	idx := e.userRelayIdx[username] % poolSize
-	e.userRelayIdx[username] = (idx + 1) % poolSize
-
-	if systemSlot && idx == 0 {
-		return nil // caller should use system MX delivery
-	}
-	relayIdx := idx
 	if systemSlot {
-		relayIdx = idx - 1
+		poolSize++ // slot 0 = system delivery (no limit)
 	}
-	if relayIdx < 0 || relayIdx >= len(relays) {
-		return nil
+
+	startIdx := e.userRelayIdx[username] % poolSize
+	var minRetry time.Duration
+
+	for i := 0; i < poolSize; i++ {
+		idx := (startIdx + i) % poolSize
+
+		// System delivery slot (system_and_custom only) — always available.
+		if systemSlot && idx == 0 {
+			e.userRelayIdx[username] = (idx + 1) % poolSize
+			return nil, 0
+		}
+
+		relayIdx := idx
+		if systemSlot {
+			relayIdx = idx - 1
+		}
+		if relayIdx < 0 || relayIdx >= len(relays) {
+			continue
+		}
+		r := relays[relayIdx]
+
+		// No limits set — always pick this relay.
+		if r.LimitPerMin == 0 && r.LimitPerHour == 0 && r.LimitPerDay == 0 {
+			e.userRelayIdx[username] = (idx + 1) % poolSize
+			return &r, 0
+		}
+
+		// Check per-relay rate limits.
+		now := time.Now()
+		c, ok := e.relayCounters[r.ID]
+		if !ok {
+			c = &relayCounter{
+				minReset:  now.Add(time.Minute),
+				hourReset: now.Add(time.Hour),
+				dayReset:  now.Add(24 * time.Hour),
+			}
+			e.relayCounters[r.ID] = c
+		}
+		if now.After(c.minReset)  { c.minCount = 0;  c.minReset  = now.Add(time.Minute) }
+		if now.After(c.hourReset) { c.hourCount = 0; c.hourReset = now.Add(time.Hour) }
+		if now.After(c.dayReset)  { c.dayCount = 0;  c.dayReset  = now.Add(24 * time.Hour) }
+
+		if r.LimitPerMin > 0 && c.minCount >= r.LimitPerMin {
+			if w := time.Until(c.minReset); w > 0 && (minRetry == 0 || w < minRetry) {
+				minRetry = w
+			}
+			continue
+		}
+		if r.LimitPerHour > 0 && c.hourCount >= r.LimitPerHour {
+			if w := time.Until(c.hourReset); w > 0 && (minRetry == 0 || w < minRetry) {
+				minRetry = w
+			}
+			continue
+		}
+		if r.LimitPerDay > 0 && c.dayCount >= r.LimitPerDay {
+			if w := time.Until(c.dayReset); w > 0 && (minRetry == 0 || w < minRetry) {
+				minRetry = w
+			}
+			continue
+		}
+
+		// Within limits — consume a slot and return this relay.
+		c.minCount++
+		c.hourCount++
+		c.dayCount++
+		e.userRelayIdx[username] = (idx + 1) % poolSize
+		return &r, 0
 	}
-	r := relays[relayIdx]
-	return &r
+
+	// All custom relays are at their send limit.
+	if minRetry == 0 {
+		minRetry = time.Minute
+	}
+	return nil, minRetry
 }
 
 // deliverViaRelay sends all recipients of a message through an authenticated SMTP relay.

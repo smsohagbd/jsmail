@@ -363,8 +363,9 @@ func applyLogFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 	today := time.Now().Truncate(24 * time.Hour)
 	rangeParam := logPageParam(r, "range")
 	switch rangeParam {
-	case "today":
-		return q.Where("sent_at >= ?", today), "Today"
+	case "all":
+		// Explicit all-time: no filter. Warn: COUNT(*) over 200k+ rows is slow.
+		return q, "All Time"
 	case "yesterday":
 		return q.Where("sent_at >= ? AND sent_at < ?", today.AddDate(0, 0, -1), today), "Yesterday"
 	case "7days":
@@ -380,7 +381,8 @@ func applyLogFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 			return q.Where("sent_at >= ? AND sent_at <= ?", fromT, toT.Add(24*time.Hour)), from + " – " + to
 		}
 	}
-	return q, "All Time"
+	// Default (empty or "today"): show today only — keeps COUNT fast on large tables.
+	return q.Where("sent_at >= ?", today), "Today"
 }
 
 // ──────────────────────────── Queue ──────────────────────────────────────────
@@ -2138,4 +2140,53 @@ func (h *Handler) BlacklistScan(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
+}
+
+// ──────────────────────────── Skip Domain list ────────────────────────────────
+
+func (h *Handler) SkipDomainPage(w http.ResponseWriter, r *http.Request) {
+	h.Tmpl.Render(w, "admin/skipdomain", map[string]interface{}{
+		"Page":     "skipdomain",
+		"Domains":  appdb.GetAllSkipDomains(),
+		"FlashOK":  r.URL.Query().Get("ok"),
+		"FlashErr": r.URL.Query().Get("err"),
+	})
+}
+
+func (h *Handler) AddSkipDomain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/skipdomain", http.StatusFound)
+		return
+	}
+	raw := strings.TrimSpace(r.FormValue("domains"))
+	note := strings.TrimSpace(r.FormValue("note"))
+	added, skipped := 0, 0
+	for _, line := range strings.Split(raw, "\n") {
+		d := strings.ToLower(strings.TrimSpace(line))
+		if d == "" || strings.HasPrefix(d, "#") {
+			continue
+		}
+		if err := appdb.AddSkipDomain(d, note); err != nil {
+			skipped++
+		} else {
+			added++
+		}
+	}
+	msg := fmt.Sprintf("%d domain(s) added to skip list", added)
+	if skipped > 0 {
+		msg += fmt.Sprintf(", %d skipped (error)", skipped)
+	}
+	http.Redirect(w, r, "/admin/skipdomain?ok="+url.QueryEscape(msg), http.StatusFound)
+}
+
+func (h *Handler) DeleteSkipDomain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/skipdomain", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	if id > 0 {
+		appdb.DeleteSkipDomain(uint(id))
+	}
+	http.Redirect(w, r, "/admin/skipdomain?ok=Domain+removed+from+skip+list", http.StatusFound)
 }

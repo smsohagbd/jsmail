@@ -81,6 +81,9 @@ func main() {
 		}
 	}
 
+	// Admin domain skip list: silently drop mail to blocked domains before any SMTP handshake.
+	eng.SkipDomainChecker = appdb.IsDomainSkipped
+
 	// Suppression list: skip opted-out recipients at delivery time.
 	eng.SuppressionChecker = appdb.IsSuppressed
 
@@ -128,14 +131,17 @@ func main() {
 				}
 			}
 			out = append(out, delivery.SMTPRelay{
-				ID:          r.ID,
-				Label:       r.Label,
-				Host:        r.Host,
-				Port:        r.Port,
-				Username:    r.Username,
-				Password:    r.Password,
-				TLSMode:     tlsMode,
-				FromAddress: r.FromAddress,
+				ID:           r.ID,
+				Label:        r.Label,
+				Host:         r.Host,
+				Port:         r.Port,
+				Username:     r.Username,
+				Password:     r.Password,
+				TLSMode:      tlsMode,
+				FromAddress:  r.FromAddress,
+				LimitPerMin:  r.LimitPerMin,
+				LimitPerHour: r.LimitPerHour,
+				LimitPerDay:  r.LimitPerDay,
 			})
 		}
 		return mode, out

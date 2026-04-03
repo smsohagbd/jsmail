@@ -265,8 +265,8 @@ func (h *Handler) VerifyBulk(w http.ResponseWriter, r *http.Request) {
 func applyFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 	today := time.Now().Truncate(24 * time.Hour)
 	switch r.URL.Query().Get("range") {
-	case "today":
-		return q.Where("sent_at >= ?", today), "Today"
+	case "all":
+		return q, "All Time"
 	case "yesterday":
 		return q.Where("sent_at >= ? AND sent_at < ?", today.AddDate(0, 0, -1), today), "Yesterday"
 	case "7days":
@@ -282,7 +282,8 @@ func applyFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 			return q.Where("sent_at >= ? AND sent_at <= ?", fromT, toT.Add(24*time.Hour)), from + " – " + to
 		}
 	}
-	return q, "All Time"
+	// Default (empty or "today"): show today only — keeps COUNT fast on large tables.
+	return q.Where("sent_at >= ?", today), "Today"
 }
 
 func splitEmails(raw string) []string {
@@ -436,6 +437,12 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = host
 	}
+	limitPerMin, _  := strconv.Atoi(r.FormValue("limit_per_min"))
+	limitPerHour, _ := strconv.Atoi(r.FormValue("limit_per_hour"))
+	limitPerDay, _  := strconv.Atoi(r.FormValue("limit_per_day"))
+	if limitPerMin < 0  { limitPerMin = 0 }
+	if limitPerHour < 0 { limitPerHour = 0 }
+	if limitPerDay < 0  { limitPerDay = 0 }
 
 	// Test the connection before saving.
 	if err := testSMTPConn(host, port, username, password, tlsMode); err != nil {
@@ -454,6 +461,9 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 		TLSMode:       tlsMode,
 		UseTLS:        tlsMode != "none",
 		Active:        true,
+		LimitPerMin:   limitPerMin,
+		LimitPerHour:  limitPerHour,
+		LimitPerDay:   limitPerDay,
 	}
 	if err := appdb.AddUserSMTP(entry); err != nil {
 		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("save failed: "+err.Error()), http.StatusFound)
@@ -503,11 +513,14 @@ func (h *Handler) UpdateSMTP(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
 	fromAddress := strings.TrimSpace(r.FormValue("from_address"))
-	if err := appdb.UpdateUserSMTPFromAddress(uint(id), claims.Username, fromAddress); err != nil {
+	limitPerMin, _  := strconv.Atoi(r.FormValue("limit_per_min"))
+	limitPerHour, _ := strconv.Atoi(r.FormValue("limit_per_hour"))
+	limitPerDay, _  := strconv.Atoi(r.FormValue("limit_per_day"))
+	if err := appdb.UpdateUserSMTP(uint(id), claims.Username, fromAddress, limitPerMin, limitPerHour, limitPerDay); err != nil {
 		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("update failed: "+err.Error()), http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/user/smtp?ok=From+address+updated", http.StatusFound)
+	http.Redirect(w, r, "/user/smtp?ok=SMTP+settings+updated", http.StatusFound)
 }
 
 func (h *Handler) ToggleSMTPRotation(w http.ResponseWriter, r *http.Request) {

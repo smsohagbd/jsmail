@@ -82,7 +82,7 @@
         <th style="padding-left:20px;">Label</th>
         <th>Host / Port</th>
         <th>Username</th>
-        <th>From Address</th>
+        <th>From Address &amp; Limits</th>
         <th>TLS</th>
         <th>Status</th>
         <th style="padding-right:20px;text-align:right;">Actions</th>
@@ -101,10 +101,26 @@
           <td style="font-family:monospace;font-size:12px;color:#a1a1aa;">{{.Host}}:{{.Port}}</td>
           <td style="font-size:12px;color:#71717a;">{{.Username}}</td>
           <td style="font-size:12px;">
-            <form method="POST" action="/user/smtp/update" style="display:inline;">
+            <form method="POST" action="/user/smtp/update">
               <input type="hidden" name="id" value="{{.ID}}"/>
-              <input type="text" name="from_address" value="{{.FromAddress}}" placeholder="sender@domain.com" style="width:160px;padding:4px 8px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
-              <button type="submit" class="btn btn-ghost" style="font-size:10px;padding:2px 8px;">Save</button>
+              <div style="display:flex;flex-direction:column;gap:5px;">
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <input type="text" name="from_address" value="{{.FromAddress}}" placeholder="sender@domain.com"
+                    style="width:150px;padding:4px 7px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
+                  <span style="font-size:10px;color:#52525b;white-space:nowrap;">Limits/min:</span>
+                  <input type="number" name="limit_per_min" value="{{.LimitPerMin}}" min="0" placeholder="0=∞"
+                    style="width:55px;padding:3px 5px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
+                  <span style="font-size:10px;color:#52525b;white-space:nowrap;">hr:</span>
+                  <input type="number" name="limit_per_hour" value="{{.LimitPerHour}}" min="0" placeholder="0=∞"
+                    style="width:55px;padding:3px 5px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
+                  <span style="font-size:10px;color:#52525b;white-space:nowrap;">day:</span>
+                  <input type="number" name="limit_per_day" value="{{.LimitPerDay}}" min="0" placeholder="0=∞"
+                    style="width:60px;padding:3px 5px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
+                  <button type="submit" class="btn btn-ghost" style="font-size:10px;padding:2px 8px;">Save</button>
+                </div>
+              </div>
             </form>
           </td>
           <td>
@@ -287,6 +303,24 @@
             <option value="none">None</option>
           </select>
         </div>
+        <div class="form-group" style="margin-bottom:14px;">
+          <label class="form-label">Sending Limits <span style="color:#52525b;font-weight:400;">(optional — 0 = unlimited)</span></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+            <div>
+              <div style="font-size:10px;color:#71717a;margin-bottom:3px;">Per Minute</div>
+              <input class="form-input" type="number" name="limit_per_min" id="f-lmin" min="0" placeholder="0 = ∞"/>
+            </div>
+            <div>
+              <div style="font-size:10px;color:#71717a;margin-bottom:3px;">Per Hour</div>
+              <input class="form-input" type="number" name="limit_per_hour" id="f-lhour" min="0" placeholder="0 = ∞"/>
+            </div>
+            <div>
+              <div style="font-size:10px;color:#71717a;margin-bottom:3px;">Per Day</div>
+              <input class="form-input" type="number" name="limit_per_day" id="f-lday" min="0" placeholder="0 = ∞"/>
+            </div>
+          </div>
+          <div style="font-size:11px;color:#52525b;margin-top:4px;">When the limit is reached the server is skipped until the window resets. Remaining servers or system delivery (if enabled) are used as fallback.</div>
+        </div>
         <div id="test-result" style="display:none;padding:9px 13px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
           <button type="button" class="btn btn-ghost" style="font-size:12px;" onclick="testSMTP()">
@@ -378,6 +412,9 @@ function applyPreset(host, port, defaultUser, label, tlsMode) {
   document.getElementById('f-from').value  = '';
   document.getElementById('f-pass').value  = '';
   document.getElementById('f-tls').value   = tlsMode || 'auto';
+  document.getElementById('f-lmin').value  = '';
+  document.getElementById('f-lhour').value = '';
+  document.getElementById('f-lday').value  = '';
   document.getElementById('f-host').focus();
   const r = document.getElementById('test-result');
   r.style.display = 'none';

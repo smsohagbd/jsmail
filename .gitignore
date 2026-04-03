@@ -1,3 +1,6 @@
+# Local configuration (passwords, tokens — keep out of version control)
+config.yaml
+
 # SQLite database
 *.db
 

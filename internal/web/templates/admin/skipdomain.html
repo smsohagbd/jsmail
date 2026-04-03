@@ -1,0 +1,112 @@
+{{define "title"}}Skip Domain List — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Skip Domain List</div>
+    <div class="page-sub">Domains added here are silently dropped at delivery time — no SMTP handshake, no DNS lookup, no retries</div>
+  </div>
+  <button class="btn btn-primary" onclick="document.getElementById('add-card').style.display='block';document.getElementById('add-card').scrollIntoView({behavior:'smooth'})">
+    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    Add Domains
+  </button>
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<!-- How it works info -->
+<div style="background:#18181b;border:1px solid #3f3f46;border-radius:8px;padding:14px 18px;margin-bottom:16px;font-size:12px;color:#71717a;line-height:1.7;">
+  <strong style="color:#a1a1aa;">How it works:</strong>
+  When the delivery engine picks a message destined for a domain on this list, it immediately marks all matching recipients as <code style="color:#f87171;background:#1c0606;padding:1px 5px;border-radius:3px;">suppressed</code> and moves on — without opening a TCP connection, performing any DNS/MX lookup, or consuming a retry slot.
+  The send log entry is preserved so you have a record of what was blocked.
+  <br>
+  <strong style="color:#a1a1aa;">Examples:</strong> <code style="color:#a78bfa;background:#1e1b4b;padding:1px 5px;border-radius:3px;">gmail.com</code> &nbsp;
+  <code style="color:#a78bfa;background:#1e1b4b;padding:1px 5px;border-radius:3px;">yahoo.com</code> &nbsp;
+  <code style="color:#a78bfa;background:#1e1b4b;padding:1px 5px;border-radius:3px;">hotmail.com</code> &nbsp;
+  — exact recipient domain match (not a subdomain wildcard).
+</div>
+
+<!-- Current skip list -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Skipped Domains
+      <span style="margin-left:8px;background:#1c0606;color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">{{len .Domains}} blocked</span>
+    </span>
+  </div>
+  {{if .Domains}}
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Domain</th>
+        <th>Note</th>
+        <th>Added</th>
+        <th style="padding-right:20px;text-align:right;">Actions</th>
+      </tr></thead>
+      <tbody>
+        {{range .Domains}}
+        <tr>
+          <td style="padding-left:20px;">
+            <code style="font-size:13px;color:#f87171;font-weight:600;">{{.Domain}}</code>
+          </td>
+          <td style="font-size:12px;color:#71717a;">{{if .Note}}{{.Note}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="font-size:12px;color:#52525b;">{{.CreatedAt.Format "Jan 2, 2006"}}</td>
+          <td style="padding-right:20px;text-align:right;">
+            <form method="POST" action="/admin/skipdomain/delete"
+              onsubmit="return confirm('Remove {{.Domain}} from skip list? Emails to this domain will be delivered again.')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-danger" style="font-size:11px;padding:4px 12px;">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div style="padding:48px;text-align:center;">
+    <div style="font-size:36px;margin-bottom:12px;">🚫</div>
+    <div style="font-size:15px;font-weight:600;color:#e4e4e7;margin-bottom:6px;">No domains skipped</div>
+    <div style="font-size:13px;color:#52525b;">All recipient domains are currently being delivered normally.</div>
+  </div>
+  {{end}}
+</div>
+
+<!-- Add domains card -->
+<div class="card" id="add-card" style="{{if not .Domains}}{{else}}display:none;{{end}}margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Add Domains to Skip List</span>
+    {{if .Domains}}
+    <button type="button" onclick="document.getElementById('add-card').style.display='none'"
+      style="background:none;border:none;color:#71717a;font-size:18px;cursor:pointer;line-height:1;padding:0 4px;">✕</button>
+    {{end}}
+  </div>
+  <div style="padding:20px 24px 24px;">
+    <form method="POST" action="/admin/skipdomain/add">
+      <div class="form-group">
+        <label class="form-label">Domains <span style="color:#52525b;font-weight:400;">(one per line — exact recipient domain, e.g. gmail.com)</span></label>
+        <textarea class="form-input" name="domains" rows="6" required
+          placeholder="gmail.com&#10;yahoo.com&#10;hotmail.com&#10;outlook.com"
+          style="font-family:monospace;font-size:13px;resize:vertical;"></textarea>
+        <div style="font-size:11px;color:#52525b;margin-top:4px;">Lines starting with # are ignored. Duplicates are silently skipped.</div>
+      </div>
+      <div class="form-group" style="margin-bottom:20px;">
+        <label class="form-label">Note <span style="color:#52525b;font-weight:400;">(optional — reason or comment)</span></label>
+        <input class="form-input" type="text" name="note" placeholder="e.g. Free mailboxes — poor deliverability"/>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        {{if .Domains}}
+        <button type="button" class="btn btn-ghost" onclick="document.getElementById('add-card').style.display='none'">Cancel</button>
+        {{end}}
+        <button type="submit" class="btn btn-primary">
+          <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+          Block Domains
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+</div>
+{{end}}

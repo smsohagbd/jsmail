@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,7 +22,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -48,6 +48,35 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	// Configure connection pool and SQLite-specific performance settings.
+	if sqlDB, err2 := DB.DB(); err2 == nil {
+		if driver == "sqlite" {
+			// WAL mode: readers don't block writers and writers don't block readers.
+			// This eliminates the "database is locked" stalls that slow the UI under
+			// concurrent delivery + dashboard polling.
+			DB.Exec("PRAGMA journal_mode=WAL;")
+			// NORMAL is safe with WAL (only loses the last committed transaction on
+			// a power-cut, not the whole database).
+			DB.Exec("PRAGMA synchronous=NORMAL;")
+			// 32 MB in-process page cache (negative value = KiB).
+			DB.Exec("PRAGMA cache_size=-32000;")
+			// Wait up to 10 s instead of immediately returning SQLITE_BUSY when
+			// another connection holds the write lock.
+			DB.Exec("PRAGMA busy_timeout=10000;")
+			// temp_store=MEMORY keeps temp tables / sort buffers in RAM.
+			DB.Exec("PRAGMA temp_store=MEMORY;")
+
+			// Keep a modest pool; WAL allows concurrent reads.
+			sqlDB.SetMaxOpenConns(25)
+			sqlDB.SetMaxIdleConns(5)
+		} else {
+			// MySQL: allow a generous pool for concurrent delivery workers.
+			sqlDB.SetMaxOpenConns(100)
+			sqlDB.SetMaxIdleConns(25)
+		}
+		sqlDB.SetConnMaxLifetime(10 * time.Minute)
 	}
 
 	// Drop email_logs if it has the old 'to' column (pre-rename migration).
@@ -85,6 +114,7 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 		&Automation{},
 		&AutomationStep{},
 		&AutomationSend{},
+		&SkipDomain{},
 	); err != nil {
 		return err
 	}
@@ -165,20 +195,26 @@ func incrementDailyStat(statDate, username, field string, delta int64) {
 		UpdateColumn(col, gorm.Expr("COALESCE("+col+",0) + ?", delta))
 }
 
-// LogQueued writes a queued log entry for every recipient.
+// LogQueued writes a queued log entry for every recipient using a batch insert
+// so large campaigns (thousands of recipients) only need one round-trip per 500 rows.
 func LogQueued(username, msgID, from string, recipients []string) {
+	if len(recipients) == 0 {
+		return
+	}
 	now := time.Now()
 	statDate := now.Format("2006-01-02")
-	for _, rcpt := range recipients {
-		DB.Create(&EmailLog{
+	rows := make([]EmailLog, len(recipients))
+	for i, rcpt := range recipients {
+		rows[i] = EmailLog{
 			Username:  username,
 			MessageID: msgID,
 			From:      from,
 			Recipient: rcpt,
 			Status:    "queued",
 			SentAt:    now,
-		})
+		}
 	}
+	DB.CreateInBatches(rows, 500)
 	incrementDailyStat(statDate, username, "sent", int64(len(recipients)))
 	incrementDailyStat(statDate, "", "sent", int64(len(recipients))) // admin-wide
 }
@@ -856,6 +892,99 @@ func SetSetting(key, value string) error {
 	return DB.Unscoped().Model(&s).Updates(map[string]interface{}{"setting_value": value, "deleted_at": nil}).Error
 }
 
+// ──────────────────────────── Skip Domains ───────────────────────────────────
+
+// GetAllSkipDomains returns every domain on the skip list, newest first.
+func GetAllSkipDomains() []SkipDomain {
+	var list []SkipDomain
+	DB.Order("domain asc").Find(&list)
+	return list
+}
+
+// AddSkipDomain adds a domain to the skip list (idempotent on duplicate).
+func AddSkipDomain(domain, note string) error {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return fmt.Errorf("domain required")
+	}
+	// Soft-delete safe upsert: restore if previously deleted.
+	var s SkipDomain
+	err := DB.Unscoped().Where("domain = ?", domain).First(&s).Error
+	var dbErr error
+	if err != nil {
+		dbErr = DB.Create(&SkipDomain{Domain: domain, Note: note}).Error
+	} else {
+		dbErr = DB.Unscoped().Model(&s).Updates(map[string]interface{}{
+			"note": note, "deleted_at": nil,
+		}).Error
+	}
+	if dbErr == nil {
+		invalidateSkipDomainsCache()
+	}
+	return dbErr
+}
+
+// DeleteSkipDomain permanently removes a domain from the skip list.
+func DeleteSkipDomain(id uint) {
+	DB.Unscoped().Delete(&SkipDomain{}, id)
+	invalidateSkipDomainsCache()
+}
+
+// skipDomainCache is an in-process cache of the skip-domain set.
+// The delivery engine calls IsDomainSkipped for every unique recipient domain on
+// every message; caching avoids N DB round-trips under high-volume sending.
+var (
+	skipDomainsMu     sync.RWMutex
+	skipDomainsSet    map[string]struct{}
+	skipDomainsExpiry time.Time
+)
+
+const skipDomainsCacheTTL = 60 * time.Second
+
+func invalidateSkipDomainsCache() {
+	skipDomainsMu.Lock()
+	skipDomainsSet = nil
+	skipDomainsMu.Unlock()
+}
+
+func loadSkipDomainsCache() map[string]struct{} {
+	var list []SkipDomain
+	DB.Select("domain").Find(&list)
+	m := make(map[string]struct{}, len(list))
+	for _, d := range list {
+		m[d.Domain] = struct{}{}
+	}
+	return m
+}
+
+// IsDomainSkipped returns true when the lowercase recipient domain is on the skip list.
+// Results are cached for 60 seconds to avoid a DB round-trip on every message.
+func IsDomainSkipped(domain string) bool {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return false
+	}
+	skipDomainsMu.RLock()
+	if skipDomainsSet != nil && time.Now().Before(skipDomainsExpiry) {
+		_, ok := skipDomainsSet[domain]
+		skipDomainsMu.RUnlock()
+		return ok
+	}
+	skipDomainsMu.RUnlock()
+
+	// Refresh cache under write lock (double-check to avoid thundering herd).
+	skipDomainsMu.Lock()
+	defer skipDomainsMu.Unlock()
+	if skipDomainsSet != nil && time.Now().Before(skipDomainsExpiry) {
+		_, ok := skipDomainsSet[domain]
+		return ok
+	}
+	skipDomainsSet = loadSkipDomainsCache()
+	skipDomainsExpiry = time.Now().Add(skipDomainsCacheTTL)
+	_, ok := skipDomainsSet[domain]
+	return ok
+}
+
 // ──────────────────────────── UserSMTP ───────────────────────────────────────
 
 // GetUserSMTPs returns all custom SMTP entries for a user.
@@ -922,6 +1051,27 @@ func UpdateUserSMTPFromAddress(id uint, username, fromAddress string) error {
 	return DB.Model(&UserSMTP{}).
 		Where("id = ? AND owner_username = ?", id, username).
 		Update("from_address", strings.TrimSpace(fromAddress)).Error
+}
+
+// UpdateUserSMTP updates the from_address and sending rate limits for an SMTP entry.
+func UpdateUserSMTP(id uint, username, fromAddress string, limitPerMin, limitPerHour, limitPerDay int) error {
+	if limitPerMin < 0 {
+		limitPerMin = 0
+	}
+	if limitPerHour < 0 {
+		limitPerHour = 0
+	}
+	if limitPerDay < 0 {
+		limitPerDay = 0
+	}
+	return DB.Model(&UserSMTP{}).
+		Where("id = ? AND owner_username = ?", id, username).
+		Updates(map[string]interface{}{
+			"from_address":  strings.TrimSpace(fromAddress),
+			"limit_per_min":  limitPerMin,
+			"limit_per_hour": limitPerHour,
+			"limit_per_day":  limitPerDay,
+		}).Error
 }
 
 // GetUserSMTPMode returns a user's SMTP delivery mode and rotation preference.
@@ -1412,10 +1562,10 @@ func recentDeliverySnapshot(username string) RecentDeliveryForLogs {
 	if user != "" {
 		qLast = qLast.Where("username = ?", user)
 	}
+	// sent_at is always set for terminal-status rows; ORDER BY sent_at is served by
+	// idx_el_status_sent (status, sent_at) so this never does a full-table filesort.
 	var row EmailLog
-	if err := qLast.Clauses(clause.OrderBy{
-		Expression: clause.Expr{SQL: "COALESCE(sent_at, created_at) DESC, id DESC"},
-	}).Limit(1).First(&row).Error; err == nil {
+	if err := qLast.Order("sent_at DESC, id DESC").Limit(1).First(&row).Error; err == nil {
 		out.HasLast = true
 		ts := row.SentAt
 		if ts.IsZero() {

@@ -219,6 +219,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/data/delete-all", webauth.RequireAdmin(ah.DataManagementDeleteAll))
 	mux.HandleFunc("/admin/campaigns", webauth.RequireAdmin(ah.Campaigns))
 	mux.HandleFunc("/admin/automation", webauth.RequireAdmin(ah.Automation))
+	mux.HandleFunc("/admin/skipdomain", webauth.RequireAdmin(ah.SkipDomainPage))
+	mux.HandleFunc("/admin/skipdomain/add", webauth.RequireAdmin(ah.AddSkipDomain))
+	mux.HandleFunc("/admin/skipdomain/delete", webauth.RequireAdmin(ah.DeleteSkipDomain))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer, ConfigSnapshot: s.cfg}

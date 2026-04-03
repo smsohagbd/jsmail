@@ -46,12 +46,12 @@
     <div>
       <div class="form-label">Date Range</div>
       <select class="form-input" name="range" style="width:auto;" onchange="document.getElementById('custom').style.display=this.value==='custom'?'flex':'none'">
-        <option value="">All Time</option>
-        <option value="today"     {{if eq (index .Query "range") "today"}}selected{{end}}>Today</option>
+        <option value=""      {{if or (eq (index .Query "range") "") (eq (index .Query "range") "today")}}selected{{end}}>Today</option>
         <option value="yesterday" {{if eq (index .Query "range") "yesterday"}}selected{{end}}>Yesterday</option>
         <option value="7days"     {{if eq (index .Query "range") "7days"}}selected{{end}}>Last 7 Days</option>
         <option value="30days"    {{if eq (index .Query "range") "30days"}}selected{{end}}>Last 30 Days</option>
         <option value="custom"    {{if eq (index .Query "range") "custom"}}selected{{end}}>Custom</option>
+        <option value="all"       {{if eq (index .Query "range") "all"}}selected{{end}}>All Time</option>
       </select>
     </div>
     <div id="custom" style="display:{{if eq (index .Query "range") "custom"}}flex{{else}}none{{end}};gap:8px;">
