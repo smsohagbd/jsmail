@@ -84,6 +84,18 @@ func main() {
 	// Admin domain skip list: silently drop mail to blocked domains before any SMTP handshake.
 	eng.SkipDomainChecker = appdb.IsDomainSkipped
 
+	// Email verifier: used by relays that have VerifyBeforeSend enabled.
+	// The verifier (v) is created later in web server setup; set it here via a closure
+	// so the reference is captured once the verifier is initialised.
+	var verifierRef *verifier.Verifier
+	eng.EmailVerifier = func(email string) (bool, string) {
+		if verifierRef == nil {
+			return true, ""
+		}
+		r := verifierRef.Verify(email)
+		return r.Valid, r.Reason
+	}
+
 	// Suppression list: skip opted-out recipients at delivery time.
 	eng.SuppressionChecker = appdb.IsSuppressed
 
@@ -131,17 +143,18 @@ func main() {
 				}
 			}
 			out = append(out, delivery.SMTPRelay{
-				ID:           r.ID,
-				Label:        r.Label,
-				Host:         r.Host,
-				Port:         r.Port,
-				Username:     r.Username,
-				Password:     r.Password,
-				TLSMode:      tlsMode,
-				FromAddress:  r.FromAddress,
-				LimitPerMin:  r.LimitPerMin,
-				LimitPerHour: r.LimitPerHour,
-				LimitPerDay:  r.LimitPerDay,
+				ID:               r.ID,
+				Label:            r.Label,
+				Host:             r.Host,
+				Port:             r.Port,
+				Username:         r.Username,
+				Password:         r.Password,
+				TLSMode:          tlsMode,
+				FromAddress:      r.FromAddress,
+				LimitPerMin:      r.LimitPerMin,
+				LimitPerHour:     r.LimitPerHour,
+				LimitPerDay:      r.LimitPerDay,
+				VerifyBeforeSend: r.VerifyBeforeSend,
 			})
 		}
 		return mode, out
@@ -201,6 +214,7 @@ func main() {
 
 	// Start the web UI server.
 	v := verifier.New(verifier.Config{HeloName: cfg.Delivery.HeloName})
+	verifierRef = v // wire the delivery engine's verify-before-send hook
 	dbDisplay := cfg.Database.Path
 	if cfg.Database.Driver == "mysql" {
 		dbDisplay = fmt.Sprintf("mysql:%s:%d/%s", cfg.Database.Host, cfg.Database.Port, cfg.Database.Database)

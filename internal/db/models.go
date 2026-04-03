@@ -43,6 +43,10 @@ type UserSMTP struct {
 	LimitPerMin  int `gorm:"default:0"`
 	LimitPerHour int `gorm:"default:0"`
 	LimitPerDay  int `gorm:"default:0"`
+	// When true, each recipient is verified (MX + SMTP probe) before the message
+	// is forwarded to this relay. Invalid addresses are silently suppressed so
+	// they never reach the relay and cannot cause bounces or complaints there.
+	VerifyBeforeSend bool `gorm:"default:false"`
 }
 
 type EmailLog struct {

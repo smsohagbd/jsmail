@@ -108,6 +108,8 @@ type SMTPRelay struct {
 	LimitPerMin  int
 	LimitPerHour int
 	LimitPerDay  int
+	// When true, each recipient is verified before the message is forwarded.
+	VerifyBeforeSend bool
 }
 
 // relayCounter tracks rolling send counts for one custom SMTP relay.
@@ -176,6 +178,12 @@ type Engine struct {
 	// throttle counters: key is "username|domain"
 	throttleMu       sync.Mutex
 	throttleCounters map[string]*throttleCounter
+
+	// EmailVerifier verifies a single recipient address.
+	// Returns (valid=true, reason="") when the address is deliverable.
+	// Returns (valid=false, reason=<why>) for definitive failures (bad format, no MX, mailbox not found).
+	// When nil, verification is skipped regardless of relay.VerifyBeforeSend.
+	EmailVerifier func(email string) (valid bool, reason string)
 
 	// SkipDomainChecker returns true when the recipient domain is on the admin skip list.
 	// No SMTP handshake is attempted — recipients are immediately marked suppressed.
@@ -530,61 +538,111 @@ func (e *Engine) deliver(msg *queue.Message) {
 				return
 			}
 
-			if relay != nil {
-				e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
-				e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
-				fromAddr := msg.From
-				relayData := stripDKIMSignatureHeaders(data)
-				if relay.FromAddress != "" {
-					fromAddr = relay.FromAddress
-					relayData = email.RewriteFromHeader(relayData, fromAddr)
+		if relay != nil {
+			e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
+			e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
+
+			// ── Verify-before-send ────────────────────────────────────────────
+			// When enabled, each recipient is probed (MX + SMTP handshake) concurrently.
+			// Only definitively invalid addresses are suppressed; uncertain/unknown
+			// results pass through to avoid false positives blocking real deliveries.
+			activeRcpts := msg.To
+			if relay.VerifyBeforeSend && e.EmailVerifier != nil && len(msg.To) > 0 {
+				e.tracePhase(msg.ID, "verify_before_send", fmt.Sprintf("%d recipients", len(msg.To)))
+				type vresult struct {
+					rcpt   string
+					valid  bool
+					reason string
 				}
-				if err := e.deliverViaRelay(*relay, fromAddr, msg.To, relayData, msg.ID); err != nil {
-					log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
-					if isPermanentSMTPError(err) {
-						if e.OnEvent != nil {
-							for _, to := range msg.To {
-								e.OnEvent(DeliveryEvent{
-									MessageID: msg.ID, Username: msg.Username,
-									From: msg.From, To: to, Status: "hard_bounce",
-									Error: err.Error(), MXHost: formatRelayLogMX(*relay),
-								})
-							}
-						}
-						e.queue.Complete(msg.ID)
+				results := make(chan vresult, len(msg.To))
+				sem := make(chan struct{}, 5) // max 5 concurrent probes
+				for _, rcpt := range msg.To {
+					go func(r string) {
+						sem <- struct{}{}
+						defer func() { <-sem }()
+						ok, reason := e.EmailVerifier(r)
+						results <- vresult{rcpt: r, valid: ok, reason: reason}
+					}(rcpt)
+				}
+				var passed []string
+				for range msg.To {
+					res := <-results
+					if res.valid {
+						passed = append(passed, res.rcpt)
 					} else {
-						backoff := e.retryBase * (1 << uint(msg.RetryCount))
-						if backoff > 24*time.Hour {
-							backoff = 24 * time.Hour
-						}
-						e.queue.Defer(msg, backoff, err.Error())
-						if e.OnEvent != nil {
-							for _, to := range msg.To {
-								e.OnEvent(DeliveryEvent{
-									MessageID: msg.ID, Username: msg.Username,
-									From: msg.From, To: to, Status: "deferred",
-									Error: err.Error(), MXHost: formatRelayLogMX(*relay),
-								})
-							}
-						}
-					}
-				} else {
-					e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
-					e.queue.Complete(msg.ID)
-					relayMX := formatRelayLogMX(*relay)
-					for _, to := range msg.To {
-						e.recordDedup(msg.Username, to)
+						log.Printf("[DELIVERY] ⏭ verify-before-send: %s invalid (%s) — suppressing", res.rcpt, res.reason)
 						if e.OnEvent != nil {
 							e.OnEvent(DeliveryEvent{
 								MessageID: msg.ID, Username: msg.Username,
-								From: msg.From, To: to, Status: "delivered",
-								MXHost: relayMX,
+								From: msg.From, To: res.rcpt, Status: "suppressed",
+								Error:  "verify-before-send: " + res.reason,
+								MXHost: formatRelayLogMX(*relay),
 							})
 						}
 					}
 				}
-				return
+				if len(passed) == 0 {
+					e.logV("[DELIVERY] ⏭ verify-before-send: all %d recipient(s) invalid for message %s — completing without relay", len(msg.To), msg.ID)
+					e.queue.Complete(msg.ID)
+					return
+				}
+				activeRcpts = passed
+				e.logV("[DELIVERY]   verify-before-send: %d/%d recipients passed verification", len(activeRcpts), len(msg.To))
 			}
+			// ── end verify-before-send ────────────────────────────────────────
+
+			fromAddr := msg.From
+			relayData := stripDKIMSignatureHeaders(data)
+			if relay.FromAddress != "" {
+				fromAddr = relay.FromAddress
+				relayData = email.RewriteFromHeader(relayData, fromAddr)
+			}
+			if err := e.deliverViaRelay(*relay, fromAddr, activeRcpts, relayData, msg.ID); err != nil {
+				log.Printf("[DELIVERY] ✗ relay %q failed: %v", relay.Label, err)
+				if isPermanentSMTPError(err) {
+					if e.OnEvent != nil {
+						for _, to := range activeRcpts {
+							e.OnEvent(DeliveryEvent{
+								MessageID: msg.ID, Username: msg.Username,
+								From: msg.From, To: to, Status: "hard_bounce",
+								Error: err.Error(), MXHost: formatRelayLogMX(*relay),
+							})
+						}
+					}
+					e.queue.Complete(msg.ID)
+				} else {
+					backoff := e.retryBase * (1 << uint(msg.RetryCount))
+					if backoff > 24*time.Hour {
+						backoff = 24 * time.Hour
+					}
+					e.queue.Defer(msg, backoff, err.Error())
+					if e.OnEvent != nil {
+						for _, to := range activeRcpts {
+							e.OnEvent(DeliveryEvent{
+								MessageID: msg.ID, Username: msg.Username,
+								From: msg.From, To: to, Status: "deferred",
+								Error: err.Error(), MXHost: formatRelayLogMX(*relay),
+							})
+						}
+					}
+				}
+			} else {
+				e.logV("[DELIVERY] ✓ message %s relayed via %q SUCCESSFULLY", msg.ID, relay.Label)
+				e.queue.Complete(msg.ID)
+				relayMX := formatRelayLogMX(*relay)
+				for _, to := range activeRcpts {
+					e.recordDedup(msg.Username, to)
+					if e.OnEvent != nil {
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: to, Status: "delivered",
+							MXHost: relayMX,
+						})
+					}
+				}
+			}
+			return
+		}
 
 			// relay == nil and retryAfter == 0:
 			// system_and_custom selected the system slot → fall through.

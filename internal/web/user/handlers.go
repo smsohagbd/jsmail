@@ -386,15 +386,37 @@ func userOutboundIP() string {
 
 // ──────────────────────────── Custom SMTP ────────────────────────────────────
 
+// smtpWithStats pairs a UserSMTP record with its per-relay delivery counters.
+type smtpWithStats struct {
+	appdb.UserSMTP
+	TodaySent     int64
+	YesterdaySent int64
+	TotalSent     int64
+}
+
 func (h *Handler) SMTPPage(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	var u appdb.User
 	h.DB.Where("username = ?", claims.Username).First(&u)
 
 	smtps := appdb.GetUserSMTPs(claims.Username)
+	statsMap := appdb.GetUserRelayStats(claims.Username)
+
+	// Merge stats into view structs so the template can access them without map lookups.
+	smtpViews := make([]smtpWithStats, len(smtps))
+	for i, s := range smtps {
+		st := statsMap[s.Label]
+		smtpViews[i] = smtpWithStats{
+			UserSMTP:      s,
+			TodaySent:     st.TodaySent,
+			YesterdaySent: st.YesterdaySent,
+			TotalSent:     st.TotalSent,
+		}
+	}
+
 	h.Tmpl.Render(w, "user/smtp", merge(h.base(claims.Username), map[string]interface{}{
 		"Page":          "smtp",
-		"SMTPs":         smtps,
+		"SMTPs":         smtpViews,
 		"SMTPMode":      u.SMTPMode,
 		"SMTPRotation":  u.SMTPRotation,
 		"MaxCustomSMTP": u.MaxCustomSMTP,
@@ -443,6 +465,7 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 	if limitPerMin < 0  { limitPerMin = 0 }
 	if limitPerHour < 0 { limitPerHour = 0 }
 	if limitPerDay < 0  { limitPerDay = 0 }
+	verifyBeforeSend := r.FormValue("verify_before_send") == "on"
 
 	// Test the connection before saving.
 	if err := testSMTPConn(host, port, username, password, tlsMode); err != nil {
@@ -451,19 +474,20 @@ func (h *Handler) AddSMTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entry := &appdb.UserSMTP{
-		OwnerUsername: claims.Username,
-		Label:         label,
-		Host:          host,
-		Port:          port,
-		Username:      username,
-		Password:      password,
-		FromAddress:   fromAddress,
-		TLSMode:       tlsMode,
-		UseTLS:        tlsMode != "none",
-		Active:        true,
-		LimitPerMin:   limitPerMin,
-		LimitPerHour:  limitPerHour,
-		LimitPerDay:   limitPerDay,
+		OwnerUsername:    claims.Username,
+		Label:            label,
+		Host:             host,
+		Port:             port,
+		Username:         username,
+		Password:         password,
+		FromAddress:      fromAddress,
+		TLSMode:          tlsMode,
+		UseTLS:           tlsMode != "none",
+		Active:           true,
+		LimitPerMin:      limitPerMin,
+		LimitPerHour:     limitPerHour,
+		LimitPerDay:      limitPerDay,
+		VerifyBeforeSend: verifyBeforeSend,
 	}
 	if err := appdb.AddUserSMTP(entry); err != nil {
 		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("save failed: "+err.Error()), http.StatusFound)
@@ -516,7 +540,8 @@ func (h *Handler) UpdateSMTP(w http.ResponseWriter, r *http.Request) {
 	limitPerMin, _  := strconv.Atoi(r.FormValue("limit_per_min"))
 	limitPerHour, _ := strconv.Atoi(r.FormValue("limit_per_hour"))
 	limitPerDay, _  := strconv.Atoi(r.FormValue("limit_per_day"))
-	if err := appdb.UpdateUserSMTP(uint(id), claims.Username, fromAddress, limitPerMin, limitPerHour, limitPerDay); err != nil {
+	verifyBeforeSend := r.FormValue("verify_before_send") == "on"
+	if err := appdb.UpdateUserSMTP(uint(id), claims.Username, fromAddress, limitPerMin, limitPerHour, limitPerDay, verifyBeforeSend); err != nil {
 		http.Redirect(w, r, "/user/smtp?err="+url.QueryEscape("update failed: "+err.Error()), http.StatusFound)
 		return
 	}

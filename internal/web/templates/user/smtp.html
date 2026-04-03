@@ -83,6 +83,7 @@
         <th>Host / Port</th>
         <th>Username</th>
         <th>From Address &amp; Limits</th>
+        <th>Delivered</th>
         <th>TLS</th>
         <th>Status</th>
         <th style="padding-right:20px;text-align:right;">Actions</th>
@@ -118,10 +119,34 @@
                   <span style="font-size:10px;color:#52525b;white-space:nowrap;">day:</span>
                   <input type="number" name="limit_per_day" value="{{.LimitPerDay}}" min="0" placeholder="0=∞"
                     style="width:60px;padding:3px 5px;font-size:11px;background:#09090b;border:1px solid #27272a;border-radius:4px;color:#e4e4e7;"/>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;">
+                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:10px;color:{{if .VerifyBeforeSend}}#a78bfa{{else}}#52525b{{end}};"
+                    title="When ON: each recipient is verified (MX + SMTP probe) before this relay receives the message. Invalid addresses are suppressed without touching your relay.">
+                    <input type="checkbox" name="verify_before_send" value="on" {{if .VerifyBeforeSend}}checked{{end}}
+                      style="accent-color:#818cf8;width:12px;height:12px;cursor:pointer;"/>
+                    Verify emails before send
+                  </label>
                   <button type="submit" class="btn btn-ghost" style="font-size:10px;padding:2px 8px;">Save</button>
                 </div>
               </div>
             </form>
+          </td>
+          <td style="white-space:nowrap;">
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:80px;">
+              <div style="display:flex;justify-content:space-between;gap:8px;">
+                <span style="font-size:10px;color:#52525b;">Today</span>
+                <span style="font-size:12px;font-weight:600;color:{{if gt .TodaySent 0}}#4ade80{{else}}#3f3f46{{end}};">{{.TodaySent}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;gap:8px;">
+                <span style="font-size:10px;color:#52525b;">Yesterday</span>
+                <span style="font-size:12px;color:#a1a1aa;">{{.YesterdaySent}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;gap:8px;padding-top:2px;border-top:1px solid #27272a;">
+                <span style="font-size:10px;color:#52525b;">Total</span>
+                <span style="font-size:12px;color:#71717a;">{{.TotalSent}}</span>
+              </div>
+            </div>
           </td>
           <td>
             {{if eq .TLSMode "ssl"}}
@@ -321,6 +346,20 @@
           </div>
           <div style="font-size:11px;color:#52525b;margin-top:4px;">When the limit is reached the server is skipped until the window resets. Remaining servers or system delivery (if enabled) are used as fallback.</div>
         </div>
+        <div class="form-group" style="margin-bottom:14px;">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
+            <input type="checkbox" name="verify_before_send" id="f-verify" value="on"
+              style="margin-top:3px;accent-color:#818cf8;width:14px;height:14px;flex-shrink:0;cursor:pointer;"/>
+            <div>
+              <div style="font-size:13px;color:#e4e4e7;font-weight:500;">Verify emails before sending</div>
+              <div style="font-size:11px;color:#52525b;margin-top:2px;line-height:1.5;">
+                When enabled, each recipient is checked via MX lookup + SMTP probe before the message reaches this relay.
+                Addresses confirmed as non-existent are silently suppressed — they never hit your relay and cannot cause bounces or complaints.
+                <br><strong style="color:#a1a1aa;">Note:</strong> adds a few seconds per recipient; best for low-volume or high-value sends.
+              </div>
+            </div>
+          </label>
+        </div>
         <div id="test-result" style="display:none;padding:9px 13px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
           <button type="button" class="btn btn-ghost" style="font-size:12px;" onclick="testSMTP()">
@@ -415,6 +454,7 @@ function applyPreset(host, port, defaultUser, label, tlsMode) {
   document.getElementById('f-lmin').value  = '';
   document.getElementById('f-lhour').value = '';
   document.getElementById('f-lday').value  = '';
+  document.getElementById('f-verify').checked = false;
   document.getElementById('f-host').focus();
   const r = document.getElementById('test-result');
   r.style.display = 'none';

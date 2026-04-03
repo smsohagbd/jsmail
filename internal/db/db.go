@@ -1053,8 +1053,8 @@ func UpdateUserSMTPFromAddress(id uint, username, fromAddress string) error {
 		Update("from_address", strings.TrimSpace(fromAddress)).Error
 }
 
-// UpdateUserSMTP updates the from_address and sending rate limits for an SMTP entry.
-func UpdateUserSMTP(id uint, username, fromAddress string, limitPerMin, limitPerHour, limitPerDay int) error {
+// UpdateUserSMTP updates the from_address, sending rate limits, and verify flag for an SMTP entry.
+func UpdateUserSMTP(id uint, username, fromAddress string, limitPerMin, limitPerHour, limitPerDay int, verifyBeforeSend bool) error {
 	if limitPerMin < 0 {
 		limitPerMin = 0
 	}
@@ -1067,11 +1067,62 @@ func UpdateUserSMTP(id uint, username, fromAddress string, limitPerMin, limitPer
 	return DB.Model(&UserSMTP{}).
 		Where("id = ? AND owner_username = ?", id, username).
 		Updates(map[string]interface{}{
-			"from_address":  strings.TrimSpace(fromAddress),
-			"limit_per_min":  limitPerMin,
-			"limit_per_hour": limitPerHour,
-			"limit_per_day":  limitPerDay,
+			"from_address":       strings.TrimSpace(fromAddress),
+			"limit_per_min":      limitPerMin,
+			"limit_per_hour":     limitPerHour,
+			"limit_per_day":      limitPerDay,
+			"verify_before_send": verifyBeforeSend,
 		}).Error
+}
+
+// RelayStats holds delivery counters for one custom SMTP relay.
+type RelayStats struct {
+	TodaySent     int64
+	YesterdaySent int64
+	TotalSent     int64
+}
+
+// GetUserRelayStats returns delivered-email counters grouped by relay label for a user.
+// Map key is the relay label as stored in UserSMTP.Label.
+// Counts are taken from email_logs.mx_host which is set to "via relay: <label>"
+// for every message delivered through a custom relay.
+func GetUserRelayStats(username string) map[string]RelayStats {
+	type row struct {
+		MXHost    string
+		Total     int64
+		TodayN    int64
+		YesterdayN int64
+	}
+
+	now := time.Now()
+	todayStart := now.Truncate(24 * time.Hour)
+	yesterdayStart := todayStart.Add(-24 * time.Hour)
+
+	var rows []row
+	DB.Model(&EmailLog{}).
+		Select(`mx_host,
+			COUNT(*) AS total,
+			SUM(CASE WHEN sent_at >= ? THEN 1 ELSE 0 END) AS today_n,
+			SUM(CASE WHEN sent_at >= ? AND sent_at < ? THEN 1 ELSE 0 END) AS yesterday_n`,
+			todayStart, yesterdayStart, todayStart).
+		Where("username = ? AND mx_host LIKE ? AND status = ?", username, "via relay: %", "delivered").
+		Group("mx_host").
+		Scan(&rows)
+
+	out := make(map[string]RelayStats, len(rows))
+	const prefix = "via relay: "
+	for _, r := range rows {
+		label := r.MXHost
+		if strings.HasPrefix(label, prefix) {
+			label = label[len(prefix):]
+		}
+		out[label] = RelayStats{
+			TodaySent:     r.TodayN,
+			YesterdaySent: r.YesterdayN,
+			TotalSent:     r.Total,
+		}
+	}
+	return out
 }
 
 // GetUserSMTPMode returns a user's SMTP delivery mode and rotation preference.
