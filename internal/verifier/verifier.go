@@ -228,15 +228,25 @@ func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, bool) {
 	}
 
 	// Check target mailbox — single RCPT TO handshake (same as real delivery).
-	// No catch-all probe: Yahoo, Gmail, AOL, Outlook accept RCPT TO = valid; 550 = invalid.
 	result := rcptProbe(client, email)
-	if result == probeNotFound {
-		return probeNotFound, false
-	}
 	if result != probeExists {
 		return result, false
 	}
-	// RCPT TO accepted — valid. Skip catch-all probe (caused false invalid for Yahoo etc).
+
+	// RCPT TO accepted — check if it's a catch-all or "lying" server.
+	// We probe a known-random address on the same domain.
+	// Major providers like Yahoo/Gmail/AOL use DHA protection (accept all RCPT TO)
+	// if they don't trust the source.
+	domain := strings.SplitN(email, "@", 2)[1]
+	randomAddr := fmt.Sprintf("verify-check-%d@%s", time.Now().UnixNano(), domain)
+	catchAllResult := rcptProbe(client, randomAddr)
+
+	if catchAllResult == probeExists {
+		// Both real and random address accepted -> Catch-all or DHA protection active.
+		return probeExists, true
+	}
+
+	// Real address accepted, random address rejected -> Mailbox definitively exists.
 	return probeExists, false
 }
 
@@ -253,6 +263,8 @@ func rcptProbe(client *smtp.Client, addr string) probeResult {
 		strings.Contains(msg, "does not exist") ||
 		strings.Contains(msg, "invalid address") ||
 		strings.Contains(msg, "mailbox not found") ||
+		strings.Contains(msg, "not a valid recipient") ||
+		strings.Contains(msg, "doesn't have a yahoo.com account") ||
 		strings.Contains(msg, "bad destination") {
 		return probeNotFound
 	}
