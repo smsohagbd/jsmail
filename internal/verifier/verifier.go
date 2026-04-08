@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/smtp"
 	"regexp"
@@ -134,7 +135,7 @@ func (v *Verifier) Verify(email string) Result {
 		if catchAll {
 			r.Checks.Mailbox = StatusUnknown
 			r.Valid = false
-			r.Reason = "catch-all server — individual mailbox cannot be verified (high bounce risk)"
+			r.Reason = serverDetail
 		} else {
 			r.Checks.Mailbox = StatusPass
 			r.Valid = true
@@ -242,20 +243,25 @@ func (v *Verifier) smtpProbe(email, mxHost string, majorProvider bool) (probeRes
 		return result, false, detail
 	}
 
-	// Major providers (Yahoo, Gmail, Outlook …) use DHA protection and accept
-	// every RCPT TO from unknown IPs. Running a double-probe on them would always
-	// look like a catch-all, causing valid addresses to be wrongly rejected.
-	// Trust the single 250 response for them.
-	if majorProvider {
-		return probeExists, false, detail
-	}
-
-	// For unknown domains: send a second RCPT TO with a random address.
-	// If that also gets accepted the server is a catch-all.
+	// Double-probe: send a second RCPT TO with a random address to detect catch-all
+	// and DHA (Directory Harvest Attack) protection.
+	//
+	// IMPORTANT: the random address must look like a real username (alphanumeric,
+	// valid length). Using patterns like "verify-check-{digits}" causes Yahoo/AOL to
+	// reject it due to invalid username format — making it appear the server is NOT
+	// a catch-all, when it actually is (DHA active). We use a random lowercase
+	// alphanumeric string of 12–18 chars so it passes format validation on all major
+	// providers but is astronomically unlikely to be a real account.
 	domain := strings.SplitN(email, "@", 2)[1]
-	randomAddr := fmt.Sprintf("verify-check-%d@%s", time.Now().UnixNano(), domain)
+	randomAddr := fmt.Sprintf("%s@%s", randomUsername(), domain)
 	catchAllResult, _ := rcptProbe(client, randomAddr)
 	if catchAllResult == probeExists {
+		if majorProvider {
+			return probeExists, true, fmt.Sprintf(
+				"DHA protection active on %s — server accepted random address probe (IP reputation too low to verify individual mailboxes)",
+				domain,
+			)
+		}
 		return probeExists, true, "catch-all: server accepted random address probe"
 	}
 
@@ -284,6 +290,20 @@ func rcptProbe(client *smtp.Client, addr string) (probeResult, string) {
 	}
 	// 4xx / rate-limit / greylisted / blocked = server won't tell us.
 	return probeUnknown, raw
+}
+
+// randomUsername returns a random 14-char lowercase alphanumeric string.
+// It is used as the local part of the catch-all double-probe address.
+// Must look like a plausible username so major providers (Yahoo, AOL …) evaluate
+// it against their mailbox database rather than rejecting it on format.
+func randomUsername() string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	const length = 14
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = chars[rand.Intn(len(chars))]
+	}
+	return string(b)
 }
 
 // ── Major provider list ───────────────────────────────────────────────────────
