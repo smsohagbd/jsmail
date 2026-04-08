@@ -1066,8 +1066,8 @@ func UpdateUserSMTP(id uint, username, fromAddress string, limitPerMin, limitPer
 	}
 	// Select() forces GORM to write every listed column, including zero/false values.
 	// Without it, GORM silently skips boolean false when using Updates(map{...}).
-	return DB.Model(&UserSMTP{}).
-		Select("from_address", "limit_per_min", "limit_per_hour", "limit_per_day", "verify_before_send").
+	// We use DB.Table("user_smtps") to ensure we are targeting the right table and avoiding model hooks if any.
+	return DB.Table("user_smtps").
 		Where("id = ? AND owner_username = ?", id, username).
 		Updates(map[string]interface{}{
 			"from_address":       strings.TrimSpace(fromAddress),

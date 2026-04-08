@@ -649,16 +649,18 @@ func (h *Handler) BulkAddSMTP(w http.ResponseWriter, r *http.Request) {
 			fromAddr = strings.TrimSpace(parts[5])
 		}
 		entry := &appdb.UserSMTP{
-			OwnerUsername: claims.Username,
-			Label:         host,
-			Host:          host,
-			Port:          port,
-			Username:      smtpUser,
-			Password:      smtpPass,
-			FromAddress:   fromAddr,
-			TLSMode:       tlsMode,
-			UseTLS:        tlsMode != "none",
-			Active:        true,
+			OwnerUsername:    claims.Username,
+			Label:            host,
+			Host:             host,
+			Port:             port,
+			Username:         smtpUser,
+			Password:         smtpPass,
+			FromAddress:      fromAddr,
+			TLSMode:          tlsMode,
+			UseTLS:           tlsMode != "none",
+			Active:           true,
+			LimitPerMin:      5, // Default minimum limit for bulk uploads
+			VerifyBeforeSend: true,
 		}
 		if err := appdb.AddUserSMTP(entry); err != nil {
 			errs = append(errs, fmt.Sprintf("%s — db error: %v", host, err))
