@@ -119,13 +119,13 @@ func (v *Verifier) Verify(email string) Result {
 	major := isMajorProvider(domain)
 
 	// ── 4. SMTP probe ─────────────────────────────────────────────────────────
-	// For major providers (Yahoo, Gmail, etc.) we do a single RCPT TO probe and
-	// trust the response — they reliably reject unknown mailboxes with 5xx errors.
-	// We skip the catch-all double-probe for them because they use DHA protection
-	// (accept all RCPT TO from unknown IPs), which would cause false "catch-all"
-	// results for valid addresses.
-	// For unknown / small domains we run the full double-probe to detect catch-alls.
-	smtpResult, catchAll := v.smtpProbe(email, mxHost, major)
+	// major providers: single RCPT TO only — no catch-all double-probe.
+	// They use DHA protection so the double-probe always looks like a catch-all,
+	// causing valid addresses (e.g. real Yahoo/AOL inboxes) to be falsely rejected.
+	// Their servers reliably return 5xx for unknown mailboxes, so a single probe
+	// gives accurate results.
+	// Unknown / small domains: full double-probe to detect catch-all servers.
+	smtpResult, catchAll, serverDetail := v.smtpProbe(email, mxHost, major)
 	r.IsCatchAll = catchAll
 
 	switch smtpResult {
@@ -143,31 +143,17 @@ func (v *Verifier) Verify(email string) Result {
 		r.Checks.SMTPConnect = StatusPass
 		r.Checks.Mailbox = StatusFail
 		r.Valid = false
-		r.Reason = "mailbox does not exist"
+		r.Reason = fmt.Sprintf("mailbox does not exist [server: %s]", serverDetail)
 	case probeConnectFail:
 		r.Checks.SMTPConnect = StatusFail
 		r.Checks.Mailbox = StatusUnknown
-		if major {
-			// Major providers are always reachable; a connect failure is transient.
-			// Give benefit of the doubt so we don't wrongly suppress valid addresses.
-			r.Valid = true
-			r.Reason = "could not connect to mail server (transient)"
-		} else {
-			r.Valid = false
-			r.Reason = "could not connect to mail server"
-		}
+		r.Valid = false
+		r.Reason = fmt.Sprintf("could not connect to mail server [%s]", serverDetail)
 	case probeUnknown:
 		r.Checks.SMTPConnect = StatusPass
 		r.Checks.Mailbox = StatusUnknown
-		if major {
-			// Major providers sometimes rate-limit probes without that meaning the
-			// address is bad. Treat unknown response as valid for them.
-			r.Valid = true
-			r.Reason = "server did not confirm mailbox (major provider — assumed valid)"
-		} else {
-			r.Valid = false
-			r.Reason = "server blocked probe — cannot verify mailbox"
-		}
+		r.Valid = false
+		r.Reason = fmt.Sprintf("server blocked probe — cannot verify mailbox [server: %s]", serverDetail)
 	}
 
 	log.Printf("[VERIFY] %s → valid=%v reason=%q mx=%s catch_all=%v disposable=%v",
@@ -218,25 +204,27 @@ const (
 	probeUnknown                        // server refused to tell us
 )
 
-func (v *Verifier) smtpProbe(email, mxHost string, majorProvider bool) (probeResult, bool) {
+// smtpProbe returns (result, isCatchAll, serverDetail).
+// serverDetail carries the raw SMTP server response for logging / display.
+func (v *Verifier) smtpProbe(email, mxHost string, majorProvider bool) (probeResult, bool, string) {
 	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(mxHost, "25"), v.cfg.ConnectTimeout)
 	if err != nil {
 		// Fallback to port 587
 		conn, err = net.DialTimeout("tcp4", net.JoinHostPort(mxHost, "587"), v.cfg.ConnectTimeout)
 		if err != nil {
-			return probeConnectFail, false
+			return probeConnectFail, false, fmt.Sprintf("TCP connect failed: %v", err)
 		}
 	}
 
 	client, err := smtp.NewClient(conn, mxHost)
 	if err != nil {
 		conn.Close()
-		return probeConnectFail, false
+		return probeConnectFail, false, fmt.Sprintf("SMTP handshake failed: %v", err)
 	}
 	defer client.Close()
 
 	if err := client.Hello(v.cfg.HeloName); err != nil {
-		return probeConnectFail, false
+		return probeConnectFail, false, fmt.Sprintf("EHLO rejected: %v", err)
 	}
 
 	// Upgrade to TLS if available.
@@ -246,13 +234,12 @@ func (v *Verifier) smtpProbe(email, mxHost string, majorProvider bool) (probeRes
 	}
 
 	if err := client.Mail(v.cfg.ProbeFrom); err != nil {
-		// Some servers reject our MAIL FROM — treat as unknown.
-		return probeUnknown, false
+		return probeUnknown, false, fmt.Sprintf("MAIL FROM rejected by %s: %v", mxHost, err)
 	}
 
-	result := rcptProbe(client, email)
+	result, detail := rcptProbe(client, email)
 	if result != probeExists {
-		return result, false
+		return result, false, detail
 	}
 
 	// Major providers (Yahoo, Gmail, Outlook …) use DHA protection and accept
@@ -260,29 +247,31 @@ func (v *Verifier) smtpProbe(email, mxHost string, majorProvider bool) (probeRes
 	// look like a catch-all, causing valid addresses to be wrongly rejected.
 	// Trust the single 250 response for them.
 	if majorProvider {
-		return probeExists, false
+		return probeExists, false, detail
 	}
 
 	// For unknown domains: send a second RCPT TO with a random address.
 	// If that also gets accepted the server is a catch-all.
 	domain := strings.SplitN(email, "@", 2)[1]
 	randomAddr := fmt.Sprintf("verify-check-%d@%s", time.Now().UnixNano(), domain)
-	catchAllResult := rcptProbe(client, randomAddr)
+	catchAllResult, _ := rcptProbe(client, randomAddr)
 	if catchAllResult == probeExists {
-		return probeExists, true
+		return probeExists, true, "catch-all: server accepted random address probe"
 	}
 
-	return probeExists, false
+	return probeExists, false, detail
 }
 
-func rcptProbe(client *smtp.Client, addr string) probeResult {
+// rcptProbe issues a single RCPT TO and returns (result, raw-server-detail).
+func rcptProbe(client *smtp.Client, addr string) (probeResult, string) {
 	err := client.Rcpt(addr)
 	if err == nil {
-		return probeExists
+		return probeExists, "250 OK"
 	}
-	msg := strings.ToLower(err.Error())
+	raw := err.Error()
+	msg := strings.ToLower(raw)
 	// Permanent 5xx rejections = mailbox not found.
-	if strings.HasPrefix(err.Error(), "55") ||
+	if strings.HasPrefix(raw, "55") ||
 		strings.Contains(msg, "no such user") ||
 		strings.Contains(msg, "user unknown") ||
 		strings.Contains(msg, "does not exist") ||
@@ -291,10 +280,10 @@ func rcptProbe(client *smtp.Client, addr string) probeResult {
 		strings.Contains(msg, "not a valid recipient") ||
 		strings.Contains(msg, "doesn't have a yahoo.com account") ||
 		strings.Contains(msg, "bad destination") {
-		return probeNotFound
+		return probeNotFound, raw
 	}
-	// 4xx or other = server won't tell us.
-	return probeUnknown
+	// 4xx / rate-limit / greylisted / blocked = server won't tell us.
+	return probeUnknown, raw
 }
 
 // ── Major provider list ───────────────────────────────────────────────────────
