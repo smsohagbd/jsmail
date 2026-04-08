@@ -557,7 +557,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			//
 			// This only runs when relay.VerifyBeforeSend is enabled.
 			activeRcpts := msg.To
-			if relay.VerifyBeforeSend && len(msg.To) > 0 {
+			if len(msg.To) > 0 { // always verify before any relay send
 				e.tracePhase(msg.ID, "verify_before_send_direct", fmt.Sprintf("%d recipients", len(msg.To)))
 
 				// Group recipients by domain so we make one MX connection per domain.
