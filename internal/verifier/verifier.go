@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"net/smtp"
 	"regexp"
@@ -117,29 +116,26 @@ func (v *Verifier) Verify(email string) Result {
 	}
 	r.MXHost = mxHost
 
-	major := isMajorProvider(domain)
-
-	// ── 4. SMTP probe ─────────────────────────────────────────────────────────
-	// major providers: single RCPT TO only — no catch-all double-probe.
-	// They use DHA protection so the double-probe always looks like a catch-all,
-	// causing valid addresses (e.g. real Yahoo/AOL inboxes) to be falsely rejected.
-	// Their servers reliably return 5xx for unknown mailboxes, so a single probe
-	// gives accurate results.
-	// Unknown / small domains: full double-probe to detect catch-all servers.
-	smtpResult, catchAll, serverDetail := v.smtpProbe(email, mxHost, major)
-	r.IsCatchAll = catchAll
+	// ── 4. SMTP handshake probe ───────────────────────────────────────────────
+	// Connect directly to the recipient's MX server and perform the SMTP handshake:
+	//   EHLO → MAIL FROM → RCPT TO → (abort, no DATA sent)
+	//
+	// Rule: 250 on RCPT TO = valid, forward to relay.
+	//       Any error at any step = abort, do not forward.
+	//
+	// This mirrors exactly what direct MX delivery does, but stops before DATA.
+	// For providers that use DHA (Yahoo/AOL from untrusted IPs) and return 250
+	// for every RCPT TO: the address passes here and the relay does the real
+	// delivery. The relay's IP may be trusted by Yahoo, so it will get the actual
+	// 552/250 response at DATA close — recorded as hard_bounce or delivered.
+	smtpResult, serverDetail := v.smtpProbe(email, mxHost)
+	r.IsCatchAll = false
 
 	switch smtpResult {
 	case probeExists:
 		r.Checks.SMTPConnect = StatusPass
-		if catchAll {
-			r.Checks.Mailbox = StatusUnknown
-			r.Valid = false
-			r.Reason = serverDetail
-		} else {
-			r.Checks.Mailbox = StatusPass
-			r.Valid = true
-		}
+		r.Checks.Mailbox = StatusPass
+		r.Valid = true
 	case probeNotFound:
 		r.Checks.SMTPConnect = StatusPass
 		r.Checks.Mailbox = StatusFail
@@ -154,7 +150,7 @@ func (v *Verifier) Verify(email string) Result {
 		r.Checks.SMTPConnect = StatusPass
 		r.Checks.Mailbox = StatusUnknown
 		r.Valid = false
-		r.Reason = fmt.Sprintf("server blocked probe — cannot verify mailbox [server: %s]", serverDetail)
+		r.Reason = fmt.Sprintf("server rejected handshake — cannot verify mailbox [server: %s]", serverDetail)
 	}
 
 	log.Printf("[VERIFY] %s → valid=%v reason=%q mx=%s catch_all=%v disposable=%v",
@@ -205,70 +201,43 @@ const (
 	probeUnknown                        // server refused to tell us
 )
 
-// smtpProbe returns (result, isCatchAll, serverDetail).
-// serverDetail carries the raw SMTP server response for logging / display.
-func (v *Verifier) smtpProbe(email, mxHost string, majorProvider bool) (probeResult, bool, string) {
+// smtpProbe connects to mxHost and performs the SMTP handshake up to RCPT TO.
+// It aborts before sending any DATA — no email is ever transmitted.
+// Returns (result, raw-server-detail).
+func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, string) {
 	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(mxHost, "25"), v.cfg.ConnectTimeout)
 	if err != nil {
-		// Fallback to port 587
 		conn, err = net.DialTimeout("tcp4", net.JoinHostPort(mxHost, "587"), v.cfg.ConnectTimeout)
 		if err != nil {
-			return probeConnectFail, false, fmt.Sprintf("TCP connect failed: %v", err)
+			return probeConnectFail, fmt.Sprintf("TCP connect failed: %v", err)
 		}
 	}
 
 	client, err := smtp.NewClient(conn, mxHost)
 	if err != nil {
 		conn.Close()
-		return probeConnectFail, false, fmt.Sprintf("SMTP handshake failed: %v", err)
+		return probeConnectFail, fmt.Sprintf("SMTP handshake failed: %v", err)
 	}
 	defer client.Close()
 
 	if err := client.Hello(v.cfg.HeloName); err != nil {
-		return probeConnectFail, false, fmt.Sprintf("EHLO rejected: %v", err)
+		return probeConnectFail, fmt.Sprintf("EHLO rejected: %v", err)
 	}
 
-	// Upgrade to TLS if available.
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		tlsCfg := &tls.Config{ServerName: mxHost, InsecureSkipVerify: false}
 		client.StartTLS(tlsCfg) // non-fatal if fails
 	}
 
 	if err := client.Mail(v.cfg.ProbeFrom); err != nil {
-		return probeUnknown, false, fmt.Sprintf("MAIL FROM rejected by %s: %v", mxHost, err)
+		return probeUnknown, fmt.Sprintf("MAIL FROM rejected by %s: %v", mxHost, err)
 	}
 
-	result, detail := rcptProbe(client, email)
-	if result != probeExists {
-		return result, false, detail
-	}
-
-	// Double-probe: send a second RCPT TO with a random address to detect catch-all
-	// and DHA (Directory Harvest Attack) protection.
-	//
-	// IMPORTANT: the random address must look like a real username (alphanumeric,
-	// valid length). Using patterns like "verify-check-{digits}" causes Yahoo/AOL to
-	// reject it due to invalid username format — making it appear the server is NOT
-	// a catch-all, when it actually is (DHA active). We use a random lowercase
-	// alphanumeric string of 12–18 chars so it passes format validation on all major
-	// providers but is astronomically unlikely to be a real account.
-	domain := strings.SplitN(email, "@", 2)[1]
-	randomAddr := fmt.Sprintf("%s@%s", randomUsername(), domain)
-	catchAllResult, _ := rcptProbe(client, randomAddr)
-	if catchAllResult == probeExists {
-		if majorProvider {
-			return probeExists, true, fmt.Sprintf(
-				"DHA protection active on %s — server accepted random address probe (IP reputation too low to verify individual mailboxes)",
-				domain,
-			)
-		}
-		return probeExists, true, "catch-all: server accepted random address probe"
-	}
-
-	return probeExists, false, detail
+	// RCPT TO — the decisive step. 250 = address accepted. Any error = abort.
+	return rcptProbe(client, email)
 }
 
-// rcptProbe issues a single RCPT TO and returns (result, raw-server-detail).
+// rcptProbe issues RCPT TO and returns (result, raw-server-detail).
 func rcptProbe(client *smtp.Client, addr string) (probeResult, string) {
 	err := client.Rcpt(addr)
 	if err == nil {
@@ -290,51 +259,6 @@ func rcptProbe(client *smtp.Client, addr string) (probeResult, string) {
 	}
 	// 4xx / rate-limit / greylisted / blocked = server won't tell us.
 	return probeUnknown, raw
-}
-
-// randomUsername returns a random 14-char lowercase alphanumeric string.
-// It is used as the local part of the catch-all double-probe address.
-// Must look like a plausible username so major providers (Yahoo, AOL …) evaluate
-// it against their mailbox database rather than rejecting it on format.
-func randomUsername() string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	const length = 14
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
-	}
-	return string(b)
-}
-
-// ── Major provider list ───────────────────────────────────────────────────────
-// These providers use DHA protection and block SMTP probing from unknown IPs.
-// We trust format + MX check only for them — SMTP probe would give false results.
-var majorProviders = map[string]bool{
-	// Yahoo family
-	"yahoo.com": true, "yahoo.co.uk": true, "yahoo.co.in": true, "yahoo.co.jp": true,
-	"yahoo.fr": true, "yahoo.de": true, "yahoo.es": true, "yahoo.it": true,
-	"yahoo.com.br": true, "yahoo.com.au": true, "yahoo.com.ar": true,
-	"ymail.com": true, "rocketmail.com": true,
-	// Google / Gmail
-	"gmail.com": true, "googlemail.com": true,
-	// Microsoft
-	"hotmail.com": true, "hotmail.co.uk": true, "hotmail.fr": true,
-	"hotmail.de": true, "hotmail.it": true, "hotmail.es": true,
-	"outlook.com": true, "outlook.co.uk": true, "outlook.fr": true,
-	"live.com": true, "live.co.uk": true, "live.fr": true,
-	"msn.com": true,
-	// AOL / Verizon Media
-	"aol.com": true, "aim.com": true, "verizon.net": true,
-	// Apple
-	"icloud.com": true, "me.com": true, "mac.com": true,
-	// Other large providers
-	"protonmail.com": true, "proton.me": true,
-	"zoho.com": true,
-	"mail.com": true,
-}
-
-func isMajorProvider(domain string) bool {
-	return majorProviders[strings.ToLower(domain)]
 }
 
 // ── Disposable domain list ────────────────────────────────────────────────────
