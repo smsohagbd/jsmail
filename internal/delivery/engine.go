@@ -587,41 +587,56 @@ func (e *Engine) deliver(msg *queue.Message) {
 						}
 					}
 
-					_, directErr := e.deliverToDomain(msg.From, domain, domRcpts, data, onBounce, msg.ID)
-					if directErr == nil {
-						// Direct delivery succeeded — record each non-bounced rcpt as delivered.
-						bounced := make(map[string]bool)
-						for _, b := range hardBounced {
-							bounced[b] = true
-						}
-						for _, rcpt := range domRcpts {
-							if !bounced[rcpt] {
-								log.Printf("[DELIVERY] ✓ verify-before-send: %s delivered directly — skipping relay", rcpt)
-								if e.OnEvent != nil {
-									e.OnEvent(DeliveryEvent{
-										MessageID: msg.ID, Username: msg.Username,
-										From: msg.From, To: rcpt, Status: "delivered",
-										MXHost: domain,
-									})
-								}
-								e.recordDedup(msg.Username, rcpt)
+				_, directErr := e.deliverToDomain(msg.From, domain, domRcpts, data, onBounce, msg.ID)
+
+				bounced := make(map[string]bool)
+				for _, b := range hardBounced {
+					bounced[b] = true
+				}
+
+				if directErr == nil {
+					// Direct delivery succeeded — record each non-bounced rcpt as delivered.
+					for _, rcpt := range domRcpts {
+						if !bounced[rcpt] {
+							log.Printf("[DELIVERY] ✓ verify-before-send: %s delivered directly — skipping relay", rcpt)
+							if e.OnEvent != nil {
+								e.OnEvent(DeliveryEvent{
+									MessageID: msg.ID, Username: msg.Username,
+									From: msg.From, To: rcpt, Status: "delivered",
+									MXHost: domain,
+								})
 							}
+							e.recordDedup(msg.Username, rcpt)
 						}
-					} else {
-						// Could not deliver directly (blocked IP, rate-limited, etc.).
-						// Fall through to the relay for non-bounced recipients.
-						bounced := make(map[string]bool)
-						for _, b := range hardBounced {
-							bounced[b] = true
-						}
-						for _, rcpt := range domRcpts {
-							if !bounced[rcpt] {
-								needsRelay = append(needsRelay, rcpt)
-							}
-						}
-						log.Printf("[DELIVERY]   verify-before-send: direct delivery to %s failed (%v) — using relay for %d recipient(s)",
-							domain, directErr, len(needsRelay))
 					}
+				} else if isPermanentSMTPError(directErr) {
+					// Permanent 5xx from MX server (e.g. Yahoo "552 mailbox not found"
+					// at DATA close). Treat every non-individually-bounced rcpt as a
+					// hard bounce so they are suppressed and NOT forwarded to the relay.
+					for _, rcpt := range domRcpts {
+						if !bounced[rcpt] {
+							log.Printf("[DELIVERY] ⏭ verify-before-send: %s hard_bounce (permanent MX rejection: %v) — suppressing", rcpt, directErr)
+							if e.OnEvent != nil {
+								e.OnEvent(DeliveryEvent{
+									MessageID: msg.ID, Username: msg.Username,
+									From: msg.From, To: rcpt, Status: "hard_bounce",
+									Error:  "verify-before-send: " + directErr.Error(),
+									MXHost: domain,
+								})
+							}
+						}
+					}
+				} else {
+					// Transient failure (connection refused, rate-limit, 4xx, etc.).
+					// Our IP cannot reach this MX right now — fall through to relay.
+					for _, rcpt := range domRcpts {
+						if !bounced[rcpt] {
+							needsRelay = append(needsRelay, rcpt)
+						}
+					}
+					log.Printf("[DELIVERY]   verify-before-send: transient direct failure to %s (%v) — using relay for %d recipient(s)",
+						domain, directErr, len(needsRelay))
+				}
 				}
 
 				if len(needsRelay) == 0 && len(activeRcpts) > 0 {
