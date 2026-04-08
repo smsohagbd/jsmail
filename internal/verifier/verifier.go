@@ -143,7 +143,7 @@ func (v *Verifier) Verify(email string) Result {
 	case probeUnknown:
 		r.Checks.SMTPConnect = StatusPass
 		r.Checks.Mailbox = StatusUnknown
-		r.Valid = true // assume valid when server won't tell us
+		r.Valid = false // changed to false: do not deliver when server won't tell us (protects relay)
 		r.Reason = "server blocked probe — cannot verify mailbox"
 	}
 

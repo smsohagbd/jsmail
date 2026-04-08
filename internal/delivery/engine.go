@@ -547,7 +547,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			// Only definitively invalid addresses are suppressed; uncertain/unknown
 			// results pass through to avoid false positives blocking real deliveries.
 			activeRcpts := msg.To
-			if relay.VerifyBeforeSend && e.EmailVerifier != nil && len(msg.To) > 0 {
+			if (relay.VerifyBeforeSend || true) && e.EmailVerifier != nil && len(msg.To) > 0 {
 				e.tracePhase(msg.ID, "verify_before_send", fmt.Sprintf("%d recipients", len(msg.To)))
 				type vresult struct {
 					rcpt   string
