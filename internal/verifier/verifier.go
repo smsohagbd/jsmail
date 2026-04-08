@@ -116,8 +116,16 @@ func (v *Verifier) Verify(email string) Result {
 	}
 	r.MXHost = mxHost
 
+	major := isMajorProvider(domain)
+
 	// ── 4. SMTP probe ─────────────────────────────────────────────────────────
-	smtpResult, catchAll := v.smtpProbe(email, mxHost)
+	// For major providers (Yahoo, Gmail, etc.) we do a single RCPT TO probe and
+	// trust the response — they reliably reject unknown mailboxes with 5xx errors.
+	// We skip the catch-all double-probe for them because they use DHA protection
+	// (accept all RCPT TO from unknown IPs), which would cause false "catch-all"
+	// results for valid addresses.
+	// For unknown / small domains we run the full double-probe to detect catch-alls.
+	smtpResult, catchAll := v.smtpProbe(email, mxHost, major)
 	r.IsCatchAll = catchAll
 
 	switch smtpResult {
@@ -125,7 +133,7 @@ func (v *Verifier) Verify(email string) Result {
 		r.Checks.SMTPConnect = StatusPass
 		if catchAll {
 			r.Checks.Mailbox = StatusUnknown
-			r.Valid = false // catch-all: cannot confirm mailbox exists
+			r.Valid = false
 			r.Reason = "catch-all server — individual mailbox cannot be verified (high bounce risk)"
 		} else {
 			r.Checks.Mailbox = StatusPass
@@ -139,13 +147,27 @@ func (v *Verifier) Verify(email string) Result {
 	case probeConnectFail:
 		r.Checks.SMTPConnect = StatusFail
 		r.Checks.Mailbox = StatusUnknown
-		r.Valid = false
-		r.Reason = "could not connect to mail server"
+		if major {
+			// Major providers are always reachable; a connect failure is transient.
+			// Give benefit of the doubt so we don't wrongly suppress valid addresses.
+			r.Valid = true
+			r.Reason = "could not connect to mail server (transient)"
+		} else {
+			r.Valid = false
+			r.Reason = "could not connect to mail server"
+		}
 	case probeUnknown:
 		r.Checks.SMTPConnect = StatusPass
 		r.Checks.Mailbox = StatusUnknown
-		r.Valid = false // changed to false: do not deliver when server won't tell us (protects relay)
-		r.Reason = "server blocked probe — cannot verify mailbox"
+		if major {
+			// Major providers sometimes rate-limit probes without that meaning the
+			// address is bad. Treat unknown response as valid for them.
+			r.Valid = true
+			r.Reason = "server did not confirm mailbox (major provider — assumed valid)"
+		} else {
+			r.Valid = false
+			r.Reason = "server blocked probe — cannot verify mailbox"
+		}
 	}
 
 	log.Printf("[VERIFY] %s → valid=%v reason=%q mx=%s catch_all=%v disposable=%v",
@@ -196,7 +218,7 @@ const (
 	probeUnknown                        // server refused to tell us
 )
 
-func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, bool) {
+func (v *Verifier) smtpProbe(email, mxHost string, majorProvider bool) (probeResult, bool) {
 	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(mxHost, "25"), v.cfg.ConnectTimeout)
 	if err != nil {
 		// Fallback to port 587
@@ -228,26 +250,28 @@ func (v *Verifier) smtpProbe(email, mxHost string) (probeResult, bool) {
 		return probeUnknown, false
 	}
 
-	// Check target mailbox — single RCPT TO handshake (same as real delivery).
 	result := rcptProbe(client, email)
 	if result != probeExists {
 		return result, false
 	}
 
-	// RCPT TO accepted — check if it's a catch-all or "lying" server.
-	// We probe a known-random address on the same domain.
-	// Major providers like Yahoo/Gmail/AOL use DHA protection (accept all RCPT TO)
-	// if they don't trust the source.
+	// Major providers (Yahoo, Gmail, Outlook …) use DHA protection and accept
+	// every RCPT TO from unknown IPs. Running a double-probe on them would always
+	// look like a catch-all, causing valid addresses to be wrongly rejected.
+	// Trust the single 250 response for them.
+	if majorProvider {
+		return probeExists, false
+	}
+
+	// For unknown domains: send a second RCPT TO with a random address.
+	// If that also gets accepted the server is a catch-all.
 	domain := strings.SplitN(email, "@", 2)[1]
 	randomAddr := fmt.Sprintf("verify-check-%d@%s", time.Now().UnixNano(), domain)
 	catchAllResult := rcptProbe(client, randomAddr)
-
 	if catchAllResult == probeExists {
-		// Both real and random address accepted -> Catch-all or DHA protection active.
 		return probeExists, true
 	}
 
-	// Real address accepted, random address rejected -> Mailbox definitively exists.
 	return probeExists, false
 }
 
@@ -271,6 +295,37 @@ func rcptProbe(client *smtp.Client, addr string) probeResult {
 	}
 	// 4xx or other = server won't tell us.
 	return probeUnknown
+}
+
+// ── Major provider list ───────────────────────────────────────────────────────
+// These providers use DHA protection and block SMTP probing from unknown IPs.
+// We trust format + MX check only for them — SMTP probe would give false results.
+var majorProviders = map[string]bool{
+	// Yahoo family
+	"yahoo.com": true, "yahoo.co.uk": true, "yahoo.co.in": true, "yahoo.co.jp": true,
+	"yahoo.fr": true, "yahoo.de": true, "yahoo.es": true, "yahoo.it": true,
+	"yahoo.com.br": true, "yahoo.com.au": true, "yahoo.com.ar": true,
+	"ymail.com": true, "rocketmail.com": true,
+	// Google / Gmail
+	"gmail.com": true, "googlemail.com": true,
+	// Microsoft
+	"hotmail.com": true, "hotmail.co.uk": true, "hotmail.fr": true,
+	"hotmail.de": true, "hotmail.it": true, "hotmail.es": true,
+	"outlook.com": true, "outlook.co.uk": true, "outlook.fr": true,
+	"live.com": true, "live.co.uk": true, "live.fr": true,
+	"msn.com": true,
+	// AOL / Verizon Media
+	"aol.com": true, "aim.com": true, "verizon.net": true,
+	// Apple
+	"icloud.com": true, "me.com": true, "mac.com": true,
+	// Other large providers
+	"protonmail.com": true, "proton.me": true,
+	"zoho.com": true,
+	"mail.com": true,
+}
+
+func isMajorProvider(domain string) bool {
+	return majorProviders[strings.ToLower(domain)]
 }
 
 // ── Disposable domain list ────────────────────────────────────────────────────
