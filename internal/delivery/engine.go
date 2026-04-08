@@ -1086,7 +1086,7 @@ func (e *Engine) clearDomainDialFail(domain string) {
 
 // ── Recipient deduplication ──────────────────────────────────────────────
 
-const dedupWindow = 30 * time.Minute
+const dedupWindow = 1 * time.Minute
 
 func (e *Engine) isRecentDuplicate(username, to string) bool {
 	key := strings.ToLower(username) + "\x1e" + strings.ToLower(to)
