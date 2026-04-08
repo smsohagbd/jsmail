@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net"
 	"net/smtp"
