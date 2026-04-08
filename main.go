@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"smtp-server/internal/api"
@@ -75,9 +76,17 @@ func main() {
 		case "hard_bounce":
 			appdb.LogHardBounce(evt.Username, evt.MessageID, evt.To, evt.Error)
 			appdb.UpdateCampaignSendByMessageID(evt.MessageID, "failed")
+			// Auto-suppress: hard bounces are permanent failures.
+			// Add to suppression list so the address is never retried.
+			appdb.AddSuppression(evt.Username, evt.To, "hard_bounce: "+evt.Error, "auto")
 		case "suppressed":
 			appdb.LogSuppressed(evt.Username, evt.MessageID, evt.To, evt.Error)
 			appdb.UpdateCampaignSendByMessageID(evt.MessageID, "failed")
+			// Auto-suppress: if verify-before-send confirmed mailbox does not exist,
+			// add to suppression list so future sends skip the probe entirely.
+			if strings.Contains(evt.Error, "mailbox does not exist") {
+				appdb.AddSuppression(evt.Username, evt.To, "verify: "+evt.Error, "auto")
+			}
 		}
 	}
 

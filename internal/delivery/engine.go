@@ -542,52 +542,96 @@ func (e *Engine) deliver(msg *queue.Message) {
 			e.tracePhase(msg.ID, "custom_relay", fmt.Sprintf("%s %s:%d", relay.Label, relay.Host, relay.Port))
 			e.logV("[DELIVERY]   routing via custom relay %q (%s:%d)", relay.Label, relay.Host, relay.Port)
 
-			// ── Verify-before-send ────────────────────────────────────────────
-			// When enabled, each recipient is probed (MX + SMTP handshake) concurrently.
-			// Only definitively invalid addresses are suppressed; uncertain/unknown
-			// results pass through to avoid false positives blocking real deliveries.
+			// ── Verify-before-send via direct MX delivery ────────────────────
+			// Problem: SMTP RCPT TO probes are unreliable for Yahoo/AOL/Gmail because
+			// these providers return 250 for every RCPT TO (DHA protection).  The real
+			// rejection (e.g. 552 mailbox not found) only arrives at DATA close.
+			//
+			// Solution: attempt actual direct delivery from our system IP to the
+			// recipient's MX server — the same path used by direct MX delivery.
+			// Our IP gets the real DATA-close response from Yahoo (552 = invalid).
+			//
+			//   • Delivered directly → record as "delivered", skip relay (no duplicate)
+			//   • Hard bounce (552)  → record as "hard_bounce", suppress, skip relay
+			//   • Can't connect / rate-limited → fall through to relay (relay as fallback)
+			//
+			// This only runs when relay.VerifyBeforeSend is enabled.
 			activeRcpts := msg.To
-			if (relay.VerifyBeforeSend || true) && e.EmailVerifier != nil && len(msg.To) > 0 {
-				e.tracePhase(msg.ID, "verify_before_send", fmt.Sprintf("%d recipients", len(msg.To)))
-				type vresult struct {
-					rcpt   string
-					valid  bool
-					reason string
-				}
-				results := make(chan vresult, len(msg.To))
-				sem := make(chan struct{}, 5) // max 5 concurrent probes
+			if relay.VerifyBeforeSend && len(msg.To) > 0 {
+				e.tracePhase(msg.ID, "verify_before_send_direct", fmt.Sprintf("%d recipients", len(msg.To)))
+
+				// Group recipients by domain so we make one MX connection per domain.
+				byDomain := make(map[string][]string)
 				for _, rcpt := range msg.To {
-					go func(r string) {
-						sem <- struct{}{}
-						defer func() { <-sem }()
-						ok, reason := e.EmailVerifier(r)
-						results <- vresult{rcpt: r, valid: ok, reason: reason}
-					}(rcpt)
+					parts := strings.SplitN(rcpt, "@", 2)
+					if len(parts) == 2 {
+						byDomain[strings.ToLower(parts[1])] = append(byDomain[strings.ToLower(parts[1])], rcpt)
+					}
 				}
-				var passed []string
-				for range msg.To {
-					res := <-results
-					if res.valid {
-						passed = append(passed, res.rcpt)
-					} else {
-						log.Printf("[DELIVERY] ⏭ verify-before-send: %s invalid (%s) — suppressing", res.rcpt, res.reason)
+
+				var needsRelay []string
+
+				for domain, domRcpts := range byDomain {
+					var hardBounced []string
+
+					onBounce := func(rcpt, reason string) {
+						hardBounced = append(hardBounced, rcpt)
+						log.Printf("[DELIVERY] ⏭ verify-before-send: %s hard_bounce during direct probe (%s)", rcpt, reason)
 						if e.OnEvent != nil {
 							e.OnEvent(DeliveryEvent{
 								MessageID: msg.ID, Username: msg.Username,
-								From: msg.From, To: res.rcpt, Status: "suppressed",
-								Error:  "verify-before-send: " + res.reason,
-								MXHost: formatRelayLogMX(*relay),
+								From: msg.From, To: rcpt, Status: "hard_bounce",
+								Error:  "verify-before-send direct: " + reason,
+								MXHost: domain,
 							})
 						}
 					}
+
+					_, directErr := e.deliverToDomain(msg.From, domain, domRcpts, data, onBounce, msg.ID)
+					if directErr == nil {
+						// Direct delivery succeeded — record each non-bounced rcpt as delivered.
+						bounced := make(map[string]bool)
+						for _, b := range hardBounced {
+							bounced[b] = true
+						}
+						for _, rcpt := range domRcpts {
+							if !bounced[rcpt] {
+								log.Printf("[DELIVERY] ✓ verify-before-send: %s delivered directly — skipping relay", rcpt)
+								if e.OnEvent != nil {
+									e.OnEvent(DeliveryEvent{
+										MessageID: msg.ID, Username: msg.Username,
+										From: msg.From, To: rcpt, Status: "delivered",
+										MXHost: domain,
+									})
+								}
+								e.recordDedup(msg.Username, rcpt)
+							}
+						}
+					} else {
+						// Could not deliver directly (blocked IP, rate-limited, etc.).
+						// Fall through to the relay for non-bounced recipients.
+						bounced := make(map[string]bool)
+						for _, b := range hardBounced {
+							bounced[b] = true
+						}
+						for _, rcpt := range domRcpts {
+							if !bounced[rcpt] {
+								needsRelay = append(needsRelay, rcpt)
+							}
+						}
+						log.Printf("[DELIVERY]   verify-before-send: direct delivery to %s failed (%v) — using relay for %d recipient(s)",
+							domain, directErr, len(needsRelay))
+					}
 				}
-				if len(passed) == 0 {
-					e.logV("[DELIVERY] ⏭ verify-before-send: all %d recipient(s) invalid for message %s — completing without relay", len(msg.To), msg.ID)
+
+				if len(needsRelay) == 0 && len(activeRcpts) > 0 {
+					e.logV("[DELIVERY] ✓ verify-before-send: all recipients handled by direct delivery — completing without relay")
 					e.queue.Complete(msg.ID)
 					return
 				}
-				activeRcpts = passed
-				e.logV("[DELIVERY]   verify-before-send: %d/%d recipients passed verification", len(activeRcpts), len(msg.To))
+				activeRcpts = needsRelay
+				e.logV("[DELIVERY]   verify-before-send: %d/%d recipients need relay (direct delivery not possible)",
+					len(activeRcpts), len(msg.To))
 			}
 			// ── end verify-before-send ────────────────────────────────────────
 
