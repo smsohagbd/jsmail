@@ -197,6 +197,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/ippool/master/delete", webauth.RequireAdmin(ah.DeleteIPPoolMasterDomainRule))
 	mux.HandleFunc("/admin/forcefrom", webauth.RequireAdmin(ah.ForceFrom))
 	mux.HandleFunc("/admin/forcefrom/save", webauth.RequireAdmin(ah.SaveForceFrom))
+	mux.HandleFunc("/admin/user-force-from", webauth.RequireAdmin(ah.UserForceFromList))
+	mux.HandleFunc("/admin/user-force-from/save", webauth.RequireAdmin(ah.SaveUserForceFrom))
+	mux.HandleFunc("/admin/user-force-from/delete", webauth.RequireAdmin(ah.DeleteUserForceFrom))
 	mux.HandleFunc("/admin/forcetemplate", webauth.RequireAdmin(ah.ForceTemplate))
 	mux.HandleFunc("/admin/forcetemplate/add", webauth.RequireAdmin(ah.AddForceTemplate))
 	mux.HandleFunc("/admin/forcetemplate/edit", webauth.RequireAdmin(ah.EditForceTemplate))
@@ -222,6 +225,9 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/skipdomain", webauth.RequireAdmin(ah.SkipDomainPage))
 	mux.HandleFunc("/admin/skipdomain/add", webauth.RequireAdmin(ah.AddSkipDomain))
 	mux.HandleFunc("/admin/skipdomain/delete", webauth.RequireAdmin(ah.DeleteSkipDomain))
+	mux.HandleFunc("/admin/user-ip-assignments", webauth.RequireAdmin(ah.UserIPAssignments))
+	mux.HandleFunc("/admin/user-ip-assignments/assign", webauth.RequireAdmin(ah.AssignIPToUser))
+	mux.HandleFunc("/admin/user-ip-assignments/unassign", webauth.RequireAdmin(ah.UnassignIPFromUser))
 
 	// User routes
 	uh := &webuser.Handler{DB: s.db, Queue: s.queue, Verifier: s.verifier, Tmpl: s.renderer, ConfigSnapshot: s.cfg}

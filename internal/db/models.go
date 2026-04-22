@@ -157,6 +157,34 @@ type IPPoolDomainRule struct {
 	IntervalSec int   `gorm:"default:0"` // min seconds between emails to this domain from this IP
 }
 
+// UserIPAssignment pins specific IP pool entries to a user.
+// When at least one assignment exists for a user, only those IPs are used for
+// their outbound delivery. All rate-limit and domain rules still apply normally.
+// Users with NO assignments share the full pool (default behaviour).
+type UserIPAssignment struct {
+	gorm.Model
+	Username string `gorm:"index:idx_user_ip,unique,priority:1;size:191;not null"`
+	IPPoolID uint   `gorm:"index:idx_user_ip,unique,priority:2;not null"`
+	// IPPool is loaded via preload / joins when needed.
+	IPPool IPPool `gorm:"foreignKey:IPPoolID"`
+}
+
+// UserForceFrom holds per-user Force From / Force Email From configuration.
+// When enabled for a user, these settings override the global Force From / Force Email From
+// defaults at message submission time.
+//
+//   - Domains:   newline-separated domain list for local-part@domain rotation
+//   - Addresses: newline-separated full email addresses for round-robin From override
+//
+// Address list takes precedence over domain list (same priority rule as the global config).
+type UserForceFrom struct {
+	gorm.Model
+	Username  string `gorm:"uniqueIndex;size:191;not null"`
+	Enabled   bool   `gorm:"default:false"`
+	Domains   string `gorm:"type:text"` // newline-separated domains
+	Addresses string `gorm:"type:text"` // newline-separated full From addresses
+}
+
 // IPPoolMasterDomainRule holds per-domain rate limits that apply to ALL IPs when no IP-specific domain rule exists.
 // Each domain has its own rule; there is no default/fixed master rule.
 type IPPoolMasterDomainRule struct {

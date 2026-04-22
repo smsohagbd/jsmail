@@ -1,0 +1,134 @@
+{{define "title"}}User IP Assignments — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">User IP Assignments</div>
+    <div class="page-sub">Assign specific IP pool addresses to users. Assigned users will only send through their designated IPs. All rate limits still apply.</div>
+  </div>
+  <button class="btn btn-primary" onclick="document.getElementById('add-card').style.display='block';document.getElementById('add-card').scrollIntoView({behavior:'smooth'})">
+    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    Assign IP
+  </button>
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<div style="background:#18181b;border:1px solid #3f3f46;border-radius:8px;padding:14px 18px;margin-bottom:16px;font-size:12px;color:#71717a;line-height:1.7;">
+  <strong style="color:#a1a1aa;">How it works:</strong>
+  When a user has one or more IPs assigned, the delivery engine will <em>only</em> use those IPs for that user's outbound mail.
+  All existing rate limits, domain rules, and warmup settings for those IPs continue to apply normally.
+  Users with <em>no</em> assignments share the full IP pool (default behaviour).
+  You can assign multiple IPs to a single user for round-robin sending within their dedicated pool.
+</div>
+
+<!-- Current assignments table -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Current Assignments
+      <span style="margin-left:8px;background:#1e1b4b;color:#a78bfa;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">{{len .Assignments}} total</span>
+    </span>
+  </div>
+  {{if .Assignments}}
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">User</th>
+        <th>IP Address</th>
+        <th>Hostname</th>
+        <th>Limits (min / hour / day)</th>
+        <th>Status</th>
+        <th>Assigned</th>
+        <th style="padding-right:20px;text-align:right;">Actions</th>
+      </tr></thead>
+      <tbody>
+        {{range .Assignments}}
+        <tr>
+          <td style="padding-left:20px;">
+            <code style="font-size:13px;color:#60a5fa;font-weight:600;">{{.Username}}</code>
+          </td>
+          <td>
+            <code style="font-size:13px;color:#e4e4e7;font-weight:600;">{{.IPPool.IP}}</code>
+          </td>
+          <td style="font-size:12px;color:#71717a;">{{if .IPPool.Hostname}}{{.IPPool.Hostname}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="font-size:12px;color:#71717a;">
+            {{if .IPPool.PerMin}}{{.IPPool.PerMin}}/min{{else}}∞{{end}} /
+            {{if .IPPool.PerHour}}{{.IPPool.PerHour}}/hr{{else}}∞{{end}} /
+            {{if .IPPool.PerDay}}{{.IPPool.PerDay}}/day{{else}}∞{{end}}
+          </td>
+          <td>
+            {{if .IPPool.Active}}
+            <span style="background:#052e16;color:#4ade80;font-size:11px;padding:2px 8px;border-radius:10px;">Active</span>
+            {{else}}
+            <span style="background:#1c0606;color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;">Inactive</span>
+            {{end}}
+          </td>
+          <td style="font-size:12px;color:#52525b;">{{.CreatedAt.Format "Jan 2, 2006"}}</td>
+          <td style="padding-right:20px;text-align:right;">
+            <form method="POST" action="/admin/user-ip-assignments/unassign"
+              onsubmit="return confirm('Remove IP {{.IPPool.IP}} from user {{.Username}}?')">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-danger" style="font-size:11px;padding:4px 12px;">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div style="padding:48px;text-align:center;">
+    <div style="font-size:36px;margin-bottom:12px;">🌐</div>
+    <div style="font-size:15px;font-weight:600;color:#e4e4e7;margin-bottom:6px;">No assignments yet</div>
+    <div style="font-size:13px;color:#52525b;">All users currently share the full IP pool.</div>
+  </div>
+  {{end}}
+</div>
+
+<!-- Add assignment card -->
+<div class="card" id="add-card" style="{{if not .Assignments}}{{else}}display:none;{{end}}margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Assign IP to User</span>
+    {{if .Assignments}}
+    <button type="button" onclick="document.getElementById('add-card').style.display='none'"
+      style="background:none;border:none;color:#71717a;font-size:18px;cursor:pointer;line-height:1;padding:0 4px;">✕</button>
+    {{end}}
+  </div>
+  <div style="padding:20px 24px 24px;">
+    <form method="POST" action="/admin/user-ip-assignments/assign">
+      <div class="form-group">
+        <label class="form-label">User</label>
+        <select class="form-input" name="username" required>
+          <option value="">— select user —</option>
+          {{range .AllUsers}}
+          <option value="{{.Username}}">{{.Username}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:20px;">
+        <label class="form-label">IP Address</label>
+        <select class="form-input" name="ip_pool_id" required>
+          <option value="">— select IP —</option>
+          {{range .AllIPs}}
+          <option value="{{.ID}}">{{.IP}}{{if .Hostname}} ({{.Hostname}}){{end}}{{if not .Active}} — INACTIVE{{end}}</option>
+          {{end}}
+        </select>
+        <div style="font-size:11px;color:#52525b;margin-top:4px;">Only active IPs from the pool are shown. You can assign multiple IPs to the same user.</div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        {{if .Assignments}}
+        <button type="button" class="btn btn-ghost" onclick="document.getElementById('add-card').style.display='none'">Cancel</button>
+        {{end}}
+        <button type="submit" class="btn btn-primary">
+          <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+          Assign IP
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+</div>
+{{end}}

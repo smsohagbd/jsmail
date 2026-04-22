@@ -190,6 +190,35 @@ func main() {
 		}
 		return r.PerMin, r.PerHour, r.PerDay, r.IntervalSec, true
 	}
+	eng.UserIPFilterProvider = func(username string) map[string]bool {
+		// IPs explicitly assigned to this user.
+		userIPs := appdb.GetUserAssignedIPSet(username)
+		if len(userIPs) > 0 {
+			// User has specific IPs → use only those, regardless of other users.
+			return userIPs
+		}
+
+		// User has no personal assignment. Build a pool of IPs that are NOT
+		// assigned to any other user, so assigned IPs remain exclusive.
+		allAssigned := appdb.GetAllAssignedIPs()
+		if len(allAssigned) == 0 {
+			// No assignments exist anywhere → full shared pool.
+			return nil
+		}
+
+		// Collect every active pool IP, then remove the globally assigned ones.
+		allEntries := eng.IPPoolProvider()
+		available := make(map[string]bool, len(allEntries))
+		for _, e := range allEntries {
+			if !allAssigned[e.IP] {
+				available[e.IP] = true
+			}
+		}
+		// Return the filtered set (may be empty if all IPs are assigned to
+		// specific users; the engine will then fall back to system default).
+		return available
+	}
+
 	eng.IPPoolProvider = func() []delivery.IPEntry {
 		if appdb.GetSetting("ip_pool_enabled", "false") != "true" {
 			return nil

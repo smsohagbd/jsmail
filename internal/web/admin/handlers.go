@@ -1205,6 +1205,68 @@ func (h *Handler) DeleteForceTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/forcetemplate?ok=Template+removed", http.StatusFound)
 }
 
+// ──────────────────────────── Per-User Force From ─────────────────────────────
+
+// UserForceFromList renders the per-user Force From management page.
+func (h *Handler) UserForceFromList(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	var users []appdb.User
+	appdb.DB.Order("username asc").Find(&users)
+	h.Tmpl.Render(w, "admin/user_force_from", map[string]interface{}{
+		"Page":       "user-force-from",
+		"ActiveUser": claims.Username,
+		"Configs":    appdb.GetAllUserForceFroms(),
+		"AllUsers":   users,
+		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   r.URL.Query().Get("err"),
+	})
+}
+
+// SaveUserForceFrom creates or updates a user's Force From config.
+func (h *Handler) SaveUserForceFrom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/user-force-from", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/user-force-from?err=Invalid+form", http.StatusFound)
+		return
+	}
+	username := strings.TrimSpace(r.FormValue("username"))
+	if username == "" {
+		http.Redirect(w, r, "/admin/user-force-from?err=Username+required", http.StatusFound)
+		return
+	}
+	enabled := formChecked(r.Form, "enabled")
+	domains := strings.TrimSpace(r.FormValue("domains"))
+	addresses := strings.TrimSpace(r.FormValue("addresses"))
+	if err := appdb.SetUserForceFrom(username, enabled, domains, addresses); err != nil {
+		log.Printf("user-force-from: failed to save for %s: %v", username, err)
+		http.Redirect(w, r, "/admin/user-force-from?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/user-force-from?ok=Config+saved+for+"+username, http.StatusFound)
+}
+
+// DeleteUserForceFrom removes a user's Force From config.
+func (h *Handler) DeleteUserForceFrom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/user-force-from", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/user-force-from?err=Invalid+form", http.StatusFound)
+		return
+	}
+	username := strings.TrimSpace(r.FormValue("username"))
+	if err := appdb.DeleteUserForceFrom(username); err != nil {
+		log.Printf("user-force-from: failed to delete for %s: %v", username, err)
+		http.Redirect(w, r, "/admin/user-force-from?err=Failed+to+delete", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/user-force-from?ok=Config+removed+for+"+username, http.StatusFound)
+}
+
 func (h *Handler) AddIPPoolMasterDomainRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/admin/ippool", http.StatusFound)
@@ -2189,4 +2251,63 @@ func (h *Handler) DeleteSkipDomain(w http.ResponseWriter, r *http.Request) {
 		appdb.DeleteSkipDomain(uint(id))
 	}
 	http.Redirect(w, r, "/admin/skipdomain?ok=Domain+removed+from+skip+list", http.StatusFound)
+}
+
+// ──────────────────────────── User IP Assignments ────────────────────────────
+
+// UserIPAssignments renders the admin page listing all user→IP assignments.
+func (h *Handler) UserIPAssignments(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	assignments := appdb.GetAllUserIPAssignments()
+	allIPs := appdb.GetActiveIPPool()
+	var allUsers []appdb.User
+	h.DB.Where("role = ?", "user").Order("username asc").Find(&allUsers)
+	h.Tmpl.Render(w, "admin/user_ip_assignments", map[string]interface{}{
+		"Page":        "user_ip_assignments",
+		"ActiveUser":  claims.Username,
+		"Assignments": assignments,
+		"AllIPs":      allIPs,
+		"AllUsers":    allUsers,
+		"FlashOK":     r.URL.Query().Get("ok"),
+		"FlashErr":    r.URL.Query().Get("err"),
+	})
+}
+
+// AssignIPToUser creates a user→IP assignment.
+func (h *Handler) AssignIPToUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/user-ip-assignments", http.StatusFound)
+		return
+	}
+	username := strings.TrimSpace(r.FormValue("username"))
+	ipPoolID, _ := strconv.ParseUint(r.FormValue("ip_pool_id"), 10, 64)
+	if username == "" || ipPoolID == 0 {
+		http.Redirect(w, r, "/admin/user-ip-assignments?err=Invalid+input", http.StatusFound)
+		return
+	}
+	if err := appdb.AssignIPToUser(username, uint(ipPoolID)); err != nil {
+		log.Printf("admin: assign IP to user: %v", err)
+		http.Redirect(w, r, "/admin/user-ip-assignments?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/user-ip-assignments?ok=IP+assigned", http.StatusFound)
+}
+
+// UnassignIPFromUser removes a user→IP assignment by row ID.
+func (h *Handler) UnassignIPFromUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/user-ip-assignments", http.StatusFound)
+		return
+	}
+	id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+	if id == 0 {
+		http.Redirect(w, r, "/admin/user-ip-assignments?err=Invalid+ID", http.StatusFound)
+		return
+	}
+	if err := appdb.UnassignIPFromUser(uint(id)); err != nil {
+		log.Printf("admin: unassign IP from user: %v", err)
+		http.Redirect(w, r, "/admin/user-ip-assignments?err="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/admin/user-ip-assignments?ok=Assignment+removed", http.StatusFound)
 }

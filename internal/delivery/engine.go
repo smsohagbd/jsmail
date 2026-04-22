@@ -162,6 +162,12 @@ type Engine struct {
 	// Return nil or empty to use the system default IP.
 	IPPoolProvider func() []IPEntry
 
+	// UserIPFilterProvider returns the set of IP addresses (from the pool) that a
+	// specific user is allowed to use for outbound delivery.
+	// Return nil to allow the user to use the full pool (default behaviour).
+	// When non-nil and non-empty, only IPs in the returned set are eligible.
+	UserIPFilterProvider func(username string) map[string]bool
+
 	// IPPoolMasterProvider returns master limits for a domain. Applies to ALL IPs when no IP-specific domain rule exists.
 	// Per-domain only: different rules for different domains. Returns found=false if no master rule for that domain.
 	IPPoolMasterProvider func(domain string) (perMin, perHour, perDay, intervalSec int, found bool)
@@ -587,7 +593,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 						}
 					}
 
-				_, directErr := e.deliverToDomain(msg.From, domain, domRcpts, data, onBounce, msg.ID)
+				_, directErr := e.deliverToDomain(msg.From, domain, msg.Username, domRcpts, data, onBounce, msg.ID)
 
 				bounced := make(map[string]bool)
 				for _, b := range hardBounced {
@@ -822,7 +828,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			}
 		}
 
-		mxHost, err := e.deliverToDomain(msg.From, domain, rcpts, data, onRcptBounce, msg.ID)
+		mxHost, err := e.deliverToDomain(msg.From, domain, msg.Username, rcpts, data, onRcptBounce, msg.ID)
 
 		// IP pool exhausted — instead of deferring to disk immediately,
 		// sleep in-memory for the computed wait (typically a few seconds)
@@ -834,7 +840,7 @@ func (e *Engine) deliver(msg *queue.Message) {
 			if wait > 0 && wait <= 25*time.Second {
 				e.logV("[IPPOOL] ⏳ message %s: all IPs busy for %s — sleeping %v then retrying in-memory", msg.ID, domain, wait)
 				time.Sleep(wait)
-				mxHost, err = e.deliverToDomain(msg.From, domain, rcpts, data, onRcptBounce, msg.ID)
+				mxHost, err = e.deliverToDomain(msg.From, domain, msg.Username, rcpts, data, onRcptBounce, msg.ID)
 			}
 		}
 
@@ -1298,7 +1304,7 @@ func (e *Engine) returnOutboundIPTok(ip, rcptDomain string) {
 // deliverToDomain attempts delivery to a domain, returning the successful MX host on success.
 // onRcptBounce is called for each recipient that receives a permanent 5xx during RCPT TO.
 // Those recipients are skipped from DATA; the remaining valid recipients are delivered.
-func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byte,
+func (e *Engine) deliverToDomain(from, domain, username string, rcpts []string, data []byte,
 	onRcptBounce func(rcpt, reason string), traceID string) (string, error) {
 	// Check dial-failure cache — domain known to be unreachable.
 	if blocked, rem := e.isDomainDialBlocked(domain); blocked {
@@ -1352,7 +1358,7 @@ func (e *Engine) deliverToDomain(from, domain string, rcpts []string, data []byt
 			e.tracePhase(traceID, "waiting_mx_semaphore", fmt.Sprintf("%s:%s (max %d concurrent)", mx.Host, port, e.mxSlotCap()))
 			e.acquireMXSlot(mx.Host)
 			e.tracePhase(traceID, "smtp_connect_send", fmt.Sprintf("%s:%s", mx.Host, port))
-			mxErr := e.sendToMX(from, domain, mx.Host, port, rcpts, data, onRcptBounce, traceID, connectTO)
+			mxErr := e.sendToMX(from, domain, mx.Host, port, username, rcpts, data, onRcptBounce, traceID, connectTO)
 			e.releaseMXSlot(mx.Host)
 
 			if mxErr == nil {
@@ -1467,17 +1473,38 @@ func (e *Engine) ipEffectiveLimits(entry *IPEntry, domain string) (perMin, perHo
 
 // nextOutboundIP selects the next available IP from the pool using round-robin.
 // domain is the recipient domain (e.g. gmail.com) for domain-specific rate limits.
+// username is used to filter the pool when UserIPFilterProvider is set.
 // Returns:
 //   - (ip, hostname, nil) — ip selected; hostname is the IP's rDNS (for HELO); counters reserved
 //   - ("", "", nil)      — pool disabled/empty; use system default IP and global HELO
 //   - ("", "", limitedErr) — pool active but all IPs rate-limited; caller must defer
-func (e *Engine) nextOutboundIP(domain string) (ip, hostname string, err error) {
+func (e *Engine) nextOutboundIP(domain, username string) (ip, hostname string, err error) {
 	if e.IPPoolProvider == nil {
 		return "", "", nil
 	}
 	entries := e.IPPoolProvider()
 	if len(entries) == 0 {
 		return "", "", nil // pool disabled or empty → fall through to system default
+	}
+
+	// Per-user IP filter.
+	// nil   → no restriction, user may use the full pool.
+	// non-nil (even empty map) → restrict to only the IPs in the set.
+	//   empty set → no eligible IPs, fall back to system default.
+	if username != "" && e.UserIPFilterProvider != nil {
+		if allowed := e.UserIPFilterProvider(username); allowed != nil {
+			var filtered []IPEntry
+			for _, entry := range entries {
+				if allowed[entry.IP] {
+					filtered = append(filtered, entry)
+				}
+			}
+			if len(filtered) == 0 {
+				e.logV("[IPPOOL] user %q: no eligible IPs after filter — using system default", username)
+				return "", "", nil
+			}
+			entries = filtered
+		}
 	}
 
 	domain = strings.ToLower(domain)
@@ -1769,7 +1796,7 @@ func (e *Engine) ipPoolLimitedErrWhenAllBusy(entries []IPEntry, domain string, n
 }
 
 // claimOutboundIPForSMTP takes a (pool IP × recipient domain) SMTP slot, then reserves IP-pool rate limits for that domain.
-func (e *Engine) claimOutboundIPForSMTP(domain string, traceID string) (ip, hostname string, release func(), err error) {
+func (e *Engine) claimOutboundIPForSMTP(domain, username string, traceID string) (ip, hostname string, release func(), err error) {
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	type cand struct {
 		ent IPEntry
@@ -1785,6 +1812,25 @@ outer:
 		if n == 0 {
 			return "", "", nil, nil
 		}
+
+		// Per-user IP filter (nil = full pool, non-nil = restrict to set).
+		if username != "" && e.UserIPFilterProvider != nil {
+			if allowed := e.UserIPFilterProvider(username); allowed != nil {
+				var filtered []IPEntry
+				for _, entry := range entries {
+					if allowed[entry.IP] {
+						filtered = append(filtered, entry)
+					}
+				}
+				if len(filtered) == 0 {
+					e.logV("[IPPOOL] user %q: no eligible IPs after filter — using system default", username)
+					return "", "", nil, nil
+				}
+				entries = filtered
+				n = len(entries)
+			}
+		}
+
 		master := e.snapshotIPPoolMaster(domain)
 
 		e.ipMu.Lock()
@@ -2073,7 +2119,7 @@ func (e *Engine) deliverViaRelay(relay SMTPRelay, from string, rcpts []string, d
 	return nil
 }
 
-func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, data []byte,
+func (e *Engine) sendToMX(from, domain, mxHost, port, username string, rcpts []string, data []byte,
 	onRcptBounce func(rcpt, reason string), traceID string, connectTimeout time.Duration) error {
 	addr := net.JoinHostPort(mxHost, port)
 	e.tracePhase(traceID, "outbound_ip_pick", domain)
@@ -2092,13 +2138,13 @@ func (e *Engine) sendToMX(from, domain, mxHost, port string, rcpts []string, dat
 	var outIP, outHostname string
 	var ipErr error
 	if e.usePerOutboundPipeline() {
-		outIP, outHostname, releaseIPTok, ipErr = e.claimOutboundIPForSMTP(domain, traceID)
+		outIP, outHostname, releaseIPTok, ipErr = e.claimOutboundIPForSMTP(domain, username, traceID)
 		if ipErr != nil {
 			e.tracePhase(traceID, "ip_pool_all_busy", ipErr.Error())
 			return ipErr
 		}
 	} else {
-		outIP, outHostname, ipErr = e.nextOutboundIP(domain)
+		outIP, outHostname, ipErr = e.nextOutboundIP(domain, username)
 		if ipErr != nil {
 			e.tracePhase(traceID, "ip_pool_all_busy", ipErr.Error())
 			return ipErr

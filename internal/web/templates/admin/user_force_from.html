@@ -1,0 +1,203 @@
+{{define "title"}}User Force From — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">User Force From</div>
+    <div class="page-sub">Override the From address and domain rotation on a per-user basis. Each user's config takes priority over the global Force From / Force Email defaults.</div>
+  </div>
+  <button class="btn btn-primary" onclick="showAddForm()">
+    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    Add Config
+  </button>
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<div style="background:#18181b;border:1px solid #3f3f46;border-radius:8px;padding:14px 18px;margin-bottom:16px;font-size:12px;color:#71717a;line-height:1.7;">
+  <strong style="color:#a1a1aa;">How it works:</strong>
+  When a user has an active Force From config here, their messages will have the From address rewritten
+  using <em>their own</em> rotation list — not the global default.
+  <br>
+  <strong style="color:#a1a1aa;">Address list</strong> (full <code>user@domain</code> or <code>Name &lt;user@domain&gt;</code>) takes priority over
+  <strong style="color:#a1a1aa;">Domain list</strong> (domain-only, keeps the original local-part).
+  Add one entry per line. Lines starting with <code>#</code> are ignored.
+</div>
+
+<!-- Existing configs table -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">Configured Users
+      <span style="margin-left:8px;background:#1e1b4b;color:#a78bfa;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">{{len .Configs}} total</span>
+    </span>
+  </div>
+  {{if .Configs}}
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">User</th>
+        <th>Status</th>
+        <th>Domains</th>
+        <th>Addresses</th>
+        <th style="padding-right:20px;text-align:right;">Actions</th>
+      </tr></thead>
+      <tbody>
+        {{range .Configs}}
+        <tr>
+          <td style="padding-left:20px;">
+            <code style="font-size:13px;color:#60a5fa;font-weight:600;">{{.Username}}</code>
+          </td>
+          <td>
+            {{if .Enabled}}
+            <span style="background:#052e16;color:#4ade80;font-size:11px;padding:2px 8px;border-radius:10px;">Enabled</span>
+            {{else}}
+            <span style="background:#27272a;color:#71717a;font-size:11px;padding:2px 8px;border-radius:10px;">Disabled</span>
+            {{end}}
+          </td>
+          <td style="font-size:12px;color:#71717a;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{if .Domains}}{{.Domains}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}
+          </td>
+          <td style="font-size:12px;color:#71717a;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{if .Addresses}}{{.Addresses}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}
+          </td>
+          <td style="padding-right:20px;text-align:right;">
+            <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;">
+              <button type="button" class="btn btn-ghost" style="font-size:11px;padding:4px 12px;"
+                data-user="{{.Username}}"
+                data-enabled="{{if .Enabled}}true{{else}}false{{end}}"
+                data-domains="{{.Domains}}"
+                data-addresses="{{.Addresses}}"
+                onclick="openEditFromBtn(this)">
+                Edit
+              </button>
+              <form method="POST" action="/admin/user-force-from/delete"
+                onsubmit="return confirm('Remove Force From config for {{.Username}}?')">
+                <input type="hidden" name="username" value="{{.Username}}"/>
+                <button type="submit" class="btn btn-danger" style="font-size:11px;padding:4px 12px;">Remove</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div style="padding:48px;text-align:center;">
+    <div style="font-size:36px;margin-bottom:12px;">✉</div>
+    <div style="font-size:15px;font-weight:600;color:#e4e4e7;margin-bottom:6px;">No per-user configs yet</div>
+    <div style="font-size:13px;color:#52525b;">All users fall back to the global Force From settings.</div>
+  </div>
+  {{end}}
+</div>
+
+<!-- Add / Edit form (shared) -->
+<div class="card" id="edit-card" style="display:none;margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title" id="edit-card-title">Add Config</span>
+    <button type="button" onclick="closeEditForm()"
+      style="background:none;border:none;color:#71717a;font-size:18px;cursor:pointer;line-height:1;padding:0 4px;">✕</button>
+  </div>
+  <div style="padding:20px 24px 24px;">
+    <form method="POST" action="/admin/user-force-from/save" id="edit-form">
+      <!-- In "add" mode the select is shown; in "edit" mode we show a locked label + hidden input. -->
+      <div class="form-group" id="user-select-wrap">
+        <label class="form-label">User</label>
+        <select class="form-input" name="username" id="edit-username" required>
+          <option value="">— select user —</option>
+          {{range .AllUsers}}
+          <option value="{{.Username}}">{{.Username}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div class="form-group" id="user-locked-wrap" style="display:none;">
+        <label class="form-label">User</label>
+        <div style="background:#27272a;border:1px solid #3f3f46;border-radius:6px;padding:8px 12px;font-size:13px;color:#60a5fa;font-weight:600;" id="edit-username-label"></div>
+        <input type="hidden" name="username" id="edit-username-hidden"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" name="enabled" id="edit-enabled" value="1"
+            style="width:15px;height:15px;accent-color:#6366f1;cursor:pointer;">
+          <span>Enabled — apply this config when sending</span>
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="form-group">
+          <label class="form-label">Domain List
+            <span style="font-size:11px;color:#52525b;font-weight:400;margin-left:4px;">(one per line · keeps original local-part)</span>
+          </label>
+          <textarea class="form-input" name="domains" id="edit-domains" rows="6"
+            placeholder="example.com&#10;sender.io&#10;# comment lines ignored"
+            style="font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Address List
+            <span style="font-size:11px;color:#52525b;font-weight:400;margin-left:4px;">(overrides domain list · one per line)</span>
+          </label>
+          <textarea class="form-input" name="addresses" id="edit-addresses" rows="6"
+            placeholder="noreply@example.com&#10;John Doe &lt;john@sender.io&gt;&#10;# address list wins over domain list"
+            style="font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#52525b;margin-top:-8px;margin-bottom:16px;">
+        Priority: <strong style="color:#a1a1aa;">Address list &gt; Domain list</strong>.
+        Leave a section empty to use only the other one.
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button type="button" class="btn btn-ghost" onclick="closeEditForm()">Cancel</button>
+        <button type="submit" class="btn btn-primary">
+          <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          Save Config
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+</div>
+
+<script>
+function showAddForm() {
+  document.getElementById('edit-card-title').textContent = 'Add Config';
+  document.getElementById('user-select-wrap').style.display = '';
+  document.getElementById('user-locked-wrap').style.display = 'none';
+  document.getElementById('edit-username').value = '';
+  document.getElementById('edit-username').required = true;
+  document.getElementById('edit-enabled').checked = true;
+  document.getElementById('edit-domains').value = '';
+  document.getElementById('edit-addresses').value = '';
+  var card = document.getElementById('edit-card');
+  card.style.display = 'block';
+  card.scrollIntoView({behavior:'smooth'});
+}
+
+function openEditFromBtn(btn) {
+  openEdit(btn.dataset.user, btn.dataset.enabled === 'true', btn.dataset.domains, btn.dataset.addresses);
+}
+
+function openEdit(username, enabled, domains, addresses) {
+  document.getElementById('edit-card-title').textContent = 'Edit Config — ' + username;
+  document.getElementById('user-select-wrap').style.display = 'none';
+  document.getElementById('user-locked-wrap').style.display = '';
+  document.getElementById('edit-username').required = false;
+  document.getElementById('edit-username-label').textContent = username;
+  document.getElementById('edit-username-hidden').value = username;
+  document.getElementById('edit-enabled').checked = enabled;
+  document.getElementById('edit-domains').value = domains;
+  document.getElementById('edit-addresses').value = addresses;
+  var card = document.getElementById('edit-card');
+  card.style.display = 'block';
+  card.scrollIntoView({behavior:'smooth'});
+}
+
+function closeEditForm() {
+  document.getElementById('edit-card').style.display = 'none';
+  document.getElementById('user-select-wrap').style.display = '';
+  document.getElementById('user-locked-wrap').style.display = 'none';
+  document.getElementById('edit-username').required = true;
+}
+</script>
+{{end}}

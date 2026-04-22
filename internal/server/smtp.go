@@ -137,12 +137,21 @@ func (s *session) Data(r io.Reader) error {
 	}
 
 	from := s.from
-	// Force Template / Force Email From / Force From: independent toggles; pipeline runs if any can apply.
-	if appdb.GetForceRewriteShouldRun() {
-		newFrom, subj, body, applied := appdb.GetNextForceEmail(from)
-		if applied {
-			if newFrom != from {
-				from = newFrom
+	// Per-user Force From takes priority over the global config.
+	// If the user has a Force From config of their own (and it is enabled), apply it now.
+	// Otherwise fall through to the global Force From / Force Template pipeline.
+	if newFrom, applied := appdb.GetNextUserForceEmail(s.authUser, from); applied {
+		from = newFrom
+		data = email.RewriteFromHeader(data, from)
+		if s.backend.cfg.VerboseLog {
+			log.Printf("[SMTP]   user force-from applied  ip=%s user=%s from=%s", s.remoteIP, s.authUser, from)
+		}
+	} else if appdb.GetForceRewriteShouldRun() {
+		// Global Force Template / Force Email From / Force From pipeline.
+		newFrom2, subj, body, ok := appdb.GetNextForceEmail(from)
+		if ok {
+			if newFrom2 != from {
+				from = newFrom2
 				data = email.RewriteFromHeader(data, from)
 			}
 			if subj != "" || body != "" {
@@ -155,7 +164,7 @@ func (s *session) Data(r io.Reader) error {
 				data = email.RewriteSubjectAndBody(data, subj, body, linkMappings, redirectBase)
 			}
 			if s.backend.cfg.VerboseLog {
-				log.Printf("[SMTP]   force applied  ip=%s from=%s subj=%q", s.remoteIP, from, subj)
+				log.Printf("[SMTP]   global force applied  ip=%s from=%s subj=%q", s.remoteIP, from, subj)
 			}
 		}
 	}

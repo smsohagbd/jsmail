@@ -103,6 +103,8 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 		&IPPool{},
 		&IPPoolDomainRule{},
 		&IPPoolMasterDomainRule{},
+		&UserIPAssignment{},
+		&UserForceFrom{},
 		&UserSMTP{},
 		&Suppression{},
 		&ContactList{},
@@ -495,6 +497,182 @@ func UpdateIPPoolDomainRule(id, ipPoolID uint, domain string, perMin, perHour, p
 
 func DeleteIPPoolDomainRule(id, ipPoolID uint) {
 	DB.Where("id = ? AND ip_pool_id = ?", id, ipPoolID).Delete(&IPPoolDomainRule{})
+}
+
+// ──────────────────────────── User IP Assignments ────────────────────────────
+
+// GetUserIPAssignments returns all IP pool entries assigned to a specific user.
+func GetUserIPAssignments(username string) []IPPool {
+	var assignments []UserIPAssignment
+	DB.Preload("IPPool").Where("username = ?", username).Find(&assignments)
+	pools := make([]IPPool, 0, len(assignments))
+	for _, a := range assignments {
+		pools = append(pools, a.IPPool)
+	}
+	return pools
+}
+
+// GetAllUserIPAssignments returns every assignment row for the admin overview.
+func GetAllUserIPAssignments() []UserIPAssignment {
+	var rows []UserIPAssignment
+	DB.Preload("IPPool").Order("username asc").Find(&rows)
+	return rows
+}
+
+// AssignIPToUser creates an assignment (idempotent — silently ignores duplicates).
+func AssignIPToUser(username string, ipPoolID uint) error {
+	row := UserIPAssignment{Username: username, IPPoolID: ipPoolID}
+	return DB.Where(UserIPAssignment{Username: username, IPPoolID: ipPoolID}).
+		FirstOrCreate(&row).Error
+}
+
+// UnassignIPFromUser removes a specific IP assignment from a user.
+func UnassignIPFromUser(id uint) error {
+	return DB.Unscoped().Where("id = ?", id).Delete(&UserIPAssignment{}).Error
+}
+
+// GetUserAssignedIPSet returns the set of IP strings assigned to a user.
+// Returns nil (empty map) when the user has no assignments (use full pool).
+func GetUserAssignedIPSet(username string) map[string]bool {
+	pools := GetUserIPAssignments(username)
+	if len(pools) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(pools))
+	for _, p := range pools {
+		set[p.IP] = true
+	}
+	return set
+}
+
+// GetAllAssignedIPs returns the set of every IP address that is assigned to
+// at least one user. Used to exclude these IPs from the shared pool so that
+// unassigned users cannot accidentally consume IPs reserved for specific users.
+func GetAllAssignedIPs() map[string]bool {
+	var assignments []UserIPAssignment
+	DB.Preload("IPPool").Find(&assignments)
+	if len(assignments) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(assignments))
+	for _, a := range assignments {
+		if a.IPPool.IP != "" {
+			set[a.IPPool.IP] = true
+		}
+	}
+	return set
+}
+
+// ──────────────────────────── Per-User Force From ─────────────────────────────
+
+// userForceFromRotate stores per-username round-robin counters for From address rotation.
+var userForceFromRotate sync.Map // username -> *atomic.Uint64
+
+func userForceFromCounter(username string) *atomic.Uint64 {
+	val, _ := userForceFromRotate.LoadOrStore(username, new(atomic.Uint64))
+	return val.(*atomic.Uint64)
+}
+
+// GetAllUserForceFroms returns every configured user Force From record.
+func GetAllUserForceFroms() []UserForceFrom {
+	var rows []UserForceFrom
+	DB.Order("username asc").Find(&rows)
+	return rows
+}
+
+// GetUserForceFrom returns the Force From config for a specific user, or nil if none exists.
+func GetUserForceFrom(username string) *UserForceFrom {
+	var row UserForceFrom
+	if err := DB.Where("username = ?", username).First(&row).Error; err != nil {
+		return nil
+	}
+	return &row
+}
+
+// SetUserForceFrom upserts the Force From config for a user.
+func SetUserForceFrom(username string, enabled bool, domains, addresses string) error {
+	var row UserForceFrom
+	err := DB.Where("username = ?", username).First(&row).Error
+	if err != nil {
+		// Insert
+		return DB.Create(&UserForceFrom{
+			Username:  username,
+			Enabled:   enabled,
+			Domains:   domains,
+			Addresses: addresses,
+		}).Error
+	}
+	// Update
+	return DB.Model(&row).Updates(map[string]interface{}{
+		"enabled":   enabled,
+		"domains":   domains,
+		"addresses": addresses,
+	}).Error
+}
+
+// DeleteUserForceFrom removes the Force From config for a user.
+func DeleteUserForceFrom(username string) error {
+	return DB.Where("username = ?", username).Delete(&UserForceFrom{}).Error
+}
+
+// GetNextUserForceEmail applies the per-user Force From / Force Email From config for
+// username to originalFrom and returns the (possibly rewritten) From address.
+// Returns (originalFrom, false) if the user has no active config.
+// Subject and body are always empty (per-user config handles From address only;
+// subject/body templates remain global).
+func GetNextUserForceEmail(username, originalFrom string) (from string, applied bool) {
+	cfg := GetUserForceFrom(username)
+	if cfg == nil || !cfg.Enabled {
+		return originalFrom, false
+	}
+
+	idx := userForceFromCounter(username).Add(1) - 1
+	from = originalFrom
+
+	// Full address list takes precedence over domain rotation.
+	if addrs := parseLines(cfg.Addresses, true); len(addrs) > 0 {
+		addr := addrs[int(idx)%len(addrs)]
+		if !strings.Contains(addr, "<") {
+			if dn := extractDisplayNameFromAddr(originalFrom); dn != "" {
+				addr = dn + " <" + strings.TrimSpace(addr) + ">"
+			}
+		}
+		return addr, true
+	}
+
+	// Domain rotation: keep local part, swap domain.
+	if domains := parseLines(cfg.Domains, false); len(domains) > 0 {
+		local := extractLocalPartFromAddr(originalFrom)
+		if local == "" {
+			local = "noreply"
+		}
+		domain := strings.ToLower(domains[int(idx)%len(domains)])
+		dn := extractDisplayNameFromAddr(originalFrom)
+		if dn != "" {
+			return dn + " <" + local + "@" + domain + ">", true
+		}
+		return local + "@" + domain, true
+	}
+
+	return originalFrom, false
+}
+
+// parseLines splits text into trimmed, non-empty, non-comment lines.
+// If requireAt is true only lines containing "@" are kept (for addresses).
+// Values are returned as-is (no case transformation) so display names are preserved.
+func parseLines(raw string, requireAt bool) []string {
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		s := strings.TrimSpace(line)
+		if s == "" || strings.HasPrefix(s, "#") {
+			continue
+		}
+		if requireAt && !strings.Contains(s, "@") {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // ──────────────────────────── Force From Address ──────────────────────────────
