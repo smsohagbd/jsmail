@@ -787,8 +787,8 @@ func (e *Engine) deliver(msg *queue.Message) {
 		e.tracePhase(msg.ID, "domain_round", fmt.Sprintf("%s (%d rcpt)", domain, len(rcpts)))
 		e.logV("[DELIVERY]   delivering to domain %q (%v)", domain, rcpts)
 
-		// ── Admin domain skip list — no handshake, no MX lookup ──────────────
-		if e.SkipDomainChecker != nil && e.SkipDomainChecker(domain) {
+		// ── Admin domain skip list — bypassed for priority users ─────────────
+		if !e.isPriorityUser(msg.Username) && e.SkipDomainChecker != nil && e.SkipDomainChecker(domain) {
 			e.logV("[DELIVERY] ⏭ domain %q is on skip list — silently skipping %d recipient(s)", domain, len(rcpts))
 			for _, rcpt := range rcpts {
 				suppressedRcpts[rcpt] = true

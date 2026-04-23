@@ -282,8 +282,10 @@ func applyFilters(q *gorm.DB, r *http.Request) (*gorm.DB, string) {
 			return q.Where("sent_at >= ? AND sent_at <= ?", fromT, toT.Add(24*time.Hour)), from + " – " + to
 		}
 	}
-	// Default (empty or "today"): show today only — keeps COUNT fast on large tables.
-	return q.Where("sent_at >= ?", today), "Today"
+	// Default: last 7 days so users see recent history without explicitly
+	// choosing a range. "Today" was the previous default but confused users
+	// into thinking yesterday's logs were deleted.
+	return q.Where("sent_at >= ?", today.AddDate(0, 0, -7)), "Last 7 Days"
 }
 
 func splitEmails(raw string) []string {
