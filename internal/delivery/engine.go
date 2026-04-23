@@ -181,6 +181,11 @@ type Engine struct {
 	// Return a zero ThrottleLimit to skip throttling.
 	ThrottleProvider func(username, domain string) ThrottleLimit
 
+	// PriorityUserProvider returns true if the user has priority-send permission.
+	// Priority users bypass all IP pool rate limits, admin throttle rules, and
+	// relay rate limits. Their messages are also dequeued before normal messages.
+	PriorityUserProvider func(username string) bool
+
 	// throttle counters: key is "username|domain"
 	throttleMu       sync.Mutex
 	throttleCounters map[string]*throttleCounter
@@ -316,6 +321,11 @@ func (e *Engine) logV(format string, args ...interface{}) {
 	if e.cfg.VerboseLog {
 		log.Printf(format, args...)
 	}
+}
+
+// isPriorityUser returns true if the user holds the priority-send permission.
+func (e *Engine) isPriorityUser(username string) bool {
+	return username != "" && e.PriorityUserProvider != nil && e.PriorityUserProvider(username)
 }
 
 // finalizeIPPoolDeferWait preserves computed slot times from domain/IP intervals (no added seconds).
@@ -795,26 +805,27 @@ func (e *Engine) deliver(msg *queue.Message) {
 			continue
 		}
 
-		// ── Per-user throttle check ───────────────────────────────────────────
-		if reason, retryAfter := e.checkThrottle(msg.Username, domain, true); reason != "" {
-			e.tracePhase(msg.ID, "user_throttle_block", fmt.Sprintf("%s defer_in=%v", reason, retryAfter.Round(time.Second)))
-			e.logV("[DELIVERY] ⏳ %s", reason)
-			if retryAfter < 5*time.Second {
-				retryAfter = 5 * time.Second
-			}
-			e.queue.DeferNoIncrement(msg, retryAfter, reason)
-			if e.OnEvent != nil {
-				for _, rcpt := range rcpts {
-					e.OnEvent(DeliveryEvent{
-						MessageID: msg.ID, Username: msg.Username,
-						From: msg.From, To: rcpt, Status: "deferred",
-						Error: reason,
-					})
+		// ── Per-user throttle check (skipped for priority users) ─────────────
+		if !e.isPriorityUser(msg.Username) {
+			if reason, retryAfter := e.checkThrottle(msg.Username, domain, true); reason != "" {
+				e.tracePhase(msg.ID, "user_throttle_block", fmt.Sprintf("%s defer_in=%v", reason, retryAfter.Round(time.Second)))
+				e.logV("[DELIVERY] ⏳ %s", reason)
+				if retryAfter < 5*time.Second {
+					retryAfter = 5 * time.Second
 				}
+				e.queue.DeferNoIncrement(msg, retryAfter, reason)
+				if e.OnEvent != nil {
+					for _, rcpt := range rcpts {
+						e.OnEvent(DeliveryEvent{
+							MessageID: msg.ID, Username: msg.Username,
+							From: msg.From, To: rcpt, Status: "deferred",
+							Error: reason,
+						})
+					}
+				}
+				return
 			}
-			return
 		}
-
 		// onRcptBounce fires immediately when a single recipient gets a 5xx
 		// during the RCPT TO phase — before DATA is ever sent.
 		onRcptBounce := func(rcpt, reason string) {
@@ -1553,26 +1564,28 @@ func (e *Engine) nextOutboundIP(domain, username string) (ip, hostname string, e
 			}
 		}
 
-		if intervalSec > 0 && !c.lastSendAt.IsZero() {
-			elapsed := time.Since(c.lastSendAt).Seconds()
-			if elapsed < float64(intervalSec) {
-				wait := time.Duration(intervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
-				e.logV("[IPPOOL]   IP %s: interval %ds not met for %s (wait %v)", entry.IP, intervalSec, domain, wait.Round(time.Second))
+		// Priority users bypass IP pool rate limit checks (still tracked for reporting).
+		if !e.isPriorityUser(username) {
+			if intervalSec > 0 && !c.lastSendAt.IsZero() {
+				elapsed := time.Since(c.lastSendAt).Seconds()
+				if elapsed < float64(intervalSec) {
+					wait := time.Duration(intervalSec)*time.Second - time.Duration(elapsed*float64(time.Second))
+					e.logV("[IPPOOL]   IP %s: interval %ds not met for %s (wait %v)", entry.IP, intervalSec, domain, wait.Round(time.Second))
+					continue
+				}
+			}
+			if perMin > 0 && c.minCount >= perMin {
+				e.logV("[IPPOOL]   IP %s: per-min limit %d reached for %s, skipping", entry.IP, perMin, domain)
 				continue
 			}
-		}
-
-		if perMin > 0 && c.minCount >= perMin {
-			e.logV("[IPPOOL]   IP %s: per-min limit %d reached for %s, skipping", entry.IP, perMin, domain)
-			continue
-		}
-		if perHour > 0 && c.hourCount >= perHour {
-			e.logV("[IPPOOL]   IP %s: per-hour limit %d reached for %s, skipping", entry.IP, perHour, domain)
-			continue
-		}
-		if effectivePerDay > 0 && c.dayCount >= effectivePerDay {
-			e.logV("[IPPOOL]   IP %s: per-day limit %d reached for %s, skipping", entry.IP, effectivePerDay, domain)
-			continue
+			if perHour > 0 && c.hourCount >= perHour {
+				e.logV("[IPPOOL]   IP %s: per-hour limit %d reached for %s, skipping", entry.IP, perHour, domain)
+				continue
+			}
+			if effectivePerDay > 0 && c.dayCount >= effectivePerDay {
+				e.logV("[IPPOOL]   IP %s: per-day limit %d reached for %s, skipping", entry.IP, effectivePerDay, domain)
+				continue
+			}
 		}
 
 		c.minCount++
@@ -1581,6 +1594,24 @@ func (e *Engine) nextOutboundIP(domain, username string) (ip, hostname string, e
 		c.lastSendAt = now
 		e.ipIdx = (e.ipIdx + i + 1) % n
 		return entry.IP, entry.Hostname, nil
+	}
+
+	// Priority users never hit the "all IPs limited" path — if none found above
+	// (shouldn't happen since checks are skipped), return the first active IP.
+	if e.isPriorityUser(username) && len(entries) > 0 {
+		first := entries[0]
+		counterKey := first.IP + "|" + domain
+		c, ok := e.ipCounters[counterKey]
+		if !ok {
+			c = &ipCounter{minReset: now.Add(time.Minute), hourReset: now.Add(time.Hour), dayReset: now.Add(24 * time.Hour)}
+			e.ipCounters[counterKey] = c
+		}
+		c.minCount++
+		c.hourCount++
+		c.dayCount++
+		c.lastSendAt = now
+		e.ipIdx = 1 % len(entries)
+		return first.IP, first.Hostname, nil
 	}
 
 	minWait := 24 * time.Hour
@@ -2013,6 +2044,21 @@ func (e *Engine) pickAvailableRelay(username, mode string, relays []SMTPRelay) (
 			continue
 		}
 		r := relays[relayIdx]
+
+		// Priority users bypass relay rate limits entirely — always pick next relay.
+		if e.isPriorityUser(username) {
+			now := time.Now()
+			c, ok := e.relayCounters[r.ID]
+			if !ok {
+				c = &relayCounter{minReset: now.Add(time.Minute), hourReset: now.Add(time.Hour), dayReset: now.Add(24 * time.Hour)}
+				e.relayCounters[r.ID] = c
+			}
+			c.minCount++
+			c.hourCount++
+			c.dayCount++
+			e.userRelayIdx[username] = (idx + 1) % poolSize
+			return &r, 0
+		}
 
 		// No limits set — always pick this relay.
 		if r.LimitPerMin == 0 && r.LimitPerHour == 0 && r.LimitPerDay == 0 {

@@ -197,6 +197,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/admin/ippool/master/delete", webauth.RequireAdmin(ah.DeleteIPPoolMasterDomainRule))
 	mux.HandleFunc("/admin/forcefrom", webauth.RequireAdmin(ah.ForceFrom))
 	mux.HandleFunc("/admin/forcefrom/save", webauth.RequireAdmin(ah.SaveForceFrom))
+	mux.HandleFunc("/admin/priority-users", webauth.RequireAdmin(ah.PriorityUsers))
+	mux.HandleFunc("/admin/priority-users/set", webauth.RequireAdmin(ah.SetPriorityUser))
 	mux.HandleFunc("/admin/user-force-from", webauth.RequireAdmin(ah.UserForceFromList))
 	mux.HandleFunc("/admin/user-force-from/save", webauth.RequireAdmin(ah.SaveUserForceFrom))
 	mux.HandleFunc("/admin/user-force-from/delete", webauth.RequireAdmin(ah.DeleteUserForceFrom))
@@ -259,6 +261,12 @@ func (s *Server) Start() {
 	mux.HandleFunc("/user/suppression", webauth.RequireUser(uh.SuppressionPage))
 	mux.HandleFunc("/user/suppression/add", webauth.RequireUser(uh.AddUserSuppression))
 	mux.HandleFunc("/user/suppression/remove", webauth.RequireUser(uh.RemoveUserSuppression))
+	mux.HandleFunc("/user/force-from", webauth.RequireUser(uh.ForceFromPage))
+	mux.HandleFunc("/user/force-from/save", webauth.RequireUser(uh.SaveForceFromConfig))
+	mux.HandleFunc("/user/force-from/template/add", webauth.RequireUser(uh.AddForceFromTemplate))
+	mux.HandleFunc("/user/force-from/template/edit", webauth.RequireUser(uh.EditForceFromTemplate))
+	mux.HandleFunc("/user/force-from/template/save", webauth.RequireUser(uh.SaveForceFromTemplateEdit))
+	mux.HandleFunc("/user/force-from/template/delete", webauth.RequireUser(uh.DeleteForceFromTemplate))
 
 	// Campaign & automation
 	mux.HandleFunc("/user/lists", webauth.RequireUser(uh.Lists))

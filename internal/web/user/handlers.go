@@ -807,6 +807,138 @@ func (h *Handler) ReportsKPI(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ─────────────────────── Force From (user) ───────────────────────────────────
+
+// ForceFromPage renders the user's Force From / Force Email / Force Template settings.
+func (h *Handler) ForceFromPage(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	cfg := appdb.GetUserForceFrom(claims.Username)
+	templates := appdb.GetUserForceFromTemplates(claims.Username)
+	h.Tmpl.Render(w, "user/force_from", merge(h.base(claims.Username), map[string]interface{}{
+		"Page":            "force-from",
+		"Config":          cfg,
+		"Templates":       templates,
+		"TemplateCount":   len(templates),
+		"FlashOK":         r.URL.Query().Get("ok"),
+		"FlashErr":        r.URL.Query().Get("err"),
+	}))
+}
+
+// SaveForceFromConfig saves the user's Force From / Force Email From settings.
+func (h *Handler) SaveForceFromConfig(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/force-from", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/user/force-from?err=Invalid+form", http.StatusFound)
+		return
+	}
+	enabled := r.FormValue("enabled") == "1"
+	templateEnabled := r.FormValue("template_enabled") == "1"
+	domains := strings.TrimSpace(r.FormValue("domains"))
+	addresses := strings.TrimSpace(r.FormValue("addresses"))
+	if err := appdb.SetUserForceFrom(claims.Username, enabled, domains, addresses, templateEnabled); err != nil {
+		http.Redirect(w, r, "/user/force-from?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/force-from?ok=Settings+saved", http.StatusFound)
+}
+
+// AddForceFromTemplate adds a subject/body template to the user's rotation list.
+func (h *Handler) AddForceFromTemplate(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/force-from", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/user/force-from?err=Invalid+form", http.StatusFound)
+		return
+	}
+	subject := strings.TrimSpace(r.FormValue("subject"))
+	body := r.FormValue("body")
+	templates := appdb.GetUserForceFromTemplates(claims.Username)
+	templates = append(templates, appdb.ForceEmailTemplate{Subject: subject, Body: body})
+	if err := appdb.SetUserForceFromTemplates(claims.Username, templates); err != nil {
+		http.Redirect(w, r, "/user/force-from?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/force-from?ok=Template+added", http.StatusFound)
+}
+
+// EditForceFromTemplate renders the edit form for one of the user's templates.
+func (h *Handler) EditForceFromTemplate(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	idx, _ := strconv.Atoi(r.URL.Query().Get("index"))
+	templates := appdb.GetUserForceFromTemplates(claims.Username)
+	if idx < 0 || idx >= len(templates) {
+		http.Redirect(w, r, "/user/force-from?err=Invalid+template", http.StatusFound)
+		return
+	}
+	h.Tmpl.Render(w, "user/force_from_template_edit", merge(h.base(claims.Username), map[string]interface{}{
+		"Page":     "force-from",
+		"Index":    idx,
+		"Template": templates[idx],
+		"FlashOK":  r.URL.Query().Get("ok"),
+		"FlashErr": r.URL.Query().Get("err"),
+	}))
+}
+
+// SaveForceFromTemplateEdit saves edits to one of the user's templates.
+func (h *Handler) SaveForceFromTemplateEdit(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/force-from", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/user/force-from?err=Invalid+form", http.StatusFound)
+		return
+	}
+	idx, _ := strconv.Atoi(r.FormValue("index"))
+	templates := appdb.GetUserForceFromTemplates(claims.Username)
+	if idx < 0 || idx >= len(templates) {
+		http.Redirect(w, r, "/user/force-from?err=Invalid+template", http.StatusFound)
+		return
+	}
+	templates[idx] = appdb.ForceEmailTemplate{
+		Subject: strings.TrimSpace(r.FormValue("subject")),
+		Body:    r.FormValue("body"),
+	}
+	if err := appdb.SetUserForceFromTemplates(claims.Username, templates); err != nil {
+		http.Redirect(w, r, "/user/force-from/template/edit?index="+strconv.Itoa(idx)+"&err=Failed+to+save", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/force-from?ok=Template+updated", http.StatusFound)
+}
+
+// DeleteForceFromTemplate removes one of the user's subject/body templates.
+func (h *Handler) DeleteForceFromTemplate(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/user/force-from", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/user/force-from?err=Invalid+form", http.StatusFound)
+		return
+	}
+	idx, _ := strconv.Atoi(r.FormValue("index"))
+	templates := appdb.GetUserForceFromTemplates(claims.Username)
+	if idx < 0 || idx >= len(templates) {
+		http.Redirect(w, r, "/user/force-from?err=Invalid+index", http.StatusFound)
+		return
+	}
+	templates = append(templates[:idx], templates[idx+1:]...)
+	if err := appdb.SetUserForceFromTemplates(claims.Username, templates); err != nil {
+		http.Redirect(w, r, "/user/force-from?err=Failed+to+delete", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/user/force-from?ok=Template+removed", http.StatusFound)
+}
+
 // ─────────────────────── Suppression list (user) ─────────────────────────────
 
 func (h *Handler) SuppressionPage(w http.ResponseWriter, r *http.Request) {

@@ -38,6 +38,9 @@ type Message struct {
 	NextRetry  time.Time `json:"next_retry"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastError  string    `json:"last_error,omitempty"`
+	// Priority marks the message as high-priority. High-priority messages are
+	// dequeued before normal messages, bypassing fair round-robin scheduling.
+	Priority bool `json:"priority,omitempty"`
 }
 
 // queueUserKey maps a username to a filesystem-safe subdirectory (per-user queue bucket).
@@ -211,17 +214,10 @@ func (q *Queue) collectReadyCandidatesLocked(now time.Time) map[string][]fairCan
 	return byUser
 }
 
-// popFairBatchLocked claims up to maxN messages with strong fairness:
-// each sweep takes at most one ready message per user, then rotates start user.
-// Queue files live under queue/<userKey>/id.json (legacy root id.json still read).
-func (q *Queue) popFairBatchLocked(maxN int) []*Message {
-	if maxN <= 0 {
-		maxN = 1
-	}
-
-	now := time.Now()
-	byUser := q.collectReadyCandidatesLocked(now)
-
+// claimFairBatchFromMap claims up to maxN messages from a pre-built byUser map
+// using fair round-robin scheduling (oldest message first within each user bucket).
+// Caller must hold q.mu. Modifies byUser in-place (consumed entries are removed).
+func (q *Queue) claimFairBatchFromMap(byUser map[string][]fairCandidate, maxN int) []*Message {
 	var out []*Message
 	for len(out) < maxN && len(byUser) > 0 {
 		users := sortUserKeys(byUser)
@@ -277,6 +273,44 @@ func (q *Queue) popFairBatchLocked(maxN int) []*Message {
 			break
 		}
 	}
+	return out
+}
+
+// popFairBatchLocked claims up to maxN messages with two-tier priority:
+//  1. High-priority messages (Priority=true) are drained first using fair
+//     round-robin among priority users.
+//  2. Normal messages fill the remaining capacity using fair round-robin.
+//
+// Queue files live under queue/<userKey>/id.json (legacy root id.json still read).
+func (q *Queue) popFairBatchLocked(maxN int) []*Message {
+	if maxN <= 0 {
+		maxN = 1
+	}
+
+	now := time.Now()
+	allByUser := q.collectReadyCandidatesLocked(now)
+
+	// Split into priority and normal candidate maps.
+	priorityByUser := make(map[string][]fairCandidate)
+	normalByUser := make(map[string][]fairCandidate)
+	for user, cands := range allByUser {
+		for _, c := range cands {
+			if c.msg.Priority {
+				priorityByUser[user] = append(priorityByUser[user], c)
+			} else {
+				normalByUser[user] = append(normalByUser[user], c)
+			}
+		}
+	}
+
+	// First: claim high-priority messages.
+	out := q.claimFairBatchFromMap(priorityByUser, maxN)
+
+	// Then: fill remaining slots with normal-priority messages.
+	if len(out) < maxN {
+		out = append(out, q.claimFairBatchFromMap(normalByUser, maxN-len(out))...)
+	}
+
 	return out
 }
 

@@ -1,0 +1,182 @@
+{{define "title"}}Force From — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Force From</div>
+    <div class="page-sub">Override the From address and subject/body on outgoing mail sent through your account</div>
+  </div>
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<!-- ── From Address Config ────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header">
+    <span class="card-title">From Address Override</span>
+    {{if .Config}}
+      {{if .Config.Enabled}}
+      <span style="background:#052e16;color:#4ade80;font-size:11px;padding:2px 10px;border-radius:10px;font-weight:600;">Active</span>
+      {{else}}
+      <span style="background:#27272a;color:#71717a;font-size:11px;padding:2px 10px;border-radius:10px;font-weight:600;">Disabled</span>
+      {{end}}
+    {{end}}
+  </div>
+  <form method="POST" action="/user/force-from/save" style="padding:20px 24px 24px;">
+    <div style="background:#18181b;border:1px solid #27272a;border-radius:8px;padding:12px 16px;margin-bottom:18px;font-size:12px;color:#71717a;line-height:1.7;">
+      <strong style="color:#a1a1aa;">How it works:</strong>
+      Add a list of domains <em>or</em> full addresses — your outgoing mail will rotate through them.
+      <br>
+      <strong style="color:#a1a1aa;">Address list</strong> replaces the entire From field (supports display names like <code>Name &lt;user@domain&gt;</code>).
+      <strong style="color:#a1a1aa;">Domain list</strong> keeps the original local-part and only replaces the domain.
+      Address list takes priority when both are set.
+    </div>
+
+    <!-- Enable toggle -->
+    <div class="form-group" style="margin-bottom:18px;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <input type="checkbox" name="enabled" value="1"
+          {{if .Config}}{{if .Config.Enabled}}checked{{end}}{{end}}
+          style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer;">
+        <span style="font-size:13px;color:#e4e4e7;font-weight:500;">Enable From address override</span>
+      </label>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <!-- Domain list -->
+      <div class="form-group">
+        <label class="form-label">Domain List
+          <span style="font-size:11px;color:#52525b;font-weight:400;margin-left:4px;">(one per line)</span>
+        </label>
+        <textarea class="form-input" name="domains" rows="6"
+          placeholder="example.com&#10;sender.io&#10;# comment lines are skipped"
+          style="font-family:monospace;font-size:12px;resize:vertical;">{{if .Config}}{{.Config.Domains}}{{end}}</textarea>
+        <div style="font-size:11px;color:#52525b;margin-top:4px;">Keeps original local-part, swaps domain only.</div>
+      </div>
+      <!-- Address list -->
+      <div class="form-group">
+        <label class="form-label">Address List
+          <span style="font-size:11px;color:#52525b;font-weight:400;margin-left:4px;">(overrides domain list)</span>
+        </label>
+        <textarea class="form-input" name="addresses" rows="6"
+          placeholder="noreply@example.com&#10;John Doe &lt;john@sender.io&gt;&#10;# full address replacement"
+          style="font-family:monospace;font-size:12px;resize:vertical;">{{if .Config}}{{.Config.Addresses}}{{end}}</textarea>
+        <div style="font-size:11px;color:#52525b;margin-top:4px;">Full address rotation — display name preserved if omitted.</div>
+      </div>
+    </div>
+
+    <!-- Template toggle -->
+    <div class="form-group" style="margin-top:4px;margin-bottom:0;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <input type="checkbox" name="template_enabled" value="1"
+          {{if .Config}}{{if .Config.TemplateEnabled}}checked{{end}}{{end}}
+          style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer;">
+        <span style="font-size:13px;color:#e4e4e7;font-weight:500;">Enable subject / body template rotation
+          <span style="font-size:11px;color:#52525b;font-weight:400;margin-left:4px;">({{.TemplateCount}} templates configured below)</span>
+        </span>
+      </label>
+    </div>
+
+    <div style="margin-top:20px;display:flex;justify-content:flex-end;">
+      <button type="submit" class="btn btn-primary">
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        Save Settings
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- ── Subject / Body Templates ─────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Subject / Body Templates
+      <span style="margin-left:8px;background:#1e1b4b;color:#a78bfa;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">{{.TemplateCount}}</span>
+    </span>
+  </div>
+
+  <!-- Add form (collapsible) -->
+  <div style="border-bottom:1px solid #27272a;">
+    <div style="padding:12px 20px;cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;"
+      onclick="togglePanel('tpl-add-panel','tpl-add-caret')">
+      <span style="font-size:13px;color:#a1a1aa;font-weight:500;">+ Add New Template</span>
+      <svg id="tpl-add-caret" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="transition:transform .2s;flex-shrink:0;color:#52525b;">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </div>
+    <div id="tpl-add-panel" style="display:none;padding:0 20px 20px;">
+      <form method="POST" action="/user/force-from/template/add">
+        <div class="form-group" style="margin-bottom:14px;">
+          <label class="form-label">Subject <span style="font-size:11px;color:#52525b;font-weight:400;">(leave empty to keep original)</span></label>
+          <input class="form-input" name="subject" placeholder="e.g. Your order has been confirmed"/>
+        </div>
+        <div class="form-group" style="margin-bottom:16px;">
+          <label class="form-label">Body <span style="font-size:11px;color:#52525b;font-weight:400;">(plain text or HTML · leave empty to keep original)</span></label>
+          <textarea class="form-input" name="body" rows="8"
+            style="font-family:monospace;font-size:12px;resize:vertical;"
+            placeholder="<p>Hello!</p>"></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;">
+          <button type="submit" class="btn btn-primary" style="font-size:12px;">Add Template</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Template list -->
+  {{if .Templates}}
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">#</th>
+        <th>Subject</th>
+        <th>Body preview</th>
+        <th style="padding-right:20px;text-align:right;">Actions</th>
+      </tr></thead>
+      <tbody>
+        {{range $i, $t := .Templates}}
+        <tr>
+          <td style="padding-left:20px;color:#52525b;font-size:12px;">{{add $i 1}}</td>
+          <td style="font-size:13px;color:#e4e4e7;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{if $t.Subject}}{{$t.Subject}}{{else}}<span style="color:#3f3f46;font-style:italic;">keep original</span>{{end}}
+          </td>
+          <td style="font-size:12px;color:#71717a;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{if $t.Body}}{{truncate $t.Body 80}}{{else}}<span style="color:#3f3f46;font-style:italic;">keep original</span>{{end}}
+          </td>
+          <td style="padding-right:20px;text-align:right;">
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+              <a href="/user/force-from/template/edit?index={{$i}}" class="btn btn-ghost" style="font-size:11px;padding:4px 12px;">Edit</a>
+              <form method="POST" action="/user/force-from/template/delete"
+                onsubmit="return confirm('Remove template #{{add $i 1}}?')">
+                <input type="hidden" name="index" value="{{$i}}"/>
+                <button type="submit" class="btn btn-danger" style="font-size:11px;padding:4px 12px;">Remove</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div style="padding:40px;text-align:center;">
+    <div style="font-size:32px;margin-bottom:10px;">📝</div>
+    <div style="font-size:14px;font-weight:600;color:#e4e4e7;margin-bottom:4px;">No templates yet</div>
+    <div style="font-size:12px;color:#52525b;">Add a template above and enable rotation — subjects and bodies will rotate with each send.</div>
+  </div>
+  {{end}}
+</div>
+
+</div>
+
+<script>
+function togglePanel(id, caretId) {
+  var el = document.getElementById(id);
+  var caret = document.getElementById(caretId);
+  var open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'block';
+  if (caret) caret.style.transform = open ? '' : 'rotate(180deg)';
+}
+</script>
+{{end}}

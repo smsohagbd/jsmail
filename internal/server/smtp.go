@@ -140,11 +140,22 @@ func (s *session) Data(r io.Reader) error {
 	// Per-user Force From takes priority over the global config.
 	// If the user has a Force From config of their own (and it is enabled), apply it now.
 	// Otherwise fall through to the global Force From / Force Template pipeline.
-	if newFrom, applied := appdb.GetNextUserForceEmail(s.authUser, from); applied {
-		from = newFrom
-		data = email.RewriteFromHeader(data, from)
+	if newFrom, subj, bdy, applied := appdb.GetNextUserForceEmail(s.authUser, from); applied {
+		if newFrom != from {
+			from = newFrom
+			data = email.RewriteFromHeader(data, from)
+		}
+		if subj != "" || bdy != "" {
+			mappings := appdb.GetLinkTrackingMappings()
+			linkMappings := make([]email.LinkMapping, len(mappings))
+			for i, m := range mappings {
+				linkMappings[i] = email.LinkMapping{URL: m.URL, TrackingID: m.TrackingID}
+			}
+			redirectBase := appdb.GetLinkTrackingRedirectBase()
+			data = email.RewriteSubjectAndBody(data, subj, bdy, linkMappings, redirectBase)
+		}
 		if s.backend.cfg.VerboseLog {
-			log.Printf("[SMTP]   user force-from applied  ip=%s user=%s from=%s", s.remoteIP, s.authUser, from)
+			log.Printf("[SMTP]   user force-from applied  ip=%s user=%s from=%s subj=%q", s.remoteIP, s.authUser, from, subj)
 		}
 	} else if appdb.GetForceRewriteShouldRun() {
 		// Global Force Template / Force Email From / Force From pipeline.
@@ -174,6 +185,7 @@ func (s *session) Data(r io.Reader) error {
 		From:     from,
 		To:       s.to,
 		Data:     data,
+		Priority: appdb.IsUserPriority(s.authUser),
 	}
 	if err := s.backend.queue.Enqueue(msg); err != nil {
 		log.Printf("[SMTP] ✗ enqueue failed       ip=%s err=%v", s.remoteIP, err)

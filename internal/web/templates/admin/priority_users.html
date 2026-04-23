@@ -1,0 +1,105 @@
+{{define "title"}}Priority Users — Admin{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Priority Users</div>
+    <div class="page-sub">Grant selected users first-priority send permission — bypasses all IP pool throttling, admin throttle rules, and relay rate limits</div>
+  </div>
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<div style="background:#18181b;border:1px solid #3f3f46;border-radius:8px;padding:14px 18px;margin-bottom:20px;font-size:12px;color:#71717a;line-height:1.75;">
+  <strong style="color:#a1a1aa;">What priority send does:</strong>
+  <ul style="margin:6px 0 0 0;padding-left:18px;">
+    <li><strong style="color:#a1a1aa;">Queue priority</strong> — messages from priority users are dequeued and dispatched before any normal-priority message.</li>
+    <li><strong style="color:#a1a1aa;">No IP pool throttling</strong> — per-minute / per-hour / per-day IP pool counters and interval rules are skipped.</li>
+    <li><strong style="color:#a1a1aa;">No admin throttle rules</strong> — user + domain <code>ThrottleRule</code> checks are bypassed entirely.</li>
+    <li><strong style="color:#a1a1aa;">No relay rate limits</strong> — custom SMTP relay per-min / per-hour / per-day send limits are ignored.</li>
+  </ul>
+  All other settings (IP assignment, suppression, verification, campaign caps) remain in effect.
+</div>
+
+<!-- User list with toggle -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">All Users</span>
+    {{$priorityCount := 0}}
+    {{range .AllUsers}}{{if .PriorityUser}}{{$priorityCount = add $priorityCount 1}}{{end}}{{end}}
+    <span style="background:#1e1b4b;color:#a78bfa;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">
+      {{$priorityCount}} priority
+    </span>
+  </div>
+
+  {{if .AllUsers}}
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead><tr>
+        <th style="padding-left:20px;">Username</th>
+        <th>Role</th>
+        <th>Priority Send</th>
+        <th style="padding-right:20px;text-align:right;">Action</th>
+      </tr></thead>
+      <tbody>
+        {{range .AllUsers}}
+        <tr>
+          <td style="padding-left:20px;">
+            <code style="font-size:13px;color:#e4e4e7;font-weight:600;">{{.Username}}</code>
+          </td>
+          <td>
+            {{if eq .Role "admin"}}
+            <span style="background:#1e1b4b;color:#a78bfa;font-size:11px;padding:2px 8px;border-radius:10px;">admin</span>
+            {{else}}
+            <span style="background:#27272a;color:#71717a;font-size:11px;padding:2px 8px;border-radius:10px;">user</span>
+            {{end}}
+          </td>
+          <td>
+            {{if .PriorityUser}}
+            <span style="background:#052e16;color:#4ade80;font-size:11px;padding:3px 10px;border-radius:10px;font-weight:600;">
+              ⚡ Priority
+            </span>
+            {{else}}
+            <span style="background:#27272a;color:#52525b;font-size:11px;padding:3px 10px;border-radius:10px;">
+              Normal
+            </span>
+            {{end}}
+          </td>
+          <td style="padding-right:20px;text-align:right;">
+            {{if .PriorityUser}}
+            <form method="POST" action="/admin/priority-users/set"
+              onsubmit="return confirm('Remove priority permission from {{.Username}}?')">
+              <input type="hidden" name="username" value="{{.Username}}"/>
+              <input type="hidden" name="enabled" value="0"/>
+              <button type="submit" class="btn btn-ghost" style="font-size:11px;padding:4px 14px;color:#f87171;">
+                Remove Priority
+              </button>
+            </form>
+            {{else}}
+            <form method="POST" action="/admin/priority-users/set">
+              <input type="hidden" name="username" value="{{.Username}}"/>
+              <input type="hidden" name="enabled" value="1"/>
+              <button type="submit" class="btn btn-primary" style="font-size:11px;padding:4px 14px;">
+                ⚡ Grant Priority
+              </button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div style="padding:48px;text-align:center;">
+    <div style="font-size:32px;margin-bottom:10px;">⚡</div>
+    <div style="font-size:14px;font-weight:600;color:#e4e4e7;margin-bottom:4px;">No users yet</div>
+    <div style="font-size:12px;color:#52525b;">Create users first, then grant priority send permission here.</div>
+  </div>
+  {{end}}
+</div>
+
+</div>
+{{end}}

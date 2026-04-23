@@ -1205,6 +1205,50 @@ func (h *Handler) DeleteForceTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/forcetemplate?ok=Template+removed", http.StatusFound)
 }
 
+// ──────────────────────────── Priority Users ─────────────────────────────────
+
+// PriorityUsers renders the priority user management page.
+func (h *Handler) PriorityUsers(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	var allUsers []appdb.User
+	appdb.DB.Order("username asc").Find(&allUsers)
+	h.Tmpl.Render(w, "admin/priority_users", map[string]interface{}{
+		"Page":       "priority-users",
+		"ActiveUser": claims.Username,
+		"AllUsers":   allUsers,
+		"FlashOK":    r.URL.Query().Get("ok"),
+		"FlashErr":   r.URL.Query().Get("err"),
+	})
+}
+
+// SetPriorityUser enables or disables the priority-send permission for a user.
+func (h *Handler) SetPriorityUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/admin/priority-users", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/priority-users?err=Invalid+form", http.StatusFound)
+		return
+	}
+	username := strings.TrimSpace(r.FormValue("username"))
+	enabled := r.FormValue("enabled") == "1"
+	if username == "" {
+		http.Redirect(w, r, "/admin/priority-users?err=Username+required", http.StatusFound)
+		return
+	}
+	if err := appdb.SetUserPriority(username, enabled); err != nil {
+		log.Printf("priority-users: failed to set for %s: %v", username, err)
+		http.Redirect(w, r, "/admin/priority-users?err=Failed+to+save", http.StatusFound)
+		return
+	}
+	action := "disabled"
+	if enabled {
+		action = "enabled"
+	}
+	http.Redirect(w, r, "/admin/priority-users?ok=Priority+"+action+"+for+"+username, http.StatusFound)
+}
+
 // ──────────────────────────── Per-User Force From ─────────────────────────────
 
 // UserForceFromList renders the per-user Force From management page.
@@ -1240,7 +1284,7 @@ func (h *Handler) SaveUserForceFrom(w http.ResponseWriter, r *http.Request) {
 	enabled := formChecked(r.Form, "enabled")
 	domains := strings.TrimSpace(r.FormValue("domains"))
 	addresses := strings.TrimSpace(r.FormValue("addresses"))
-	if err := appdb.SetUserForceFrom(username, enabled, domains, addresses); err != nil {
+	if err := appdb.SetUserForceFrom(username, enabled, domains, addresses, false); err != nil {
 		log.Printf("user-force-from: failed to save for %s: %v", username, err)
 		http.Redirect(w, r, "/admin/user-force-from?err=Failed+to+save", http.StatusFound)
 		return

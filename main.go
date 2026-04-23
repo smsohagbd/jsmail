@@ -190,6 +190,10 @@ func main() {
 		}
 		return r.PerMin, r.PerHour, r.PerDay, r.IntervalSec, true
 	}
+	eng.PriorityUserProvider = func(username string) bool {
+		return appdb.IsUserPriority(username)
+	}
+
 	eng.UserIPFilterProvider = func(username string) map[string]bool {
 		// IPs explicitly assigned to this user.
 		userIPs := appdb.GetUserAssignedIPSet(username)

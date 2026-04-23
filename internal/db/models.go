@@ -23,6 +23,9 @@ type User struct {
 	MaxAutomations int `gorm:"default:0"` // max automations
 	MaxLists       int `gorm:"default:0"` // max contact lists
 	MaxTemplates   int `gorm:"default:0"` // max email templates
+	// PriorityUser bypasses all IP pool and admin throttling for this account.
+	// Their messages are also dequeued before normal-priority messages.
+	PriorityUser bool `gorm:"default:false"`
 }
 
 // UserSMTP stores a user's custom outbound SMTP relay credentials.
@@ -169,20 +172,23 @@ type UserIPAssignment struct {
 	IPPool IPPool `gorm:"foreignKey:IPPoolID"`
 }
 
-// UserForceFrom holds per-user Force From / Force Email From configuration.
-// When enabled for a user, these settings override the global Force From / Force Email From
-// defaults at message submission time.
+// UserForceFrom holds per-user Force From / Force Email From / Force Template configuration.
+// When enabled for a user, these settings override the global defaults at submission time.
 //
-//   - Domains:   newline-separated domain list for local-part@domain rotation
-//   - Addresses: newline-separated full email addresses for round-robin From override
+//   - Domains:          newline-separated domain list for local-part@domain rotation
+//   - Addresses:        newline-separated full email addresses for round-robin From override
+//   - TemplateEnabled:  whether subject/body template rotation is active
+//   - Templates:        JSON array of {subject, body} objects (same schema as global ForceEmailTemplate)
 //
-// Address list takes precedence over domain list (same priority rule as the global config).
+// Priority: Address list > Domain list. Template rotation is independent of From rewriting.
 type UserForceFrom struct {
 	gorm.Model
-	Username  string `gorm:"uniqueIndex;size:191;not null"`
-	Enabled   bool   `gorm:"default:false"`
-	Domains   string `gorm:"type:text"` // newline-separated domains
-	Addresses string `gorm:"type:text"` // newline-separated full From addresses
+	Username        string `gorm:"uniqueIndex;size:191;not null"`
+	Enabled         bool   `gorm:"default:false"`
+	Domains         string `gorm:"type:text"`  // newline-separated domains
+	Addresses       string `gorm:"type:text"`  // newline-separated full From addresses
+	TemplateEnabled bool   `gorm:"default:false"`
+	Templates       string `gorm:"type:text"`  // JSON array of ForceEmailTemplate
 }
 
 // IPPoolMasterDomainRule holds per-domain rate limits that apply to ALL IPs when no IP-specific domain rule exists.

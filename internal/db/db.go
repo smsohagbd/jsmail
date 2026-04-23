@@ -589,24 +589,25 @@ func GetUserForceFrom(username string) *UserForceFrom {
 	return &row
 }
 
-// SetUserForceFrom upserts the Force From config for a user.
-func SetUserForceFrom(username string, enabled bool, domains, addresses string) error {
+// SetUserForceFrom upserts the Force From / Force Email From config for a user.
+// domains and addresses are newline-separated; templateEnabled controls template rotation.
+func SetUserForceFrom(username string, enabled bool, domains, addresses string, templateEnabled bool) error {
 	var row UserForceFrom
 	err := DB.Where("username = ?", username).First(&row).Error
 	if err != nil {
-		// Insert
 		return DB.Create(&UserForceFrom{
-			Username:  username,
-			Enabled:   enabled,
-			Domains:   domains,
-			Addresses: addresses,
+			Username:        username,
+			Enabled:         enabled,
+			Domains:         domains,
+			Addresses:       addresses,
+			TemplateEnabled: templateEnabled,
 		}).Error
 	}
-	// Update
 	return DB.Model(&row).Updates(map[string]interface{}{
-		"enabled":   enabled,
-		"domains":   domains,
-		"addresses": addresses,
+		"enabled":          enabled,
+		"domains":          domains,
+		"addresses":        addresses,
+		"template_enabled": templateEnabled,
 	}).Error
 }
 
@@ -615,46 +616,93 @@ func DeleteUserForceFrom(username string) error {
 	return DB.Where("username = ?", username).Delete(&UserForceFrom{}).Error
 }
 
-// GetNextUserForceEmail applies the per-user Force From / Force Email From config for
-// username to originalFrom and returns the (possibly rewritten) From address.
-// Returns (originalFrom, false) if the user has no active config.
-// Subject and body are always empty (per-user config handles From address only;
-// subject/body templates remain global).
-func GetNextUserForceEmail(username, originalFrom string) (from string, applied bool) {
+// GetUserForceFromTemplates returns the subject/body template list for a user.
+func GetUserForceFromTemplates(username string) []ForceEmailTemplate {
 	cfg := GetUserForceFrom(username)
-	if cfg == nil || !cfg.Enabled {
-		return originalFrom, false
+	if cfg == nil || cfg.Templates == "" {
+		return nil
+	}
+	var out []ForceEmailTemplate
+	if err := json.Unmarshal([]byte(cfg.Templates), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// SetUserForceFromTemplates saves the template list for a user.
+func SetUserForceFromTemplates(username string, templates []ForceEmailTemplate) error {
+	raw, err := json.Marshal(templates)
+	if err != nil {
+		return err
+	}
+	cfg := GetUserForceFrom(username)
+	if cfg == nil {
+		return DB.Create(&UserForceFrom{Username: username, Templates: string(raw)}).Error
+	}
+	return DB.Model(cfg).Update("templates", string(raw)).Error
+}
+
+// SetUserForceFromTemplateEnabled sets the template-enabled flag for a user.
+func SetUserForceFromTemplateEnabled(username string, enabled bool) error {
+	cfg := GetUserForceFrom(username)
+	if cfg == nil {
+		return DB.Create(&UserForceFrom{Username: username, TemplateEnabled: enabled}).Error
+	}
+	return DB.Model(cfg).Update("template_enabled", enabled).Error
+}
+
+// GetNextUserForceEmail applies the per-user Force From / Force Email From / Force Template
+// config for username and returns the rewritten From address plus optional subject and body.
+// Returns (originalFrom, "", "", false) if the user has no active config.
+func GetNextUserForceEmail(username, originalFrom string) (from, subject, body string, applied bool) {
+	cfg := GetUserForceFrom(username)
+	if cfg == nil {
+		return originalFrom, "", "", false
 	}
 
-	idx := userForceFromCounter(username).Add(1) - 1
 	from = originalFrom
+	idx := userForceFromCounter(username).Add(1) - 1
 
-	// Full address list takes precedence over domain rotation.
-	if addrs := parseLines(cfg.Addresses, true); len(addrs) > 0 {
-		addr := addrs[int(idx)%len(addrs)]
-		if !strings.Contains(addr, "<") {
-			if dn := extractDisplayNameFromAddr(originalFrom); dn != "" {
-				addr = dn + " <" + strings.TrimSpace(addr) + ">"
+	// From address rewriting (only when Enabled).
+	if cfg.Enabled {
+		// Full address list takes precedence over domain rotation.
+		if addrs := parseLines(cfg.Addresses, true); len(addrs) > 0 {
+			addr := addrs[int(idx)%len(addrs)]
+			if !strings.Contains(addr, "<") {
+				if dn := extractDisplayNameFromAddr(originalFrom); dn != "" {
+					addr = dn + " <" + strings.TrimSpace(addr) + ">"
+				}
 			}
+			from = addr
+			applied = true
+		} else if domains := parseLines(cfg.Domains, false); len(domains) > 0 {
+			local := extractLocalPartFromAddr(originalFrom)
+			if local == "" {
+				local = "noreply"
+			}
+			domain := strings.ToLower(domains[int(idx)%len(domains)])
+			dn := extractDisplayNameFromAddr(originalFrom)
+			if dn != "" {
+				from = dn + " <" + local + "@" + domain + ">"
+			} else {
+				from = local + "@" + domain
+			}
+			applied = true
 		}
-		return addr, true
 	}
 
-	// Domain rotation: keep local part, swap domain.
-	if domains := parseLines(cfg.Domains, false); len(domains) > 0 {
-		local := extractLocalPartFromAddr(originalFrom)
-		if local == "" {
-			local = "noreply"
+	// Template rotation (independent of From rewriting, controlled by TemplateEnabled).
+	if cfg.TemplateEnabled {
+		templates := GetUserForceFromTemplates(username)
+		if len(templates) > 0 {
+			t := templates[int(idx)%len(templates)]
+			subject = t.Subject
+			body = t.Body
+			applied = true
 		}
-		domain := strings.ToLower(domains[int(idx)%len(domains)])
-		dn := extractDisplayNameFromAddr(originalFrom)
-		if dn != "" {
-			return dn + " <" + local + "@" + domain + ">", true
-		}
-		return local + "@" + domain, true
 	}
 
-	return originalFrom, false
+	return from, subject, body, applied
 }
 
 // parseLines splits text into trimmed, non-empty, non-comment lines.
@@ -1375,6 +1423,34 @@ func GetEffectiveThrottle(username, domain string) ThrottleLimit {
 }
 
 // CheckPassword verifies a user's password and returns the user if valid.
+// ──────────────────────────── Priority User Permission ────────────────────────
+
+// IsUserPriority returns true if the user has the priority-send permission.
+// Priority users bypass all IP pool throttling and admin throttle rules and
+// their messages are dequeued before normal messages.
+func IsUserPriority(username string) bool {
+	if username == "" {
+		return false
+	}
+	var u User
+	if err := DB.Select("priority_user").Where("username = ?", username).First(&u).Error; err != nil {
+		return false
+	}
+	return u.PriorityUser
+}
+
+// SetUserPriority enables or disables the priority-send permission for a user.
+func SetUserPriority(username string, enabled bool) error {
+	return DB.Model(&User{}).Where("username = ?", username).Update("priority_user", enabled).Error
+}
+
+// GetPriorityUsers returns all users that have the priority-send permission enabled.
+func GetPriorityUsers() []User {
+	var users []User
+	DB.Where("priority_user = ?", true).Order("username asc").Find(&users)
+	return users
+}
+
 func CheckPassword(username, password string) (*User, bool) {
 	var user User
 	if err := DB.Where("username = ? AND active = ?", username, true).First(&user).Error; err != nil {
