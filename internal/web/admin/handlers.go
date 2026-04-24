@@ -2305,14 +2305,16 @@ func (h *Handler) DeleteSkipDomain(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UserIPAssignments(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	assignments := appdb.GetAllUserIPAssignments()
-	allIPs := appdb.GetActiveIPPool()
+	// Only show IPs that are NOT already assigned to anyone in the dropdown.
+	// This prevents accidentally assigning an exclusive IP to a second user.
+	availableIPs := appdb.GetUnassignedActiveIPPool()
 	var allUsers []appdb.User
 	h.DB.Where("role = ?", "user").Order("username asc").Find(&allUsers)
 	h.Tmpl.Render(w, "admin/user_ip_assignments", map[string]interface{}{
 		"Page":        "user_ip_assignments",
 		"ActiveUser":  claims.Username,
 		"Assignments": assignments,
-		"AllIPs":      allIPs,
+		"AllIPs":      availableIPs,
 		"AllUsers":    allUsers,
 		"FlashOK":     r.URL.Query().Get("ok"),
 		"FlashErr":    r.URL.Query().Get("err"),

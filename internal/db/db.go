@@ -519,11 +519,25 @@ func GetAllUserIPAssignments() []UserIPAssignment {
 	return rows
 }
 
-// AssignIPToUser creates an assignment (idempotent — silently ignores duplicates).
+// AssignIPToUser creates an exclusive assignment of an IP to a user.
+// Returns an error if the IP is already assigned to any user (including the same user),
+// enforcing IP exclusivity at the database level as well as the engine level.
 func AssignIPToUser(username string, ipPoolID uint) error {
+	// Check whether this IP pool entry is already assigned to anyone.
+	var count int64
+	DB.Model(&UserIPAssignment{}).Where("ip_pool_id = ?", ipPoolID).Count(&count)
+	if count > 0 {
+		// If it's already assigned to the same user it's a no-op conflict; if
+		// it's another user it's an exclusivity violation — either way reject.
+		var existing UserIPAssignment
+		DB.Where("ip_pool_id = ?", ipPoolID).First(&existing)
+		if existing.Username == username {
+			return fmt.Errorf("this IP is already assigned to %s", username)
+		}
+		return fmt.Errorf("this IP is already assigned to user %q — unassign it first", existing.Username)
+	}
 	row := UserIPAssignment{Username: username, IPPoolID: ipPoolID}
-	return DB.Where(UserIPAssignment{Username: username, IPPoolID: ipPoolID}).
-		FirstOrCreate(&row).Error
+	return DB.Create(&row).Error
 }
 
 // UnassignIPFromUser removes a specific IP assignment from a user.
@@ -561,6 +575,26 @@ func GetAllAssignedIPs() map[string]bool {
 		}
 	}
 	return set
+}
+
+// GetUnassignedActiveIPPool returns active IP pool entries that are NOT yet
+// assigned to any user. Use this to populate the assignment dropdown so that
+// already-exclusive IPs cannot be accidentally assigned again.
+func GetUnassignedActiveIPPool() []IPPool {
+	// Collect all IPPool IDs that already have at least one assignment.
+	var assigned []UserIPAssignment
+	DB.Select("ip_pool_id").Find(&assigned)
+	assignedIDs := make([]uint, 0, len(assigned))
+	for _, a := range assigned {
+		assignedIDs = append(assignedIDs, a.IPPoolID)
+	}
+	var entries []IPPool
+	q := DB.Where("active = ?", true)
+	if len(assignedIDs) > 0 {
+		q = q.Not("id IN ?", assignedIDs)
+	}
+	q.Order("ip asc").Find(&entries)
+	return entries
 }
 
 // ──────────────────────────── Per-User Force From ─────────────────────────────
