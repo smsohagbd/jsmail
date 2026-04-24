@@ -1,0 +1,113 @@
+{{define "title"}}Skip Domain List — {{.ActiveUser}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <div class="page-title">Skip Domain List</div>
+    <div class="page-sub">Domains added here will be silently skipped when you send — no email will be attempted or logged as failed</div>
+  </div>
+</div>
+
+<div class="page-body">
+
+{{if .FlashOK}}<div style="background:#052e16;border:1px solid #14532d;color:#4ade80;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✓ {{.FlashOK}}</div>{{end}}
+{{if .FlashErr}}<div style="background:#1c0606;border:1px solid #450a0a;color:#f87171;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px;">✗ {{.FlashErr}}</div>{{end}}
+
+<!-- Add domain card -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="card-header" style="cursor:pointer;user-select:none;" onclick="togglePanel('add-panel','add-caret')">
+    <span class="card-title">+ Add Domain to Skip List</span>
+    <svg id="add-caret" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="transition:transform .2s;flex-shrink:0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+  </div>
+  <div id="add-panel" style="{{if not .List}}display:block;{{else}}display:none;{{end}}padding:16px 20px;border-top:1px solid #27272a;">
+    <form method="POST" action="/user/skip-domain/add">
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:200px;">
+          <label class="form-label">Domain <span style="color:#f87171;">*</span></label>
+          <input class="form-input" type="text" name="domain" required placeholder="example.com"
+            style="width:100%;box-sizing:border-box;" autocomplete="off"/>
+        </div>
+        <div style="flex:2;min-width:200px;">
+          <label class="form-label">Note (optional)</label>
+          <input class="form-input" type="text" name="note" placeholder="e.g. internal test domain"
+            style="width:100%;box-sizing:border-box;"/>
+        </div>
+        <button type="submit" class="btn btn-primary" style="white-space:nowrap;">Add Domain</button>
+      </div>
+    </form>
+    <p style="font-size:11px;color:#52525b;margin:10px 0 0;">
+      Enter the recipient domain only (e.g. <code>example.com</code>, not a full email address).
+      All outbound mail from your account to this domain will be silently dropped.
+    </p>
+  </div>
+</div>
+
+<!-- Domain list -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Skipped Domains
+      <span style="margin-left:8px;background:#1e1b4b;color:#a78bfa;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">{{len .List}}</span>
+    </span>
+  </div>
+  {{if .List}}
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="padding-left:20px;">Domain</th>
+          <th>Note</th>
+          <th>Added</th>
+          <th style="padding-right:20px;text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .List}}
+        <tr>
+          <td style="padding-left:20px;">
+            <code style="font-size:13px;color:#e4e4e7;font-weight:600;">{{.Domain}}</code>
+          </td>
+          <td style="font-size:12px;color:#71717a;">{{if .Note}}{{.Note}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="font-size:12px;color:#52525b;white-space:nowrap;">{{.CreatedAt.Format "Jan 2, 2006"}}</td>
+          <td style="padding-right:20px;text-align:right;">
+            <form method="POST" action="/user/skip-domain/delete" style="display:inline;">
+              <input type="hidden" name="id" value="{{.ID}}"/>
+              <button type="submit" class="btn btn-ghost btn-sm" style="color:#f87171;"
+                onclick="return confirm('Remove {{.Domain}} from skip list?')">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty-state" style="padding:48px;">
+    <svg width="36" height="36" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 5.636l-12.728 12.728M5.636 5.636l12.728 12.728"/></svg>
+    <div style="margin-top:12px;font-weight:600;color:#e4e4e7;">No domains skipped</div>
+    <div style="font-size:12px;margin-top:4px;">Add a domain above to stop sending to it from your account.</div>
+  </div>
+  {{end}}
+</div>
+
+<div style="margin-top:16px;background:#18181b;border:1px solid #27272a;border-radius:8px;padding:14px 18px;font-size:12px;color:#71717a;line-height:1.6;">
+  <strong style="color:#a1a1aa;">How it works:</strong>
+  When a recipient's domain matches an entry here, the delivery engine silently marks those recipients as
+  <code style="color:#818cf8;">suppressed</code> before any SMTP connection is attempted.
+  No bounce or error is recorded — the send is just skipped.
+  <br><br>
+  <strong style="color:#a1a1aa;">Admin skip list:</strong>
+  Your account also inherits the global admin skip list. Domains added by the admin are always skipped
+  regardless of your personal list (unless you have the Priority permission).
+</div>
+
+</div>
+
+<script>
+function togglePanel(id, caretId) {
+  const el = document.getElementById(id);
+  const caret = document.getElementById(caretId);
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'block';
+  if (caret) caret.style.transform = open ? '' : 'rotate(180deg)';
+}
+</script>
+{{end}}

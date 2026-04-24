@@ -117,6 +117,7 @@ func Init(driver, dsnOrPath, adminUser, adminPass string) error {
 		&AutomationStep{},
 		&AutomationSend{},
 		&SkipDomain{},
+		&UserSkipDomain{},
 	); err != nil {
 		return err
 	}
@@ -1243,6 +1244,106 @@ func IsDomainSkipped(domain string) bool {
 	skipDomainsExpiry = time.Now().Add(skipDomainsCacheTTL)
 	_, ok := skipDomainsSet[domain]
 	return ok
+}
+
+// ──────────────────────────── Per-User Skip Domain ───────────────────────────
+
+// GetUserSkipDomains returns all skip-domain entries for a specific user.
+func GetUserSkipDomains(username string) []UserSkipDomain {
+	var list []UserSkipDomain
+	DB.Where("username = ?", username).Order("domain asc").Find(&list)
+	return list
+}
+
+// AddUserSkipDomain adds a domain to a user's personal skip list (idempotent).
+func AddUserSkipDomain(username, domain, note string) error {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	username = strings.TrimSpace(username)
+	if domain == "" || username == "" {
+		return fmt.Errorf("username and domain are required")
+	}
+	var existing UserSkipDomain
+	err := DB.Unscoped().Where("username = ? AND domain = ?", username, domain).First(&existing).Error
+	if err != nil {
+		// New entry.
+		if dbErr := DB.Create(&UserSkipDomain{Username: username, Domain: domain, Note: note}).Error; dbErr != nil {
+			return dbErr
+		}
+	} else {
+		// Restore if soft-deleted, update note.
+		if dbErr := DB.Unscoped().Model(&existing).Updates(map[string]interface{}{
+			"note": note, "deleted_at": nil,
+		}).Error; dbErr != nil {
+			return dbErr
+		}
+	}
+	invalidateUserSkipDomainsCache(username)
+	return nil
+}
+
+// DeleteUserSkipDomain removes an entry by ID, restricted to the owning user.
+func DeleteUserSkipDomain(id uint, username string) {
+	DB.Unscoped().Where("id = ? AND username = ?", id, username).Delete(&UserSkipDomain{})
+	invalidateUserSkipDomainsCache(username)
+}
+
+// userSkipDomainsCache holds a per-user cache entry: {set, expiry}.
+type userSkipDomainsCacheEntry struct {
+	set    map[string]struct{}
+	expiry time.Time
+}
+
+var userSkipDomainsCacheMu sync.RWMutex
+var userSkipDomainsCache = map[string]*userSkipDomainsCacheEntry{}
+
+const userSkipDomainsCacheTTL = 60 * time.Second
+
+func invalidateUserSkipDomainsCache(username string) {
+	userSkipDomainsCacheMu.Lock()
+	delete(userSkipDomainsCache, username)
+	userSkipDomainsCacheMu.Unlock()
+}
+
+func loadUserSkipDomainsSet(username string) map[string]struct{} {
+	var list []UserSkipDomain
+	DB.Select("domain").Where("username = ?", username).Find(&list)
+	m := make(map[string]struct{}, len(list))
+	for _, d := range list {
+		m[d.Domain] = struct{}{}
+	}
+	return m
+}
+
+// IsUserDomainSkipped returns true when the given domain is on the user's
+// personal skip list. Results are cached per-user for 60 seconds.
+func IsUserDomainSkipped(username, domain string) bool {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" || username == "" {
+		return false
+	}
+
+	userSkipDomainsCacheMu.RLock()
+	if entry, ok := userSkipDomainsCache[username]; ok && time.Now().Before(entry.expiry) {
+		_, found := entry.set[domain]
+		userSkipDomainsCacheMu.RUnlock()
+		return found
+	}
+	userSkipDomainsCacheMu.RUnlock()
+
+	userSkipDomainsCacheMu.Lock()
+	defer userSkipDomainsCacheMu.Unlock()
+	// Double-check after acquiring write lock.
+	if entry, ok := userSkipDomainsCache[username]; ok && time.Now().Before(entry.expiry) {
+		_, found := entry.set[domain]
+		return found
+	}
+	set := loadUserSkipDomainsSet(username)
+	userSkipDomainsCache[username] = &userSkipDomainsCacheEntry{
+		set:    set,
+		expiry: time.Now().Add(userSkipDomainsCacheTTL),
+	}
+	_, found := set[domain]
+	return found
 }
 
 // ──────────────────────────── UserSMTP ───────────────────────────────────────

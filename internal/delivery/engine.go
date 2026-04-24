@@ -200,6 +200,10 @@ type Engine struct {
 	// No SMTP handshake is attempted — recipients are immediately marked suppressed.
 	SkipDomainChecker func(domain string) bool
 
+	// UserSkipDomainChecker returns true when the recipient domain is on a
+	// specific user's personal skip list. Checked in addition to the admin list.
+	UserSkipDomainChecker func(username, domain string) bool
+
 	// SuppressionChecker returns true if the recipient has unsubscribed from this user's mail.
 	SuppressionChecker func(username, email string) bool
 
@@ -799,6 +803,24 @@ func (e *Engine) deliver(msg *queue.Message) {
 						MessageID: msg.ID, Username: msg.Username,
 						From: msg.From, To: rcpt, Status: "suppressed",
 						Error: "domain is on admin skip list",
+					})
+				}
+			}
+			continue
+		}
+
+		// ── Per-user domain skip list ─────────────────────────────────────────
+		if e.UserSkipDomainChecker != nil && e.UserSkipDomainChecker(msg.Username, domain) {
+			e.logV("[DELIVERY] ⏭ domain %q is on user %q skip list — silently skipping %d recipient(s)", domain, msg.Username, len(rcpts))
+			for _, rcpt := range rcpts {
+				suppressedRcpts[rcpt] = true
+			}
+			if e.OnEvent != nil {
+				for _, rcpt := range rcpts {
+					e.OnEvent(DeliveryEvent{
+						MessageID: msg.ID, Username: msg.Username,
+						From: msg.From, To: rcpt, Status: "suppressed",
+						Error: "domain is on user skip list",
 					})
 				}
 			}

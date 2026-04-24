@@ -357,6 +357,17 @@ type SkipDomain struct {
 	Note   string `gorm:"size:500"`                      // optional admin note
 }
 
+// UserSkipDomain holds per-user skip domain entries.
+// When an entry exists for (username, domain), the delivery engine silently
+// suppresses all outbound mail from that user to the given domain — regardless
+// of the global admin skip list.
+type UserSkipDomain struct {
+	gorm.Model
+	Username string `gorm:"size:191;not null;index:idx_user_skip_domain,priority:1"`
+	Domain   string `gorm:"size:191;not null;index:idx_user_skip_domain,priority:2"`
+	Note     string `gorm:"size:500"`
+}
+
 // Domain represents a verified sending domain with its DKIM keys and DNS records.
 type Domain struct {
 	gorm.Model

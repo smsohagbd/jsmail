@@ -974,6 +974,47 @@ func (h *Handler) RemoveUserSuppression(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/user/suppression", http.StatusFound)
 }
 
+// ─────────────────────────── Per-User Skip Domain ────────────────────────────
+
+func (h *Handler) SkipDomainPage(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	list := appdb.GetUserSkipDomains(claims.Username)
+	h.Tmpl.Render(w, "user/skip_domain", merge(h.base(claims.Username), map[string]interface{}{
+		"Page":     "skip-domain",
+		"List":     list,
+		"FlashOK":  r.URL.Query().Get("ok"),
+		"FlashErr": r.URL.Query().Get("err"),
+	}))
+}
+
+func (h *Handler) AddUserSkipDomain(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method == http.MethodPost {
+		domain := strings.TrimSpace(r.FormValue("domain"))
+		note := strings.TrimSpace(r.FormValue("note"))
+		if domain == "" {
+			http.Redirect(w, r, "/user/skip-domain?err=Domain+required", http.StatusFound)
+			return
+		}
+		if err := appdb.AddUserSkipDomain(claims.Username, domain, note); err != nil {
+			http.Redirect(w, r, "/user/skip-domain?err="+url.QueryEscape(err.Error()), http.StatusFound)
+			return
+		}
+	}
+	http.Redirect(w, r, "/user/skip-domain?ok=Domain+added", http.StatusFound)
+}
+
+func (h *Handler) DeleteUserSkipDomain(w http.ResponseWriter, r *http.Request) {
+	claims, _ := webauth.GetClaims(r)
+	if r.Method == http.MethodPost {
+		id, _ := strconv.ParseUint(r.FormValue("id"), 10, 64)
+		if id > 0 {
+			appdb.DeleteUserSkipDomain(uint(id), claims.Username)
+		}
+	}
+	http.Redirect(w, r, "/user/skip-domain?ok=Domain+removed", http.StatusFound)
+}
+
 // ─────────────────────────── Cloudflare DNS push (user) ──────────────────────
 
 // CloudflareSetToken saves the user's Cloudflare API token.

@@ -93,6 +93,9 @@ func main() {
 	// Admin domain skip list: silently drop mail to blocked domains before any SMTP handshake.
 	eng.SkipDomainChecker = appdb.IsDomainSkipped
 
+	// Per-user domain skip list: each user can suppress specific domains for their own outbound mail.
+	eng.UserSkipDomainChecker = appdb.IsUserDomainSkipped
+
 	// Email verifier: used by relays that have VerifyBeforeSend enabled.
 	// The verifier (v) is created later in web server setup; set it here via a closure
 	// so the reference is captured once the verifier is initialised.
