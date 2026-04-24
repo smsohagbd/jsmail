@@ -979,11 +979,13 @@ func (h *Handler) RemoveUserSuppression(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) SkipDomainPage(w http.ResponseWriter, r *http.Request) {
 	claims, _ := webauth.GetClaims(r)
 	list := appdb.GetUserSkipDomains(claims.Username)
+	adminList := appdb.GetAllSkipDomains() // shown read-only so user knows what admin has blocked
 	h.Tmpl.Render(w, "user/skip_domain", merge(h.base(claims.Username), map[string]interface{}{
-		"Page":     "skip-domain",
-		"List":     list,
-		"FlashOK":  r.URL.Query().Get("ok"),
-		"FlashErr": r.URL.Query().Get("err"),
+		"Page":      "skip-domain",
+		"List":      list,
+		"AdminList": adminList,
+		"FlashOK":   r.URL.Query().Get("ok"),
+		"FlashErr":  r.URL.Query().Get("err"),
 	}))
 }
 

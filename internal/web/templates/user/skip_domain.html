@@ -88,15 +88,54 @@
   {{end}}
 </div>
 
+<!-- Admin-enforced skip domains (read-only) -->
+{{if .AdminList}}
+<div class="card" style="margin-top:16px;">
+  <div class="card-header">
+    <span class="card-title">
+      Admin-Enforced Skip Domains
+      <span style="margin-left:8px;background:#1c0606;color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;">{{len .AdminList}} blocked by admin</span>
+    </span>
+  </div>
+  <div style="padding:10px 20px 14px;font-size:12px;color:#71717a;border-bottom:1px solid #27272a;">
+    These domains are blocked by the administrator for all users. You cannot override them from here.
+    {{if .AdminList}}Contact your admin if you need access to one of these domains.{{end}}
+  </div>
+  <div style="overflow-x:auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="padding-left:20px;">Domain</th>
+          <th>Note</th>
+          <th style="padding-right:20px;">Enforced By</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .AdminList}}
+        <tr>
+          <td style="padding-left:20px;">
+            <code style="font-size:13px;color:#f87171;font-weight:600;">{{.Domain}}</code>
+          </td>
+          <td style="font-size:12px;color:#71717a;">{{if .Note}}{{.Note}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}</td>
+          <td style="padding-right:20px;">
+            <span style="background:#1c0606;color:#f87171;font-size:11px;padding:2px 8px;border-radius:10px;">Admin</span>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+
 <div style="margin-top:16px;background:#18181b;border:1px solid #27272a;border-radius:8px;padding:14px 18px;font-size:12px;color:#71717a;line-height:1.6;">
   <strong style="color:#a1a1aa;">How it works:</strong>
-  When a recipient's domain matches an entry here, the delivery engine silently marks those recipients as
-  <code style="color:#818cf8;">suppressed</code> before any SMTP connection is attempted.
-  No bounce or error is recorded — the send is just skipped.
+  When a recipient's domain matches any entry in either list above, the delivery engine silently marks those recipients as
+  <code style="color:#818cf8;">suppressed</code> before any SMTP connection is attempted — no bounce, no error, just skipped.
   <br><br>
   <strong style="color:#a1a1aa;">Admin skip list:</strong>
-  Your account also inherits the global admin skip list. Domains added by the admin are always skipped
-  regardless of your personal list (unless you have the Priority permission).
+  Domains blocked by the admin affect <em>all</em> users and are shown above as read-only so you always know
+  why a domain is being skipped. Only the Priority Send permission bypasses the admin list.
 </div>
 
 </div>
