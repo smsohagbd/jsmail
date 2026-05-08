@@ -179,16 +179,20 @@ type UserIPAssignment struct {
 //   - Addresses:        newline-separated full email addresses for round-robin From override
 //   - TemplateEnabled:  whether subject/body template rotation is active
 //   - Templates:        JSON array of {subject, body} objects (same schema as global ForceEmailTemplate)
+//   - MatchDomain:      when true, the domain of the incoming From is matched against the Domains list
+//                       and used as-is if found; falls back to round-robin when not found.
+//                       Has no effect when Addresses list is used (addresses always round-robin).
 //
 // Priority: Address list > Domain list. Template rotation is independent of From rewriting.
 type UserForceFrom struct {
 	gorm.Model
 	Username        string `gorm:"uniqueIndex;size:191;not null"`
 	Enabled         bool   `gorm:"default:false"`
-	Domains         string `gorm:"type:text"`  // newline-separated domains
-	Addresses       string `gorm:"type:text"`  // newline-separated full From addresses
+	Domains         string `gorm:"type:text"`        // newline-separated domains
+	Addresses       string `gorm:"type:text"`        // newline-separated full From addresses
 	TemplateEnabled bool   `gorm:"default:false"`
-	Templates       string `gorm:"type:text"`  // JSON array of ForceEmailTemplate
+	Templates       string `gorm:"type:text"`        // JSON array of ForceEmailTemplate
+	MatchDomain     bool   `gorm:"default:false"`    // match incoming From domain instead of round-robin
 }
 
 // IPPoolMasterDomainRule holds per-domain rate limits that apply to ALL IPs when no IP-specific domain rule exists.

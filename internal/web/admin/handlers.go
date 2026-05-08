@@ -1284,9 +1284,10 @@ func (h *Handler) SaveUserForceFrom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	enabled := formChecked(r.Form, "enabled")
+	matchDomain := formChecked(r.Form, "match_domain")
 	domains := strings.TrimSpace(r.FormValue("domains"))
 	addresses := strings.TrimSpace(r.FormValue("addresses"))
-	if err := appdb.SetUserForceFrom(username, enabled, domains, addresses, false); err != nil {
+	if err := appdb.SetUserForceFrom(username, enabled, domains, addresses, false, matchDomain); err != nil {
 		log.Printf("user-force-from: failed to save for %s: %v", username, err)
 		http.Redirect(w, r, "/admin/user-force-from?err=Failed+to+save", http.StatusFound)
 		return

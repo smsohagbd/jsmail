@@ -67,8 +67,20 @@
       </div>
     </div>
 
+    <!-- Match Sending Domain toggle -->
+    <div class="form-group" style="margin-top:14px;margin-bottom:0;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <input type="checkbox" name="match_domain" value="1"
+          {{if .Config}}{{if .Config.MatchDomain}}checked{{end}}{{end}}
+          style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer;">
+        <span style="font-size:13px;color:#e4e4e7;font-weight:500;">Match sending domain
+          <span style="font-size:11px;color:#52525b;font-weight:400;margin-left:4px;">— use incoming From domain if it's in the Domain List above; falls back to round-robin when not found. No effect when Address List is used.</span>
+        </span>
+      </label>
+    </div>
+
     <!-- Template toggle -->
-    <div class="form-group" style="margin-top:4px;margin-bottom:0;">
+    <div class="form-group" style="margin-top:10px;margin-bottom:0;">
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
         <input type="checkbox" name="template_enabled" value="1"
           {{if .Config}}{{if .Config.TemplateEnabled}}checked{{end}}{{end}}

@@ -839,9 +839,10 @@ func (h *Handler) SaveForceFromConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	enabled := r.FormValue("enabled") == "1"
 	templateEnabled := r.FormValue("template_enabled") == "1"
+	matchDomain := r.FormValue("match_domain") == "1"
 	domains := strings.TrimSpace(r.FormValue("domains"))
 	addresses := strings.TrimSpace(r.FormValue("addresses"))
-	if err := appdb.SetUserForceFrom(claims.Username, enabled, domains, addresses, templateEnabled); err != nil {
+	if err := appdb.SetUserForceFrom(claims.Username, enabled, domains, addresses, templateEnabled, matchDomain); err != nil {
 		http.Redirect(w, r, "/user/force-from?err=Failed+to+save", http.StatusFound)
 		return
 	}

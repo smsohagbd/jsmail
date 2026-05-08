@@ -39,6 +39,7 @@
       <thead><tr>
         <th style="padding-left:20px;">User</th>
         <th>Status</th>
+        <th>Match Domain</th>
         <th>Domains</th>
         <th>Addresses</th>
         <th style="padding-right:20px;text-align:right;">Actions</th>
@@ -56,6 +57,13 @@
             <span style="background:#27272a;color:#71717a;font-size:11px;padding:2px 8px;border-radius:10px;">Disabled</span>
             {{end}}
           </td>
+          <td>
+            {{if .MatchDomain}}
+            <span style="background:#1e1b4b;color:#a78bfa;font-size:11px;padding:2px 8px;border-radius:10px;">On</span>
+            {{else}}
+            <span style="background:#27272a;color:#52525b;font-size:11px;padding:2px 8px;border-radius:10px;">Round-robin</span>
+            {{end}}
+          </td>
           <td style="font-size:12px;color:#71717a;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
             {{if .Domains}}{{.Domains}}{{else}}<span style="color:#3f3f46;">—</span>{{end}}
           </td>
@@ -67,6 +75,7 @@
               <button type="button" class="btn btn-ghost" style="font-size:11px;padding:4px 12px;"
                 data-user="{{.Username}}"
                 data-enabled="{{if .Enabled}}true{{else}}false{{end}}"
+                data-match-domain="{{if .MatchDomain}}true{{else}}false{{end}}"
                 data-domains="{{.Domains}}"
                 data-addresses="{{.Addresses}}"
                 onclick="openEditFromBtn(this)">
@@ -124,6 +133,15 @@
           <span>Enabled — apply this config when sending</span>
         </label>
       </div>
+      <div class="form-group">
+        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" name="match_domain" id="edit-match-domain" value="1"
+            style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer;">
+          <span>Match sending domain
+            <span style="font-size:11px;color:#52525b;font-weight:400;margin-left:4px;">— use incoming From domain if it's in the Domain List; falls back to round-robin. No effect when Address List is used.</span>
+          </span>
+        </label>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
         <div class="form-group">
           <label class="form-label">Domain List
@@ -167,6 +185,7 @@ function showAddForm() {
   document.getElementById('edit-username').value = '';
   document.getElementById('edit-username').required = true;
   document.getElementById('edit-enabled').checked = true;
+  document.getElementById('edit-match-domain').checked = false;
   document.getElementById('edit-domains').value = '';
   document.getElementById('edit-addresses').value = '';
   var card = document.getElementById('edit-card');
@@ -175,10 +194,10 @@ function showAddForm() {
 }
 
 function openEditFromBtn(btn) {
-  openEdit(btn.dataset.user, btn.dataset.enabled === 'true', btn.dataset.domains, btn.dataset.addresses);
+  openEdit(btn.dataset.user, btn.dataset.enabled === 'true', btn.dataset.matchDomain === 'true', btn.dataset.domains, btn.dataset.addresses);
 }
 
-function openEdit(username, enabled, domains, addresses) {
+function openEdit(username, enabled, matchDomain, domains, addresses) {
   document.getElementById('edit-card-title').textContent = 'Edit Config — ' + username;
   document.getElementById('user-select-wrap').style.display = 'none';
   document.getElementById('user-locked-wrap').style.display = '';
@@ -186,6 +205,7 @@ function openEdit(username, enabled, domains, addresses) {
   document.getElementById('edit-username-label').textContent = username;
   document.getElementById('edit-username-hidden').value = username;
   document.getElementById('edit-enabled').checked = enabled;
+  document.getElementById('edit-match-domain').checked = matchDomain;
   document.getElementById('edit-domains').value = domains;
   document.getElementById('edit-addresses').value = addresses;
   var card = document.getElementById('edit-card');

@@ -626,7 +626,9 @@ func GetUserForceFrom(username string) *UserForceFrom {
 
 // SetUserForceFrom upserts the Force From / Force Email From config for a user.
 // domains and addresses are newline-separated; templateEnabled controls template rotation.
-func SetUserForceFrom(username string, enabled bool, domains, addresses string, templateEnabled bool) error {
+// matchDomain enables domain-matching mode: the incoming From domain is used as-is when found
+// in the domains list, instead of rotating round-robin.
+func SetUserForceFrom(username string, enabled bool, domains, addresses string, templateEnabled bool, matchDomain bool) error {
 	var row UserForceFrom
 	err := DB.Where("username = ?", username).First(&row).Error
 	if err != nil {
@@ -636,6 +638,7 @@ func SetUserForceFrom(username string, enabled bool, domains, addresses string, 
 			Domains:         domains,
 			Addresses:       addresses,
 			TemplateEnabled: templateEnabled,
+			MatchDomain:     matchDomain,
 		}).Error
 	}
 	return DB.Model(&row).Updates(map[string]interface{}{
@@ -643,6 +646,7 @@ func SetUserForceFrom(username string, enabled bool, domains, addresses string, 
 		"domains":          domains,
 		"addresses":        addresses,
 		"template_enabled": templateEnabled,
+		"match_domain":     matchDomain,
 	}).Error
 }
 
@@ -715,7 +719,25 @@ func GetNextUserForceEmail(username, originalFrom string) (from, subject, body s
 			if local == "" {
 				local = "noreply"
 			}
-			domain := strings.ToLower(domains[int(idx)%len(domains)])
+			var domain string
+			if cfg.MatchDomain {
+				// Match the incoming From's domain against the configured list.
+				// Use it directly when found; fall back to round-robin when not found.
+				incomingDomain := strings.ToLower(extractDomainFromAddr(originalFrom))
+				matched := false
+				for _, d := range domains {
+					if strings.ToLower(d) == incomingDomain {
+						domain = strings.ToLower(d)
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					domain = strings.ToLower(domains[int(idx)%len(domains)])
+				}
+			} else {
+				domain = strings.ToLower(domains[int(idx)%len(domains)])
+			}
 			dn := extractDisplayNameFromAddr(originalFrom)
 			if dn != "" {
 				from = dn + " <" + local + "@" + domain + ">"
@@ -1105,6 +1127,21 @@ func extractLocalPartFromAddr(addr string) string {
 	}
 	if at := strings.Index(addr, "@"); at > 0 {
 		return strings.TrimSpace(addr[:at])
+	}
+	return ""
+}
+
+// extractDomainFromAddr returns the domain part of an email address.
+// Handles "Name <user@domain.com>" and plain "user@domain.com" forms.
+func extractDomainFromAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if start := strings.LastIndex(addr, "<"); start >= 0 {
+		if end := strings.Index(addr[start:], ">"); end >= 0 {
+			addr = addr[start+1 : start+end]
+		}
+	}
+	if at := strings.Index(addr, "@"); at >= 0 {
+		return strings.TrimSpace(addr[at+1:])
 	}
 	return ""
 }
